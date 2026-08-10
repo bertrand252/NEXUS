@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS — Scanner</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  tailwind.config = { theme: { extend: { colors: {
+    base:'#0B0F1A', card:'#111827', card2:'#0F1521', border:'#1F2937',
+    accent:'#2563EB', cyan:'#06B6D4', strong:'#EF4444', moderate:'#F97316', weak:'#EAB308', none:'#6B7280'
+  }, fontFamily: { sans:['Manrope','sans-serif'], mono:['JetBrains Mono','monospace'] } } } }
+</script>
+<style>
+  body { background-color:#0B0F1A; }
+  .glow-border { box-shadow: 0 0 0 1px #1F2937, 0 8px 24px -12px rgba(37,99,235,0.15); }
+  .nav-active { background: linear-gradient(90deg, rgba(37,99,235,0.15), transparent); border-left: 2px solid #2563EB; }
+  .scrollbar-thin::-webkit-scrollbar { height:6px; width:6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background:#1F2937; border-radius:4px; }
+  .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+  @keyframes pulse-dot { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+</style>
+</head>
+<body class="font-sans text-slate-200 antialiased">
+
+<div class="flex min-h-screen">
+
+  <!-- SIDEBAR -->
+  <aside class="w-64 shrink-0 bg-[#0D1220] border-r border-border flex flex-col justify-between fixed h-screen z-20">
+    <div>
+      <div class="flex items-center gap-3 px-6 py-6 border-b border-border">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-cyan flex items-center justify-center shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 17L9 11L13 15L21 6" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 6H21V12" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div>
+          <p class="text-[15px] font-bold text-white leading-none tracking-tight">NEXUS</span></p>
+          <p class="text-[10px] text-slate-500 mt-1 tracking-wide">IDX INTELLIGENCE</p>
+        </div>
+      </div>
+      <nav class="px-3 py-4 space-y-1 text-sm">
+        <a href="dashboard.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" stroke-width="2"/></svg>
+          Dashboard
+        </a>
+        <a href="scanner.html" class="nav-active flex items-center gap-3 px-3 py-2.5 rounded-r-md text-white font-medium">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Scanner
+        </a>
+        <a href="stock-detail.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 19V13M10 19V9M16 19V5M22 19V11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Stock Detail
+        </a>
+        <a href="market-events.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" stroke-width="2"/><path d="M3 9H21" stroke="currentColor" stroke-width="2"/><path d="M8 2V6M16 2V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Market Events
+        </a>
+        <a href="portfolio-simulation.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          Portfolio Simulation
+        </a>
+        <a href="journal.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" stroke-width="2"/><path d="M3 10H21" stroke="currentColor" stroke-width="2"/></svg>
+          Journal
+        </a>
+        <a href="analytics.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M3 3V21H21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 15L11 10L14 13L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Analytics
+        </a>
+        <a href="settings.html" class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/><path d="M19.4 15A1.65 1.65 0 0 0 21 13.35V10.65A1.65 1.65 0 0 0 19.4 9L18.9 8.9A1.65 1.65 0 0 1 17.6 8L17.4 7.5A1.65 1.65 0 0 1 18 5.6L18.1 5.5A1.65 1.65 0 0 0 15.65 3L15.5 3.1A1.65 1.65 0 0 1 13.6 3.7L13.1 3.5A1.65 1.65 0 0 0 11.4 3H8.6A1.65 1.65 0 0 0 6.9 3.5L6.4 3.7A1.65 1.65 0 0 1 4.5 3.1L4.4 3A1.65 1.65 0 0 0 1.95 5.5L2.05 5.6A1.65 1.65 0 0 1 2.65 7.5L2.45 8A1.65 1.65 0 0 1 1.15 8.9L1.05 9A1.65 1.65 0 0 0 0 10.65V13.35A1.65 1.65 0 0 0 1.05 15L1.15 15.1A1.65 1.65 0 0 1 2.45 16L2.65 16.5A1.65 1.65 0 0 1 2.05 18.4L1.95 18.5A1.65 1.65 0 0 0 4.4 21L4.5 20.9A1.65 1.65 0 0 1 6.4 20.3L6.9 20.5A1.65 1.65 0 0 0 8.6 21H11.4A1.65 1.65 0 0 0 13.1 20.5L13.6 20.3A1.65 1.65 0 0 1 15.5 20.9L15.65 21A1.65 1.65 0 0 0 18.1 18.5L18 18.4A1.65 1.65 0 0 1 17.6 16.5L17.4 16A1.65 1.65 0 0 1 18.9 15.1Z" stroke="currentColor" stroke-width="1.6"/></svg>
+          Settings
+        </a>
+      </nav>
+    </div>
+    <div class="px-4 py-4 border-t border-border">
+      <button class="w-full flex items-center gap-2 justify-center text-xs text-slate-500 hover:text-slate-300 py-2 mb-2 transition">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Collapse
+      </button>
+      <div class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/5 transition cursor-pointer">
+        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-cyan to-accent flex items-center justify-center text-xs font-bold text-white shrink-0">RA</div>
+        <div class="min-w-0">
+          <p class="text-sm font-semibold text-white truncate">Rian Adnan</p>
+          <p class="text-[11px] text-slate-500 truncate">Pro Trader</p>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="ml-64 flex-1 flex flex-col min-h-screen">
+    <header class="sticky top-0 z-10 bg-[#0B0F1A]/90 backdrop-blur border-b border-border px-8 py-4 flex items-center justify-between">
+      <div>
+        <h1 class="text-lg font-bold text-white tracking-tight">Scanner</h1>
+        <p class="text-xs text-slate-500 mt-0.5 font-mono">Friday, 08 August 2025</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <span class="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span> MARKET OPEN
+        </span>
+        <button class="relative w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center hover:border-accent/50 transition">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8C6 15 3 17 3 17H21S18 15 18 8Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.73 21A2 2 0 0 1 10.27 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-strong"></span>
+        </button>
+      </div>
+    </header>
+
+    <div class="p-8 space-y-5">
+
+      <!-- FILTER BAR -->
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="relative flex-1 min-w-[220px] max-w-xs">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <input type="text" placeholder="Search ticker..." class="w-full bg-card border border-border rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-accent/60">
+        </div>
+        <select class="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
+          <option>All Signals</option>
+          <option>🔴 Strong</option>
+          <option>🟠 Moderate</option>
+          <option>🟡 Weak</option>
+          <option>⚪ No Signal</option>
+        </select>
+        <select class="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
+          <option>All Sectors</option>
+          <option>Banking</option>
+          <option>Energy</option>
+          <option>Consumer</option>
+          <option>Technology</option>
+          <option>Basic Materials</option>
+        </select>
+        <button class="ml-auto flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 4V20M4 4H14L20 10V20H4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Score ≥ 25 filter
+        </button>
+      </div>
+
+      <!-- SCANNER TABLE -->
+      <div class="glow-border rounded-2xl bg-card border border-border overflow-hidden">
+        <div class="overflow-x-auto scrollbar-thin">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-border bg-white/[0.02]">
+                <th class="px-5 py-3 font-medium">Ticker</th>
+                <th class="px-5 py-3 font-medium">Price</th>
+                <th class="px-5 py-3 font-medium">Change</th>
+                <th class="px-5 py-3 font-medium">Volume Ratio</th>
+                <th class="px-5 py-3 font-medium">Score (0–45)</th>
+                <th class="px-5 py-3 font-medium">Signal Status</th>
+                <th class="px-5 py-3 font-medium text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="scanBody" class="divide-y divide-border/60 font-mono text-[13px]"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <p class="text-xs text-slate-500 text-center pt-1">Showing 10 of 10 IDX tickers · Data refreshed 2 min ago</p>
+    </div>
+  </main>
+</div>
+
+<script>
+  const stocks = [
+    { t:'ANTM', sector:'Basic Materials', price:1620, chg:2.14, vol:3.8, score:41 },
+    { t:'BBRI', sector:'Banking', price:4870, chg:0.62, vol:2.1, score:38 },
+    { t:'ADRO', sector:'Energy', price:2740, chg:1.35, vol:2.9, score:33 },
+    { t:'ASII', sector:'Consumer', price:5125, chg:-0.39, vol:1.6, score:27 },
+    { t:'BMRI', sector:'Banking', price:6350, chg:0.79, vol:1.4, score:26 },
+    { t:'ICBP', sector:'Consumer', price:11025, chg:-0.22, vol:1.1, score:18 },
+    { t:'TLKM', sector:'Technology', price:2980, chg:0.34, vol:0.9, score:14 },
+    { t:'GOTO', sector:'Technology', price:68, chg:-1.45, vol:0.7, score:9 },
+    { t:'UNVR', sector:'Consumer', price:3560, chg:-0.11, vol:0.5, score:5 },
+    { t:'MDKA', sector:'Basic Materials', price:1780, chg:1.02, vol:1.8, score:22 },
+  ];
+
+  function signalMeta(score) {
+    if (score >= 35) return { label:'Strong', dot:'🔴', cls:'bg-strong/10 text-strong border-strong/30' };
+    if (score >= 25) return { label:'Moderate', dot:'🟠', cls:'bg-moderate/10 text-moderate border-moderate/30' };
+    if (score >= 12) return { label:'Weak', dot:'🟡', cls:'bg-weak/10 text-weak border-weak/30' };
+    return { label:'No Signal', dot:'⚪', cls:'bg-none/10 text-slate-400 border-none/30' };
+  }
+
+  const body = document.getElementById('scanBody');
+  [...stocks].sort((a,b) => b.score - a.score).forEach(s => {
+    const m = signalMeta(s.score);
+    body.innerHTML += `
+      <tr class="hover:bg-white/[0.03] transition">
+        <td class="px-5 py-3">
+          <p class="font-sans font-semibold text-white">${s.t}</p>
+          <p class="text-[10px] text-slate-500 font-sans">${s.sector}</p>
+        </td>
+        <td class="px-5 py-3 text-slate-300">Rp ${s.price.toLocaleString('id-ID')}</td>
+        <td class="px-5 py-3 ${s.chg>=0?'text-emerald-400':'text-red-400'}">${s.chg>=0?'+':''}${s.chg}%</td>
+        <td class="px-5 py-3 text-slate-300">${s.vol}x</td>
+        <td class="px-5 py-3">
+          <div class="flex items-center gap-2">
+            <span class="text-white font-semibold">${s.score}</span>
+            <div class="w-16 h-1.5 rounded-full bg-white/5 overflow-hidden">
+              <div class="h-full rounded-full bg-gradient-to-r from-accent to-cyan" style="width:${(s.score/45*100).toFixed(0)}%"></div>
+            </div>
+          </div>
+        </td>
+        <td class="px-5 py-3"><span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border ${m.cls}">${m.dot} ${m.label}</span></td>
+        <td class="px-5 py-3 text-right">
+          <a href="stock-detail.html" class="text-[11px] font-sans font-semibold px-3 py-1.5 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition">View</a>
+        </td>
+      </tr>`;
+  });
+</script>
+</body>
+</html>
