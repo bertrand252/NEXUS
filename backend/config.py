@@ -1,0 +1,16 @@
+import os
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "*").split(",")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL / SUPABASE_KEY missing — copy .env.example to .env and fill it in")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

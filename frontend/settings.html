@@ -3,10 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NEXUS — Analytics</title>
+    <title>NEXUS — Settings</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="icon" type="image/png" href="assets/NEXUS.png" />
+    <link rel="apple-touch-icon" href="assets/NEXUS.png" />
     <link
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
@@ -64,6 +65,31 @@
           opacity: 0.4;
         }
       }
+      .toggle {
+        width: 40px;
+        height: 22px;
+        border-radius: 999px;
+        background: #1f2937;
+        position: relative;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .toggle.on {
+        background: #2563eb;
+      }
+      .toggle-dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        background: white;
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        transition: transform 0.2s;
+      }
+      .toggle.on .toggle-dot {
+        transform: translateX(18px);
+      }
     </style>
   </head>
   <body class="font-sans text-slate-200 antialiased">
@@ -73,25 +99,12 @@
       >
         <div>
           <div class="flex items-center gap-3 px-6 py-6 border-b border-border">
-            <div
-              class="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-cyan flex items-center justify-center shrink-0"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M3 17L9 11L13 15L21 6"
-                  stroke="white"
-                  stroke-width="2.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <path
-                  d="M15 6H21V12"
-                  stroke="white"
-                  stroke-width="2.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
+             <div class="w-10 h-10 shrink-0">
+              <img
+                src="assets/NEXUS.png"
+                alt="NEXUS"
+                class="w-full h-full object-cover"
+              />
             </div>
             <div>
               <p
@@ -242,7 +255,7 @@
             </a>
             <a
               href="analytics.html"
-              class="nav-active flex items-center gap-3 px-3 py-2.5 rounded-r-md text-white font-medium"
+              class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                 <path
@@ -263,7 +276,7 @@
             </a>
             <a
               href="settings.html"
-              class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition"
+              class="nav-active flex items-center gap-3 px-3 py-2.5 rounded-r-md text-white font-medium"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                 <circle
@@ -322,10 +335,10 @@
         >
           <div>
             <h1 class="text-lg font-bold text-white tracking-tight">
-              Analytics
+              Settings
             </h1>
             <p class="text-xs text-slate-500 mt-0.5 font-mono">
-              Performance Recap · 2025
+              Preferences &amp; Integrations
             </p>
           </div>
           <div class="flex items-center gap-4">
@@ -362,214 +375,188 @@
           </div>
         </header>
 
-        <div class="p-8 space-y-6">
-          <!-- STAT CARDS -->
-          <div class="grid grid-cols-5 gap-5">
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-4"
-            >
-              <p
-                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
+        <div class="p-8 grid grid-cols-3 gap-6">
+          <!-- TELEGRAM CONNECT -->
+          <div
+            class="glow-border rounded-2xl bg-gradient-to-br from-card to-card2 border border-border p-5"
+          >
+            <div class="flex items-center gap-3 mb-4">
+              <div
+                class="w-10 h-10 rounded-xl bg-[#229ED9]/15 border border-[#229ED9]/30 flex items-center justify-center"
               >
-                Total P&amp;L
-              </p>
-              <p class="text-xl font-extrabold text-emerald-400 font-mono">
-                +Rp 18.4jt
-              </p>
-              <span
-                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                >+12.6% YTD</span
-              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="#229ED9">
+                  <path
+                    d="M21.5 4.5L2.7 11.9c-1.2.5-1.2 1.2-.2 1.5l4.8 1.5 1.9 5.8c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.2-2.1 4.6 3.4c.8.5 1.4.2 1.6-.7l3-14.1c.3-1.2-.4-1.7-1.9-1z"
+                  />
+                </svg>
+              </div>
+              <div>
+                <p class="text-sm font-bold text-white">Telegram Bot</p>
+                <p class="text-[11px] text-slate-500">Not connected</p>
+              </div>
             </div>
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-4"
+            <p class="text-xs text-slate-400 mb-4">
+              Connect your Telegram to receive real-time accumulation alerts
+              straight to your phone.
+            </p>
+            <button
+              class="w-full text-sm font-semibold px-4 py-2.5 rounded-lg bg-[#229ED9] hover:bg-[#1c8bc0] text-white transition flex items-center justify-center gap-2"
             >
-              <p
-                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
-              >
-                Win Rate
-              </p>
-              <p class="text-xl font-extrabold text-white font-mono">64.3%</p>
-              <span
-                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/30"
-                >54W / 30L</span
-              >
-            </div>
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-4"
-            >
-              <p
-                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
-              >
-                Best Month
-              </p>
-              <p class="text-xl font-extrabold text-emerald-400 font-mono">
-                Jun '25
-              </p>
-              <span
-                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                >+Rp 5.1jt</span
-              >
-            </div>
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-4"
-            >
-              <p
-                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
-              >
-                Worst Month
-              </p>
-              <p class="text-xl font-extrabold text-red-400 font-mono">
-                Mar '25
-              </p>
-              <span
-                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-strong/10 text-strong border border-strong/30"
-                >−Rp 2.3jt</span
-              >
-            </div>
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-4"
-            >
-              <p
-                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
-              >
-                Most Traded
-              </p>
-              <p class="text-xl font-extrabold text-white font-mono">BBRI</p>
-              <span
-                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30"
-                >22 trades</span
-              >
-            </div>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="white">
+                <path
+                  d="M21.5 4.5L2.7 11.9c-1.2.5-1.2 1.2-.2 1.5l4.8 1.5 1.9 5.8c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.2-2.1 4.6 3.4c.8.5 1.4.2 1.6-.7l3-14.1c.3-1.2-.4-1.7-1.9-1z"
+                />
+              </svg>
+              Connect Telegram
+            </button>
+            <p class="text-[11px] text-slate-500 mt-3 font-mono text-center">
+              Bot: @NEXUS_bot
+            </p>
           </div>
 
-          <!-- MONTHLY P&L LINE -->
+          <!-- ALERT THRESHOLD -->
           <div class="glow-border rounded-2xl bg-card border border-border p-5">
-            <h3 class="text-sm font-bold text-white tracking-tight mb-4">
-              Monthly P&amp;L — 2025
-            </h3>
-            <canvas id="monthlyChart" height="90"></canvas>
+            <p class="text-sm font-bold text-white mb-1">Alert Threshold</p>
+            <p class="text-xs text-slate-500 mb-5">
+              Only notify when accumulation score crosses this value.
+            </p>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[11px] text-slate-500 font-mono">0</span>
+              <span class="text-2xl font-extrabold text-cyan font-mono"
+                >30</span
+              >
+              <span class="text-[11px] text-slate-500 font-mono">45</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="45"
+              value="30"
+              class="w-full accent-cyan"
+            />
+            <div
+              class="flex justify-between text-[10px] text-slate-500 mt-2 font-mono"
+            >
+              <span>None</span><span>Weak</span><span>Moderate</span
+              ><span>Strong</span>
+            </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-6">
-            <!-- YEARLY BAR -->
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-5"
-            >
-              <h3 class="text-sm font-bold text-white tracking-tight mb-4">
-                Yearly Comparison
-              </h3>
-              <canvas id="yearlyChart" height="140"></canvas>
+          <!-- NOTIFICATION PREFS -->
+          <div class="glow-border rounded-2xl bg-card border border-border p-5">
+            <p class="text-sm font-bold text-white mb-4">
+              Notification Preferences
+            </p>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-slate-300">Strong signal alerts</span>
+                <div class="toggle on" onclick="this.classList.toggle('on')">
+                  <div class="toggle-dot"></div>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-slate-300">Daily night recap</span>
+                <div class="toggle on" onclick="this.classList.toggle('on')">
+                  <div class="toggle-dot"></div>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-slate-300"
+                  >Economic event reminders</span
+                >
+                <div class="toggle" onclick="this.classList.toggle('on')">
+                  <div class="toggle-dot"></div>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-slate-300"
+                  >Portfolio risk warnings</span
+                >
+                <div class="toggle on" onclick="this.classList.toggle('on')">
+                  <div class="toggle-dot"></div>
+                </div>
+              </div>
             </div>
+          </div>
 
-            <!-- WIN RATE DONUT -->
-            <div
-              class="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col items-center justify-center"
-            >
-              <h3
-                class="text-sm font-bold text-white tracking-tight self-start mb-2"
+          <!-- WATCHLIST MANAGEMENT -->
+          <div
+            class="col-span-2 glow-border rounded-2xl bg-card border border-border p-5"
+          >
+            <div class="flex items-center justify-between mb-4">
+              <p class="text-sm font-bold text-white">Watchlist Management</p>
+              <span class="text-[11px] text-slate-500 font-mono"
+                >10 tickers</span
               >
-                Win / Loss Ratio
-              </h3>
-              <canvas id="winRateChart" height="160"></canvas>
             </div>
+            <div class="flex items-center gap-2 mb-4">
+              <input
+                type="text"
+                placeholder="Add ticker (e.g. BBCA)"
+                class="flex-1 bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono uppercase focus:outline-none focus:border-accent/60"
+              />
+              <button
+                class="text-sm font-semibold px-4 py-2 rounded-lg bg-accent hover:bg-accent/90 text-white transition"
+              >
+                Add
+              </button>
+            </div>
+            <div class="flex flex-wrap gap-2" id="watchlistChips"></div>
+          </div>
+
+          <!-- ACCOUNT -->
+          <div class="glow-border rounded-2xl bg-card border border-border p-5">
+            <p class="text-sm font-bold text-white mb-4">Account</p>
+            <div class="flex items-center gap-3 mb-4">
+              <div
+                class="w-12 h-12 rounded-full bg-gradient-to-br from-cyan to-accent flex items-center justify-center text-sm font-bold text-white"
+              >
+                RA
+              </div>
+              <div>
+                <p class="text-sm font-semibold text-white">Rian Adnan</p>
+                <p class="text-[11px] text-slate-500">
+                  rian.adnan@student.ac.id
+                </p>
+              </div>
+            </div>
+            <button
+              class="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition mb-2"
+            >
+              Edit Profile
+            </button>
+            <button
+              class="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-strong/10 text-strong border border-strong/30 hover:bg-strong/20 transition"
+            >
+              Log Out
+            </button>
           </div>
         </div>
       </main>
     </div>
 
     <script>
-      new Chart(document.getElementById("monthlyChart"), {
-        type: "line",
-        data: {
-          labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"],
-          datasets: [
-            {
-              data: [1.2, -0.5, -2.3, 2.1, 3.4, 5.1, 4.2, 2.6],
-              borderColor: "#06B6D4",
-              borderWidth: 2,
-              pointRadius: 4,
-              pointBackgroundColor: "#06B6D4",
-              tension: 0.3,
-              fill: true,
-              backgroundColor: (ctx) => {
-                const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 180);
-                g.addColorStop(0, "rgba(6,182,212,0.2)");
-                g.addColorStop(1, "rgba(6,182,212,0)");
-                return g;
-              },
-            },
-          ],
-        },
-        options: {
-          plugins: { legend: { display: false } },
-          scales: {
-            x: {
-              grid: { color: "#1F2937" },
-              ticks: { color: "#64748B", font: { size: 11 } },
-            },
-            y: {
-              grid: { color: "#1F2937" },
-              ticks: {
-                color: "#64748B",
-                font: { size: 10 },
-                callback: (v) => v + "jt",
-              },
-            },
-          },
-        },
-      });
-
-      new Chart(document.getElementById("yearlyChart"), {
-        type: "bar",
-        data: {
-          labels: ["2022", "2023", "2024", "2025"],
-          datasets: [
-            {
-              data: [4.2, 9.8, 14.5, 18.4],
-              backgroundColor: "#2563EB",
-              borderRadius: 6,
-            },
-          ],
-        },
-        options: {
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { grid: { display: false }, ticks: { color: "#94A3B8" } },
-            y: {
-              grid: { color: "#1F2937" },
-              ticks: {
-                color: "#64748B",
-                font: { size: 10 },
-                callback: (v) => v + "jt",
-              },
-            },
-          },
-        },
-      });
-
-      new Chart(document.getElementById("winRateChart"), {
-        type: "doughnut",
-        data: {
-          labels: ["Win", "Loss"],
-          datasets: [
-            {
-              data: [54, 30],
-              backgroundColor: ["#10B981", "#EF4444"],
-              borderWidth: 0,
-            },
-          ],
-        },
-        options: {
-          plugins: {
-            legend: {
-              position: "bottom",
-              labels: { color: "#94A3B8", font: { size: 11 } },
-            },
-          },
-          cutout: "70%",
-        },
-      });
+      const tickers = [
+        "BBRI",
+        "ASII",
+        "GOTO",
+        "TLKM",
+        "ANTM",
+        "MDKA",
+        "ADRO",
+        "ICBP",
+        "BMRI",
+        "UNVR",
+      ];
+      document.getElementById("watchlistChips").innerHTML = tickers
+        .map(
+          (t) => `
+    <span class="flex items-center gap-1.5 text-xs font-mono font-semibold px-3 py-1.5 rounded-lg bg-white/5 border border-border text-slate-200">
+      ${t}
+      <button class="text-slate-500 hover:text-strong transition">×</button>
+    </span>`,
+        )
+        .join("");
     </script>
   </body>
 </html>

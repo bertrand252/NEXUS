@@ -3,9 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NEXUS — Market Events</title>
+    <title>NEXUS — Analytics</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="icon" type="image/png" href="assets/NEXUS.png" />
+    <link rel="apple-touch-icon" href="assets/NEXUS.png" />
     <link
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
@@ -51,14 +54,6 @@
         );
         border-left: 2px solid #2563eb;
       }
-      .scrollbar-thin::-webkit-scrollbar {
-        height: 6px;
-        width: 6px;
-      }
-      .scrollbar-thin::-webkit-scrollbar-thumb {
-        background: #1f2937;
-        border-radius: 4px;
-      }
       .pulse-dot {
         animation: pulse-dot 2s ease-in-out infinite;
       }
@@ -80,25 +75,12 @@
       >
         <div>
           <div class="flex items-center gap-3 px-6 py-6 border-b border-border">
-            <div
-              class="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-cyan flex items-center justify-center shrink-0"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M3 17L9 11L13 15L21 6"
-                  stroke="white"
-                  stroke-width="2.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <path
-                  d="M15 6H21V12"
-                  stroke="white"
-                  stroke-width="2.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
+             <div class="w-10 h-10 shrink-0">
+              <img
+                src="assets/NEXUS.png"
+                alt="NEXUS"
+                class="w-full h-full object-cover"
+              />
             </div>
             <div>
               <p
@@ -193,7 +175,7 @@
             </a>
             <a
               href="market-events.html"
-              class="nav-active flex items-center gap-3 px-3 py-2.5 rounded-r-md text-white font-medium"
+              class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                 <rect
@@ -249,7 +231,7 @@
             </a>
             <a
               href="analytics.html"
-              class="flex items-center gap-3 px-3 py-2.5 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition"
+              class="nav-active flex items-center gap-3 px-3 py-2.5 rounded-r-md text-white font-medium"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                 <path
@@ -329,10 +311,10 @@
         >
           <div>
             <h1 class="text-lg font-bold text-white tracking-tight">
-              Market Events
+              Analytics
             </h1>
             <p class="text-xs text-slate-500 mt-0.5 font-mono">
-              Economic Calendar · August 2025
+              Performance Recap · 2025
             </p>
           </div>
           <div class="flex items-center gap-4">
@@ -369,54 +351,116 @@
           </div>
         </header>
 
-        <div class="p-8 space-y-5">
-          <div class="flex items-center gap-3 flex-wrap">
-            <select
-              class="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60"
+        <div class="p-8 space-y-6">
+          <!-- STAT CARDS -->
+          <div class="grid grid-cols-5 gap-5">
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-4"
             >
-              <option>All Impact</option>
-              <option>High</option>
-              <option>Med</option>
-              <option>Low</option>
-            </select>
-            <select
-              class="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60"
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
+              >
+                Total P&amp;L
+              </p>
+              <p class="text-xl font-extrabold text-emerald-400 font-mono">
+                +Rp 18.4jt
+              </p>
+              <span
+                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                >+12.6% YTD</span
+              >
+            </div>
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-4"
             >
-              <option>All Currencies</option>
-              <option>🇺🇸 USD</option>
-              <option>🇮🇩 IDR</option>
-              <option>🇨🇳 CNY</option>
-              <option>🇪🇺 EUR</option>
-            </select>
-            <span class="ml-auto text-xs text-slate-500 font-mono"
-              >This week · 04–08 Aug 2025</span
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
+              >
+                Win Rate
+              </p>
+              <p class="text-xl font-extrabold text-white font-mono">64.3%</p>
+              <span
+                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/30"
+                >54W / 30L</span
+              >
+            </div>
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-4"
             >
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
+              >
+                Best Month
+              </p>
+              <p class="text-xl font-extrabold text-emerald-400 font-mono">
+                Jun '25
+              </p>
+              <span
+                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                >+Rp 5.1jt</span
+              >
+            </div>
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-4"
+            >
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
+              >
+                Worst Month
+              </p>
+              <p class="text-xl font-extrabold text-red-400 font-mono">
+                Mar '25
+              </p>
+              <span
+                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-strong/10 text-strong border border-strong/30"
+                >−Rp 2.3jt</span
+              >
+            </div>
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-4"
+            >
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2"
+              >
+                Most Traded
+              </p>
+              <p class="text-xl font-extrabold text-white font-mono">BBRI</p>
+              <span
+                class="inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30"
+                >22 trades</span
+              >
+            </div>
           </div>
 
-          <div
-            class="glow-border rounded-2xl bg-card border border-border overflow-hidden"
-          >
-            <div class="overflow-x-auto scrollbar-thin">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr
-                    class="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-border bg-white/[0.02]"
-                  >
-                    <th class="px-5 py-3 font-medium">Date</th>
-                    <th class="px-5 py-3 font-medium">Currency</th>
-                    <th class="px-5 py-3 font-medium">Event</th>
-                    <th class="px-5 py-3 font-medium">Impact</th>
-                    <th class="px-5 py-3 font-medium">IDX Sector Impact</th>
-                    <th class="px-5 py-3 font-medium text-right">
-                      Est. Porto Impact
-                    </th>
-                  </tr>
-                </thead>
-                <tbody
-                  id="eventBody"
-                  class="divide-y divide-border/60 text-[13px]"
-                ></tbody>
-              </table>
+          <!-- MONTHLY P&L LINE -->
+          <div class="glow-border rounded-2xl bg-card border border-border p-5">
+            <h3 class="text-sm font-bold text-white tracking-tight mb-4">
+              Monthly P&amp;L — 2025
+            </h3>
+            <canvas id="monthlyChart" height="90"></canvas>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <!-- YEARLY BAR -->
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-5"
+            >
+              <h3 class="text-sm font-bold text-white tracking-tight mb-4">
+                Yearly Comparison
+              </h3>
+              <canvas id="yearlyChart" height="140"></canvas>
+            </div>
+
+            <!-- WIN RATE DONUT -->
+            <div
+              class="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col items-center justify-center"
+            >
+              <h3
+                class="text-sm font-bold text-white tracking-tight self-start mb-2"
+              >
+                Win / Loss Ratio
+              </h3>
+              <canvas id="winRateChart" height="160"></canvas>
             </div>
           </div>
         </div>
@@ -424,87 +468,96 @@
     </div>
 
     <script>
-      const events = [
-        {
-          date: "Mon, 04 Aug",
-          flag: "🇺🇸",
-          cur: "USD",
-          name: "ISM Manufacturing PMI",
-          impact: "Med",
-          sector: "Technology, Export",
-          porto: -0.4,
+      new Chart(document.getElementById("monthlyChart"), {
+        type: "line",
+        data: {
+          labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"],
+          datasets: [
+            {
+              data: [1.2, -0.5, -2.3, 2.1, 3.4, 5.1, 4.2, 2.6],
+              borderColor: "#06B6D4",
+              borderWidth: 2,
+              pointRadius: 4,
+              pointBackgroundColor: "#06B6D4",
+              tension: 0.3,
+              fill: true,
+              backgroundColor: (ctx) => {
+                const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 180);
+                g.addColorStop(0, "rgba(6,182,212,0.2)");
+                g.addColorStop(1, "rgba(6,182,212,0)");
+                return g;
+              },
+            },
+          ],
         },
-        {
-          date: "Tue, 05 Aug",
-          flag: "🇮🇩",
-          cur: "IDR",
-          name: "Indonesia Q2 GDP Growth",
-          impact: "High",
-          sector: "All Sectors",
-          porto: 1.2,
+        options: {
+          plugins: { legend: { display: false } },
+          scales: {
+            x: {
+              grid: { color: "#1F2937" },
+              ticks: { color: "#64748B", font: { size: 11 } },
+            },
+            y: {
+              grid: { color: "#1F2937" },
+              ticks: {
+                color: "#64748B",
+                font: { size: 10 },
+                callback: (v) => v + "jt",
+              },
+            },
+          },
         },
-        {
-          date: "Wed, 06 Aug",
-          flag: "🇨🇳",
-          cur: "CNY",
-          name: "China PMI Manufacturing",
-          impact: "Med",
-          sector: "Basic Materials, Energy",
-          porto: -0.7,
+      });
+
+      new Chart(document.getElementById("yearlyChart"), {
+        type: "bar",
+        data: {
+          labels: ["2022", "2023", "2024", "2025"],
+          datasets: [
+            {
+              data: [4.2, 9.8, 14.5, 18.4],
+              backgroundColor: "#2563EB",
+              borderRadius: 6,
+            },
+          ],
         },
-        {
-          date: "Thu, 07 Aug",
-          flag: "🇪🇺",
-          cur: "EUR",
-          name: "ECB Rate Decision",
-          impact: "Med",
-          sector: "Banking",
-          porto: -0.3,
+        options: {
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: "#94A3B8" } },
+            y: {
+              grid: { color: "#1F2937" },
+              ticks: {
+                color: "#64748B",
+                font: { size: 10 },
+                callback: (v) => v + "jt",
+              },
+            },
+          },
         },
-        {
-          date: "Fri, 08 Aug",
-          flag: "🇺🇸",
-          cur: "USD",
-          name: "US Non-Farm Payrolls",
-          impact: "High",
-          sector: "All Sectors",
-          porto: -1.8,
+      });
+
+      new Chart(document.getElementById("winRateChart"), {
+        type: "doughnut",
+        data: {
+          labels: ["Win", "Loss"],
+          datasets: [
+            {
+              data: [54, 30],
+              backgroundColor: ["#10B981", "#EF4444"],
+              borderWidth: 0,
+            },
+          ],
         },
-        {
-          date: "Fri, 08 Aug",
-          flag: "🇮🇩",
-          cur: "IDR",
-          name: "BI 7-Day Reverse Repo Rate",
-          impact: "High",
-          sector: "Banking, Property",
-          porto: 0.9,
+        options: {
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: { color: "#94A3B8", font: { size: 11 } },
+            },
+          },
+          cutout: "70%",
         },
-        {
-          date: "Fri, 08 Aug",
-          flag: "🇸🇬",
-          cur: "SGD",
-          name: "Singapore Retail Sales",
-          impact: "Low",
-          sector: "Consumer",
-          porto: 0.1,
-        },
-      ];
-      const impactCls = {
-        High: "bg-strong/10 text-strong border-strong/30",
-        Med: "bg-moderate/10 text-moderate border-moderate/30",
-        Low: "bg-weak/10 text-weak border-weak/30",
-      };
-      const body = document.getElementById("eventBody");
-      events.forEach((e) => {
-        body.innerHTML += `
-      <tr class="hover:bg-white/[0.03] transition">
-        <td class="px-5 py-3 text-slate-300 font-mono whitespace-nowrap">${e.date}</td>
-        <td class="px-5 py-3"><span class="inline-flex items-center gap-1.5 text-slate-300 font-mono">${e.flag} ${e.cur}</span></td>
-        <td class="px-5 py-3 text-slate-200 font-medium">${e.name}</td>
-        <td class="px-5 py-3"><span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border ${impactCls[e.impact]}">${e.impact}</span></td>
-        <td class="px-5 py-3 text-slate-400 text-[12px]">${e.sector}</td>
-        <td class="px-5 py-3 text-right font-mono font-semibold ${e.porto >= 0 ? "text-emerald-400" : "text-red-400"}">${e.porto >= 0 ? "+" : ""}${e.porto}%</td>
-      </tr>`;
       });
     </script>
   </body>
