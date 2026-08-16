@@ -10,14 +10,21 @@ router = APIRouter()
 # perlu sekarang, 10 ticker ini cukup buat demo sidang.
 WATCHLIST = ["ANTM", "BBRI", "ADRO", "ASII", "BMRI", "ICBP", "TLKM", "GOTO", "UNVR", "MDKA"]
 
+SECTOR = {
+    "ANTM": "Basic Materials", "BBRI": "Banking", "ADRO": "Energy", "ASII": "Consumer",
+    "BMRI": "Banking", "ICBP": "Consumer", "TLKM": "Technology", "GOTO": "Technology",
+    "UNVR": "Consumer", "MDKA": "Basic Materials",
+}
 
-def _fetch_one(ticker: str) -> dict:
-    yf_ticker = yf.Ticker(f"{ticker}.JK")  # .JK suffix = IDX di Yahoo Finance
-    hist = yf_ticker.history(period="1mo")
 
+def _get_history(ticker: str, period: str = "1mo"):
+    hist = yf.Ticker(f"{ticker}.JK").history(period=period)  # .JK suffix = IDX di Yahoo Finance
     if hist.empty:
         raise ValueError(f"no data for {ticker}")
+    return hist
 
+
+def _score_from_history(ticker: str, hist) -> dict:
     price_now = float(hist["Close"].iloc[-1])
     price_5d_ago = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else float(hist["Close"].iloc[0])
     volume_today = float(hist["Volume"].iloc[-1])
@@ -42,7 +49,7 @@ def get_scanner():
     results, errors = [], []
     for t in WATCHLIST:
         try:
-            results.append(_fetch_one(t))
+            results.append(_score_from_history(t, _get_history(t)))
         except Exception as e:
             errors.append({"ticker": t, "error": str(e)})
 
@@ -51,3 +58,30 @@ def get_scanner():
 
     results.sort(key=lambda r: r["total_score"], reverse=True)
     return {"data": results, "errors": errors}
+
+
+@router.get("/{ticker}")
+def get_stock_detail(ticker: str):
+    """Detail 1 saham buat halaman stock-detail.html: skor + candlestick 1 bulan terakhir."""
+    ticker = ticker.upper()
+    try:
+        hist = _get_history(ticker)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
+
+    result = _score_from_history(ticker, hist)
+    result["sector"] = SECTOR.get(ticker, "—")
+
+    candles = [
+        {
+            "time": idx.strftime("%Y-%m-%d"),
+            "open": round(float(row["Open"]), 2),
+            "high": round(float(row["High"]), 2),
+            "low": round(float(row["Low"]), 2),
+            "close": round(float(row["Close"]), 2),
+        }
+        for idx, row in hist.iterrows()
+    ]
+    result["candles"] = candles
+
+    return result

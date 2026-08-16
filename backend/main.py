@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from config import supabase, FRONTEND_ORIGINS
-from routers import scanner
+from routers import scanner, intel, portfolio, market_events
 
 app = FastAPI(title="NEXUS API")
 
@@ -30,9 +30,10 @@ def health_supabase():
 
 
 app.include_router(scanner.router, prefix="/scanner", tags=["scanner"])
+app.include_router(intel.router, prefix="/intel", tags=["intel"])
+app.include_router(portfolio.router, prefix="/portfolio", tags=["portfolio"])
+app.include_router(market_events.router, prefix="/market-events", tags=["market-events"])
 
 # ---------------------------------------------------------------------------
-# Next routers go here once you pick a feature, e.g.:
-#   from routers import portfolio, journal
-#   app.include_router(portfolio.router, prefix="/portfolio")
+# Next router: journal (Trading Journal — belum digarap)
 # ---------------------------------------------------------------------------
