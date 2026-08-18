@@ -78,8 +78,8 @@ def simulate_portfolio(payload: SimulateInput):
 === MARKET INTEL MANUAL (3 hari terakhir) ===
 {json.dumps(intel, ensure_ascii=False) if intel else "Tidak ada intel manual yang diinput dalam 3 hari terakhir."}
 
-=== GEOPOLITIK / BERITA RESMI ===
-Belum tersedia (RSS feed belum diintegrasikan)."""
+=== GEOPOLITIK / EVENT KHUSUS IDX (RUPS, dividen, MSCI, dll) ===
+Belum tersedia — nunggu sumber data otomatis (belum ada API gratis buat data ini)."""
 
     try:
         result = ask_json(SIMULATE_SYSTEM_PROMPT, user_prompt)
