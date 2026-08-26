@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@theme {
+  --color-base: #0B0F1A;
+  --color-card: #111827;
+  --color-card2: #0F1521;
+  --color-border: #1F2937;
+  --color-accent: #2563EB;
+  --color-cyan: #06B6D4;
+  --color-strong: #EF4444;
+  --color-moderate: #F97316;
+  --color-weak: #EAB308;
+  --color-none: #6B7280;
+  --color-risklow: #22c55e;
+  --color-riskmed: #eab308;
+  --color-riskhigh: #ef4444;
+
+  --font-sans: "Manrope", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  background-color: #0B0F1A;
+}
+
+.glow-border {
+  box-shadow: 0 0 0 1px #1F2937, 0 8px 24px -12px rgba(37, 99, 235, 0.15);
+}
+
+.nav-active {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.15), transparent);
+  border-left: 2px solid #2563EB;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #1F2937;
+  border-radius: 4px;
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.day-cell {
+  aspect-ratio: 1;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.day-cell:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
+}
+.hidden-modal {
+  pointer-events: none;
+  opacity: 0;
+}
+.hidden-modal > div:last-child {
+  transform: scale(0.95) translateY(8px);
+}
+
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+details[open] .chev {
+  transform: rotate(90deg);
+}
+.timeline-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 18px;
+  height: 2px;
+  background: #1F2937;
+}
+
+.toggle {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: #1F2937;
+  position: relative;
+  cursor: pointer;
+  transition: background .2s;
+}
+.toggle.on {
+  background: #2563EB;
+}
+.toggle-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform .2s;
+}
+.toggle.on .toggle-dot {
+  transform: translateX(18px);
+}

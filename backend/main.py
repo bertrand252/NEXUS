@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from config import supabase, FRONTEND_ORIGINS
-from routers import scanner, intel, portfolio, market_events, journal
+from routers import scanner, intel, portfolio, market_events, journal, telegram
 
 app = FastAPI(title="NEXUS API")
 
@@ -34,3 +34,4 @@ app.include_router(intel.router, prefix="/intel", tags=["intel"])
 app.include_router(portfolio.router, prefix="/portfolio", tags=["portfolio"])
 app.include_router(market_events.router, prefix="/market-events", tags=["market-events"])
 app.include_router(journal.router, prefix="/journal", tags=["journal"])
+app.include_router(telegram.router, prefix="/telegram", tags=["telegram"])
