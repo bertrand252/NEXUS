@@ -10,14 +10,6 @@ export function signalMeta(signal) {
   return META[signal] || META.None;
 }
 
-// numeric 0-100 score -> same meta, using the thresholds scoring.py::signal_label uses (Strong>=75, Moderate>=50, Weak>=25, else None).
-export function signalMetaFromScore(score) {
-  if (score >= 75) return META.Strong;
-  if (score >= 50) return META.Moderate;
-  if (score >= 25) return META.Weak;
-  return META.None;
-}
-
 const ZONE_LABEL = { Strong: 'Very High Accumulation', Moderate: 'Moderate Accumulation', Weak: 'Weak Accumulation', None: 'No Signal' };
 const ZONE_COLOR = { Strong: 'text-strong', Moderate: 'text-moderate', Weak: 'text-weak', None: 'text-slate-400' };
 

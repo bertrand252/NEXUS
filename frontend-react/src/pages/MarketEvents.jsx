@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
-
-const IMPACT_CLASS = {
-  High: 'bg-strong/10 text-strong border-strong/30',
-  Medium: 'bg-moderate/10 text-moderate border-moderate/30',
-  Low: 'bg-weak/10 text-weak border-weak/30',
-  Holiday: 'bg-none/10 text-slate-400 border-none/30',
-};
+import { IMPACT_BADGE_CLASS } from '../lib/events';
 
 function EventRow({ e }) {
   return (
@@ -14,7 +8,7 @@ function EventRow({ e }) {
       <td className="px-5 py-3 text-slate-300 font-mono whitespace-nowrap">{e.date} {e.time_wib} WIB</td>
       <td className="px-5 py-3"><span className="inline-flex items-center gap-1.5 text-slate-300 font-mono">{e.flag} {e.currency}</span></td>
       <td className="px-5 py-3 text-slate-200 font-medium">{e.event}</td>
-      <td className="px-5 py-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${IMPACT_CLASS[e.impact] || IMPACT_CLASS.Low}`}>{e.impact}</span></td>
+      <td className="px-5 py-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${IMPACT_BADGE_CLASS[e.impact] || IMPACT_BADGE_CLASS.Low}`}>{e.impact}</span></td>
       <td className="px-5 py-3 text-slate-400 text-[12px]">{e.idx_sector_impact}</td>
       <td className="px-5 py-3 text-right font-mono text-[12px] text-slate-400">{e.forecast || '—'} <span className="text-slate-600">vs</span> {e.previous || '—'}</td>
     </tr>

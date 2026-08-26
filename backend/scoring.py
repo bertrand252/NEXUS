@@ -3,10 +3,10 @@ Accumulation scoring, max 100 total:
   Volume Score        /25  -> REAL, dari yfinance (rasio volume hari ini vs rata-rata 20 hari)
   Price Score         /25  -> REAL, dari yfinance (momentum harga 5 hari + posisi vs high/low)
   Accumulation Score  /30  -> MOCK, butuh data broker summary (berbayar, belum ada sumber gratis)
-  Technical Score     /20  -> MOCK, butuh Bollinger Bands + Parabolic SAR (belum diimplementasi)
+  Technical Score     /20  -> REAL, dari yfinance (RSI(14) + posisi harga vs MA20)
 
-Mock pakai hash ticker biar deterministik antar refresh (bukan random tiap call),
-supaya demo di sidang gak keliatan lompat-lompat gak jelas.
+Accumulation Score masih mock, pakai hash ticker biar deterministik antar refresh
+(bukan random tiap call), supaya angkanya gak lompat-lompat gak jelas tiap refresh.
 """
 import hashlib
 
@@ -45,12 +45,26 @@ def price_score(price_now: float, price_5d_ago: float, low_20d: float, high_20d:
     return score
 
 
+def technical_score(rsi14: float, price_vs_ma20_pct: float) -> int:
+    """0-20. RSI(14) posisi momentum (/10) + posisi harga vs moving average 20 hari (/10)."""
+    score = 0
+    if 50 <= rsi14 <= 70:
+        score += 10  # bullish sehat, momentum naik tapi belum overbought
+    elif 40 <= rsi14 < 50 or 70 < rsi14 <= 80:
+        score += 6
+    elif rsi14 < 30:
+        score += 3  # oversold, potensi rebound tapi belum jelas
+    score += 10 if price_vs_ma20_pct > 3 else 6 if price_vs_ma20_pct > 0 else 0
+    return score
+
+
 def compute_score(ticker: str, volume_today: float, volume_avg20: float,
-                   price_now: float, price_5d_ago: float, low_20d: float, high_20d: float) -> dict:
+                   price_now: float, price_5d_ago: float, low_20d: float, high_20d: float,
+                   rsi14: float, price_vs_ma20_pct: float) -> dict:
     vol = volume_score(volume_today, volume_avg20)
     price = price_score(price_now, price_5d_ago, low_20d, high_20d)
-    accumulation = _deterministic_mock(ticker, "accumulation", 30)  # TODO: real broker summary data
-    technical = _deterministic_mock(ticker, "technical", 20)         # TODO: real BB + Parabolic SAR
+    accumulation = _deterministic_mock(ticker, "accumulation", 30)  # TODO: real broker summary data (Invezgo)
+    technical = technical_score(rsi14, price_vs_ma20_pct)
 
     total = vol + price + accumulation + technical
     return {

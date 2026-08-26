@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
 
-const TICKERS = ['BBRI', 'ASII', 'GOTO', 'TLKM', 'ANTM', 'MDKA', 'ADRO', 'ICBP', 'BMRI', 'UNVR'];
-
 function Toggle({ defaultOn }) {
   const [on, setOn] = useState(defaultOn);
   return (
@@ -19,6 +17,45 @@ export default function Settings() {
   const [connected, setConnected] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [testing, setTesting] = useState(false);
+
+  const [watchlist, setWatchlist] = useState(null);
+  const [newTicker, setNewTicker] = useState('');
+
+  async function loadWatchlist() {
+    try {
+      const res = await fetch(`${API_BASE}/watchlist`);
+      const { data } = await res.json();
+      setWatchlist(data);
+    } catch {
+      setWatchlist([]);
+    }
+  }
+  useEffect(() => { loadWatchlist(); }, []);
+
+  async function addTicker() {
+    const t = newTicker.trim().toUpperCase();
+    if (!t) return;
+    try {
+      await fetch(`${API_BASE}/watchlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: t }),
+      });
+      setNewTicker('');
+      await loadWatchlist();
+    } catch (err) {
+      alert('Gagal nambah ticker: ' + err.message);
+    }
+  }
+
+  async function removeTicker(t) {
+    try {
+      await fetch(`${API_BASE}/watchlist/${t}`, { method: 'DELETE' });
+      await loadWatchlist();
+    } catch (err) {
+      alert('Gagal hapus ticker: ' + err.message);
+    }
+  }
 
   async function refreshTelegramStatus() {
     try {
@@ -160,17 +197,24 @@ export default function Settings() {
         <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm font-bold text-white">Watchlist Management</p>
-            <span className="text-[11px] text-slate-500 font-mono">{TICKERS.length} tickers</span>
+            <span className="text-[11px] text-slate-500 font-mono">{watchlist?.length ?? 0} tickers</span>
           </div>
           <div className="flex items-center gap-2 mb-4">
-            <input type="text" placeholder="Add ticker (e.g. BBCA)" className="flex-1 bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono uppercase focus:outline-none focus:border-accent/60" />
-            <button className="text-sm font-semibold px-4 py-2 rounded-lg bg-accent hover:bg-accent/90 text-white transition">Add</button>
+            <input
+              type="text" placeholder="Add ticker (e.g. BBCA)" value={newTicker}
+              onChange={(e) => setNewTicker(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addTicker()}
+              className="flex-1 bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono uppercase focus:outline-none focus:border-accent/60"
+            />
+            <button onClick={addTicker} className="text-sm font-semibold px-4 py-2 rounded-lg bg-accent hover:bg-accent/90 text-white transition">Add</button>
           </div>
           <div className="flex flex-wrap gap-2">
-            {TICKERS.map((t) => (
-              <span key={t} className="flex items-center gap-1.5 text-xs font-mono font-semibold px-3 py-1.5 rounded-lg bg-white/5 border border-border text-slate-200">
-                {t}
-                <button className="text-slate-500 hover:text-strong transition">×</button>
+            {watchlist == null && <p className="text-xs text-slate-500">Memuat...</p>}
+            {watchlist?.length === 0 && <p className="text-xs text-slate-500">Belum ada ticker di watchlist.</p>}
+            {watchlist?.map((w) => (
+              <span key={w.ticker} className="flex items-center gap-1.5 text-xs font-mono font-semibold px-3 py-1.5 rounded-lg bg-white/5 border border-border text-slate-200">
+                {w.ticker}
+                <button onClick={() => removeTicker(w.ticker)} className="text-slate-500 hover:text-strong transition">×</button>
               </span>
             ))}
           </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
+import { IMPACT_DOT_CLASS, formatShortDate } from '../lib/events';
 
 const SENTIMENT_CLASS = {
   bullish: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
@@ -13,19 +14,18 @@ const RISK = {
   high: { badge: 'bg-riskhigh/10 text-riskhigh border-riskhigh/30', dot: 'bg-riskhigh', label: 'High Risk' },
 };
 
-const IMPACT_DOT = { High: 'bg-strong', Med: 'bg-moderate', Medium: 'bg-moderate', Low: 'bg-weak' };
-
-// TODO: masih statis, ganti begitu integrasi Forex Factory JSON beneran jalan di sini juga
-const TIMELINE = [
-  { date: '09 Aug', flag: '🇮🇩', label: 'BI Rate Decision', impact: 'High', sector: 'Banking' },
-  { date: '10 Aug', flag: '🇺🇸', label: 'CPI Data', impact: 'High', sector: 'All Sectors' },
-  { date: '12 Aug', flag: '🇨🇳', label: 'China PMI', impact: 'Med', sector: 'Basic Materials' },
-  { date: '13 Aug', flag: '🇪🇺', label: 'ECB Minutes', impact: 'Low', sector: 'Banking' },
-  { date: '14 Aug', flag: '🇺🇸', label: 'Fed Rate Decision', impact: 'High', sector: 'All Sectors' },
-  { date: '15 Aug', flag: '🇮🇩', label: 'Trade Balance', impact: 'Med', sector: 'Export' },
-];
-
 export default function PortfolioSimulation() {
+  const [timeline, setTimeline] = useState([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/market-events`)
+      .then((r) => r.json())
+      .then(({ data }) => setTimeline((data || []).slice(0, 6).map((e) => ({
+        date: formatShortDate(e.date), flag: e.flag, label: e.event, impact: e.impact, sector: e.idx_sector_impact,
+      }))))
+      .catch(() => setTimeline([]));
+  }, []);
+
   const [holdings, setHoldings] = useState([
     { kode: 'BBRI', lot: 80, avg_price: 4650 },
     { kode: 'ASII', lot: 40, avg_price: 5300 },
@@ -274,9 +274,10 @@ export default function PortfolioSimulation() {
             <div className="glow-border rounded-2xl bg-card border border-border p-6">
               <h3 className="text-sm font-bold text-white tracking-tight mb-6">Event Timeline — 7 Hari Ke Depan</h3>
               <div className="timeline-track relative flex justify-between px-2 pt-1">
-                {TIMELINE.map((e, i) => (
+                {timeline.length === 0 && <p className="text-xs text-slate-500">Gak ada event minggu ini.</p>}
+                {timeline.map((e, i) => (
                   <div key={i} className="flex flex-col items-center text-center w-24 group relative">
-                    <div className={`w-4 h-4 rounded-full ${IMPACT_DOT[e.impact]} border-2 border-card z-10 cursor-pointer`}></div>
+                    <div className={`w-4 h-4 rounded-full ${IMPACT_DOT_CLASS[e.impact] || IMPACT_DOT_CLASS.Low} border-2 border-card z-10 cursor-pointer`}></div>
                     <p className="text-[10px] text-slate-500 font-mono mt-2">{e.date}</p>
                     <p className="text-lg leading-none mt-1">{e.flag}</p>
                     <p className="text-[11px] text-slate-300 font-medium mt-1 leading-tight">{e.label}</p>
