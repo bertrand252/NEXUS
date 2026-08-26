@@ -5,6 +5,65 @@ import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
 
+function CompanyInfo({ company, ticker }) {
+  const [lang, setLang] = useState('en');
+  const [translated, setTranslated] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function toggleLang() {
+    if (lang === 'en') {
+      if (!translated && company.summary) {
+        setLoading(true);
+        try {
+          const res = await fetch(`${API_BASE}/scanner/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: company.summary }),
+          });
+          const { translated } = await res.json();
+          setTranslated(translated);
+        } catch {
+          alert('Gagal translate, coba lagi.');
+          setLoading(false);
+          return;
+        }
+        setLoading(false);
+      }
+      setLang('id');
+    } else {
+      setLang('en');
+    }
+  }
+
+  return (
+    <div className="glow-border rounded-2xl bg-card border border-border p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-white tracking-tight">{company.name || ticker}</h3>
+        <div className="flex items-center gap-2">
+          {company.website && (
+            <a href={company.website} target="_blank" rel="noreferrer" className="text-[11px] text-cyan hover:text-accent font-medium">{company.website.replace(/^https?:\/\//, '')} ↗</a>
+          )}
+          {company.summary && (
+            <button
+              onClick={toggleLang} disabled={loading} title="Terjemahkan ke Bahasa Indonesia"
+              className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg bg-white/5 text-slate-400 border border-border hover:border-accent/50 hover:text-white transition disabled:opacity-50"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" /><path d="M3 12H21M12 3C14.5 5.7 15.8 9 15.8 12C15.8 15 14.5 18.3 12 21C9.5 18.3 8.2 15 8.2 12C8.2 9 9.5 5.7 12 3Z" stroke="currentColor" strokeWidth="1.8" /></svg>
+              {loading ? '...' : lang === 'en' ? 'ID' : 'EN'}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mb-3">
+        {company.sector && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/30">{company.sector}</span>}
+        {company.industry && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/5 text-slate-400 border border-border">{company.industry}</span>}
+        {company.employees && <span className="text-[10px] text-slate-500 font-mono">{company.employees.toLocaleString('id-ID')} karyawan</span>}
+      </div>
+      {company.summary && <p className="text-sm text-slate-400 leading-relaxed text-justify">{lang === 'id' && translated ? translated : company.summary}</p>}
+    </div>
+  );
+}
+
 function ScoreCard({ label, value, max, barClass }) {
   return (
     <div className="glow-border rounded-2xl bg-card border border-border p-4">
@@ -23,14 +82,16 @@ export default function StockDetail() {
 
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [timeframe, setTimeframe] = useState('1M');
+
+  useEffect(() => { setData(null); }, [ticker]); // reset pas ganti ticker, tapi gak pas cuma ganti timeframe (biar gak kedip kosong)
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
     setError(null);
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/scanner/${ticker}`);
+        const res = await fetch(`${API_BASE}/scanner/${ticker}?period=${timeframe}`);
         if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
         const json = await res.json();
         if (!cancelled) setData(json);
@@ -39,10 +100,10 @@ export default function StockDetail() {
       }
     })();
     return () => { cancelled = true; };
-  }, [ticker]);
+  }, [ticker, timeframe]);
 
-  const candles = data ? data.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })) : null;
-  const candleRef = useCandlestickChart(candles);
+  const candles = data ? data.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })) : null;
+  const candleRef = useCandlestickChart(candles, data?.levels);
 
   const brokerConfig = {
     type: 'bar',
@@ -96,6 +157,13 @@ export default function StockDetail() {
               </div>
               <p className="text-sm text-slate-500">{data?.sector || '—'}</p>
             </div>
+            <a
+              href={`https://www.tradingview.com/chart/?symbol=IDX%3A${ticker}`} target="_blank" rel="noreferrer"
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition"
+            >
+              Buka di TradingView
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M7 17L17 7M17 7H9M17 7V15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </a>
           </div>
           <div className="text-right">
             <p className="text-2xl font-bold text-white font-mono">{data ? `Rp ${data.price.toLocaleString('id-ID')}` : 'Rp —'}</p>
@@ -108,13 +176,39 @@ export default function StockDetail() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-white tracking-tight">Price Chart</h3>
               <div className="flex gap-1 text-[11px] font-mono">
-                <button className="px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30">1D</button>
-                <button className="px-2.5 py-1 rounded text-slate-500 hover:text-slate-300">1W</button>
-                <button className="px-2.5 py-1 rounded text-slate-500 hover:text-slate-300">1M</button>
-                <button className="px-2.5 py-1 rounded text-slate-500 hover:text-slate-300">1Y</button>
+                {['1D', '1W', '1M', '1Y'].map((tf) => (
+                  <button
+                    key={tf} onClick={() => setTimeframe(tf)}
+                    className={tf === timeframe
+                      ? 'px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30'
+                      : 'px-2.5 py-1 rounded text-slate-500 hover:text-slate-300'}
+                  >
+                    {tf}
+                  </button>
+                ))}
               </div>
             </div>
             <div ref={candleRef} style={{ height: 280 }}></div>
+            {data?.levels && (
+              <div className="grid grid-cols-4 gap-3 mt-4 text-center">
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Support</p>
+                  <p className="text-sm font-mono font-semibold text-emerald-400">Rp{data.levels.support.toLocaleString('id-ID')}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Resistance</p>
+                  <p className="text-sm font-mono font-semibold text-red-400">Rp{data.levels.resistance.toLocaleString('id-ID')}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Entry Zone</p>
+                  <p className="text-sm font-mono font-semibold text-white">{data.levels.entry_low.toLocaleString('id-ID')}–{data.levels.entry_high.toLocaleString('id-ID')}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Risk</p>
+                  <p className="text-sm font-mono font-semibold text-moderate">{data.levels.risk_pct}%</p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col items-center justify-center">
@@ -151,6 +245,8 @@ export default function StockDetail() {
           <ScoreCard label="Accumulation Score" value={data?.accumulation_score} max={30} barClass="bg-strong" />
           <ScoreCard label="Technical Score" value={data?.technical_score} max={20} barClass="bg-moderate" />
         </div>
+
+        {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} />}
 
         <div className="grid grid-cols-3 gap-6">
           <div className="glow-border rounded-2xl bg-gradient-to-br from-card to-card2 border border-accent/30 p-5">

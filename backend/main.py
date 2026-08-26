@@ -1,9 +1,25 @@
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from config import supabase, FRONTEND_ORIGINS
-from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist
+from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls
+from scheduler import run_scheduler, run_morning_routine
 
-app = FastAPI(title="NEXUS API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """2 task background: run_scheduler (cek scanner_cache tiap 15 menit, kirim
+    alert Telegram otomatis buat signal Strong baru) dan run_morning_routine
+    (jam 06:00 tiap hari, refresh mentor_calls sebelum market open). Lihat
+    scheduler.py."""
+    tasks = [asyncio.create_task(run_scheduler()), asyncio.create_task(run_morning_routine())]
+    yield
+    for t in tasks:
+        t.cancel()
+
+
+app = FastAPI(title="NEXUS API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,3 +52,4 @@ app.include_router(market_events.router, prefix="/market-events", tags=["market-
 app.include_router(journal.router, prefix="/journal", tags=["journal"])
 app.include_router(telegram.router, prefix="/telegram", tags=["telegram"])
 app.include_router(watchlist.router, prefix="/watchlist", tags=["watchlist"])
+app.include_router(mentor_calls.router, prefix="/mentor-calls", tags=["mentor-calls"])

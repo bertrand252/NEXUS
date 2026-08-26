@@ -2,11 +2,9 @@
 Accumulation scoring, max 100 total:
   Volume Score        /25  -> REAL, dari yfinance (rasio volume hari ini vs rata-rata 20 hari)
   Price Score         /25  -> REAL, dari yfinance (momentum harga 5 hari + posisi vs high/low)
-  Accumulation Score  /30  -> MOCK, butuh data broker summary (berbayar, belum ada sumber gratis)
+  Accumulation Score  /30  -> REAL kalau INVEZGO_API_KEY keisi (top BDM/foreign flow),
+                              MOCK (hash ticker) kalau belum subscribe Invezgo
   Technical Score     /20  -> REAL, dari yfinance (RSI(14) + posisi harga vs MA20)
-
-Accumulation Score masih mock, pakai hash ticker biar deterministik antar refresh
-(bukan random tiap call), supaya angkanya gak lompat-lompat gak jelas tiap refresh.
 """
 import hashlib
 
@@ -45,6 +43,30 @@ def price_score(price_now: float, price_5d_ago: float, low_20d: float, high_20d:
     return score
 
 
+def accumulation_score(ticker: str, accum_lookup: dict | None) -> int:
+    """0-30. Kalau Invezgo aktif, accum_lookup dibangun sekali per refresh dari
+    GET /analysis/top/accumulation + /analysis/top/foreign (bukan per-ticker call —
+    endpoint itu ngasih semua top mover market dalam 1 call). Ticker yang ke-flag
+    di top accumulation list dikasih skor tinggi, top distribution dikasih rendah,
+    yang gak ke-flag salah satu (paling banyak, wajar — cuma top mover yang di-list)
+    dikasih skor netral, JUJUR nunjukin "gak ada sinyal kuat" bukan ngarang angka
+    presisi kayak mock lama.
+
+    CATATAN: pembagian skor ini first-pass heuristic, belum dikalibrasi lawan data
+    Invezgo asli (belum ada API key aktif pas ini ditulis) — wajar disesuaikan lagi
+    begitu keliatan bentuk & jumlah data asli dari top accumulation/foreign list.
+
+    Kalau Invezgo belum di-subscribe (accum_lookup None), fallback ke hash mock lama."""
+    if accum_lookup is None:
+        return _deterministic_mock(ticker, "accumulation", 30)
+    signal = accum_lookup.get(ticker)
+    if signal == "accum":
+        return 26
+    if signal == "dist":
+        return 4
+    return 15  # netral — gak ke-flag di top accumulation atau top distribution
+
+
 def technical_score(rsi14: float, price_vs_ma20_pct: float) -> int:
     """0-20. RSI(14) posisi momentum (/10) + posisi harga vs moving average 20 hari (/10)."""
     score = 0
@@ -60,10 +82,10 @@ def technical_score(rsi14: float, price_vs_ma20_pct: float) -> int:
 
 def compute_score(ticker: str, volume_today: float, volume_avg20: float,
                    price_now: float, price_5d_ago: float, low_20d: float, high_20d: float,
-                   rsi14: float, price_vs_ma20_pct: float) -> dict:
+                   rsi14: float, price_vs_ma20_pct: float, accum_lookup: dict | None = None) -> dict:
     vol = volume_score(volume_today, volume_avg20)
     price = price_score(price_now, price_5d_ago, low_20d, high_20d)
-    accumulation = _deterministic_mock(ticker, "accumulation", 30)  # TODO: real broker summary data (Invezgo)
+    accumulation = accumulation_score(ticker, accum_lookup)
     technical = technical_score(rsi14, price_vs_ma20_pct)
 
     total = vol + price + accumulation + technical

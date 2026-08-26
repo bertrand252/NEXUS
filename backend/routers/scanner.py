@@ -1,24 +1,48 @@
+from datetime import date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 import yfinance as yf
 from scoring import compute_score
+from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
+from config import supabase
+from levels import support_resistance
+from groq_client import translate_to_indonesian
+import invezgo_client
 
 router = APIRouter()
 
-# MVP watchlist, sesuai dummy data yang udah ada di frontend.
-# Nanti kalau mau scan "semua saham IDX" beneran, ganti ini jadi query dari
-# daftar emiten BEI (bisa dari file CSV statis atau tabel Supabase) — belum
-# perlu sekarang, 10 ticker ini cukup buat demo sidang.
-WATCHLIST = ["ANTM", "BBRI", "ADRO", "ASII", "BMRI", "ICBP", "TLKM", "GOTO", "UNVR", "MDKA"]
 
-SECTOR = {
-    "ANTM": "Basic Materials", "BBRI": "Banking", "ADRO": "Energy", "ASII": "Consumer",
-    "BMRI": "Banking", "ICBP": "Consumer", "TLKM": "Technology", "GOTO": "Technology",
-    "UNVR": "Consumer", "MDKA": "Basic Materials",
-}
+def _build_accum_lookup() -> dict | None:
+    """{ticker: "accum"|"dist"} dari top BDM flow + foreign flow Invezgo, 1x per
+    refresh (bukan per-ticker call — endpoint-nya udah ngasih semua top mover
+    market sekaligus). None kalau Invezgo belum di-subscribe atau lagi error
+    (biar refresh_scanner tetap jalan pake mock, gak ikut gagal total)."""
+    if not invezgo_client.is_configured():
+        return None
+    today = date.today().isoformat()
+    lookup: dict = {}
+    try:
+        acc = invezgo_client.get_top_accumulation(today)
+        for row in acc.get("accum", []):
+            lookup[row["code"]] = "accum"
+        for row in acc.get("dist", []):
+            lookup[row["code"]] = "dist"
+        frn = invezgo_client.get_top_foreign(today)
+        for row in frn.get("accum", []):
+            lookup.setdefault(row["code"], "accum")
+        for row in frn.get("dist", []):
+            lookup.setdefault(row["code"], "dist")
+    except Exception:
+        return None
+    return lookup
 
 
 def _get_history(ticker: str, period: str = "2mo"):
     hist = yf.Ticker(f"{ticker}.JK").history(period=period)  # .JK suffix = IDX di Yahoo Finance
+    # baris terakhir kadang NaN (suspend/gak ada transaksi hari itu) — buang biar
+    # gak nyebar NaN ke scoring & JSON response (NaN gak valid JSON, bikin 500)
+    hist = hist.dropna(subset=["Close"])
     if hist.empty:
         raise ValueError(f"no data for {ticker}")
     return hist
@@ -35,7 +59,7 @@ def _rsi14(closes) -> float:
     return 100 - (100 / (1 + rs))
 
 
-def _score_from_history(ticker: str, hist) -> dict:
+def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> dict:
     price_now = float(hist["Close"].iloc[-1])
     price_5d_ago = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else float(hist["Close"].iloc[0])
     volume_today = float(hist["Volume"].iloc[-1])
@@ -48,7 +72,7 @@ def _score_from_history(ticker: str, hist) -> dict:
     price_vs_ma20_pct = (price_now - ma20) / ma20 * 100 if ma20 else 0.0
     rsi14 = _rsi14(hist["Close"])
 
-    score = compute_score(ticker, volume_today, volume_avg20, price_now, price_5d_ago, low_20d, high_20d, rsi14, price_vs_ma20_pct)
+    score = compute_score(ticker, volume_today, volume_avg20, price_now, price_5d_ago, low_20d, high_20d, rsi14, price_vs_ma20_pct, accum_lookup)
 
     return {
         "ticker": ticker,
@@ -61,25 +85,67 @@ def _score_from_history(ticker: str, hist) -> dict:
 
 @router.get("")
 def get_scanner():
+    """Baca dari scanner_cache (Supabase), bukan live-fetch — 951 ticker gak sanggup
+    di-live-fetch tiap page-load. Isi cache-nya lewat POST /scanner/refresh."""
+    try:
+        res = supabase.table("scanner_cache").select("*").order("total_score", desc=True).execute()
+    except Exception:
+        return {"data": [], "errors": [], "warning": "Cache masih kosong — jalanin POST /scanner/refresh dulu."}
+    if not res.data:
+        return {"data": [], "errors": [], "warning": "Cache masih kosong — jalanin POST /scanner/refresh dulu."}
+    return {"data": res.data, "errors": []}
+
+
+@router.post("/refresh")
+def refresh_scanner():
+    """Live-fetch semua 951 ticker di data/idx_universe.json (paralel via thread pool,
+    yfinance itu I/O-bound jadi ini bukan over-engineering — sequential bakal makan
+    berpuluh menit), hitung score, terus upsert ke scanner_cache. Manual trigger,
+    belum ada scheduler otomatis."""
+    accum_lookup = _build_accum_lookup()
+
+    def _fetch_one(ticker: str) -> dict:
+        row = _score_from_history(ticker, _get_history(ticker), accum_lookup)
+        row["sector"] = SECTOR_BY_TICKER.get(ticker, "—")
+        row["name"] = NAME_BY_TICKER.get(ticker, ticker)
+        return row
+
     results, errors = [], []
-    for t in WATCHLIST:
-        try:
-            results.append(_score_from_history(t, _get_history(t)))
-        except Exception as e:
-            errors.append({"ticker": t, "error": str(e)})
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        futures = {pool.submit(_fetch_one, t): t for t in TICKERS}
+        for future in as_completed(futures):
+            t = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as e:
+                errors.append({"ticker": t, "error": str(e)})
 
-    if not results:
-        raise HTTPException(status_code=502, detail={"message": "yfinance returned no data at all", "errors": errors})
+    for i in range(0, len(results), 500):
+        chunk = results[i:i + 500]
+        supabase.table("scanner_cache").upsert(chunk, on_conflict="ticker").execute()
 
-    results.sort(key=lambda r: r["total_score"], reverse=True)
-    return {"data": results, "errors": errors}
+    return {"refreshed": len(results), "failed": len(errors), "errors": errors[:30]}
+
+
+class TranslateInput(BaseModel):
+    text: str
+
+
+@router.post("/translate")
+def translate_summary(payload: TranslateInput):
+    """Terjemahin teks (deskripsi bisnis perusahaan dari yfinance) ke Bahasa
+    Indonesia, dipanggil on-demand pas user klik toggle bahasa di frontend."""
+    try:
+        return {"translated": translate_to_indonesian(payload.text)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gagal translate: {e}")
 
 
 @router.get("/index/ihsg")
 def get_ihsg():
     """Harga IHSG (^JKSE) + sparkline 20 hari terakhir, buat banner Market Mood di Dashboard."""
     try:
-        hist = yf.Ticker("^JKSE").history(period="2mo")
+        hist = yf.Ticker("^JKSE").history(period="2mo").dropna(subset=["Close"])
         if hist.empty:
             raise ValueError("no data")
     except Exception:
@@ -96,28 +162,68 @@ def get_ihsg():
     }
 
 
-@router.get("/{ticker}")
-def get_stock_detail(ticker: str):
-    """Detail 1 saham buat halaman stock-detail.html: skor + candlestick 1 bulan terakhir."""
-    ticker = ticker.upper()
-    try:
-        hist = _get_history(ticker)
-    except Exception:
-        raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
+CHART_TIMEFRAMES = {
+    "1D": {"period": "5d", "interval": "15m"},
+    "1W": {"period": "1mo", "interval": "1d"},
+    "1M": {"period": "2mo", "interval": "1d"},
+    "1Y": {"period": "1y", "interval": "1d"},
+}
 
-    result = _score_from_history(ticker, hist)
-    result["sector"] = SECTOR.get(ticker, "—")
 
-    candles = [
+def _candles_from_hist(hist) -> list[dict]:
+    return [
         {
-            "time": idx.strftime("%Y-%m-%d"),
+            "time": int(idx.timestamp()),  # UTCTimestamp — lightweight-charts terima ini buat daily & intraday sekaligus
             "open": round(float(row["Open"]), 2),
             "high": round(float(row["High"]), 2),
             "low": round(float(row["Low"]), 2),
             "close": round(float(row["Close"]), 2),
+            "volume": round(float(row["Volume"]), 0),
         }
         for idx, row in hist.iterrows()
     ]
-    result["candles"] = candles
+
+
+@router.get("/{ticker}")
+def get_stock_detail(ticker: str, period: str = "1M"):
+    """Detail 1 saham: skor + level support/resistance (selalu dari window 2 bulan,
+    biar scoring konsisten) + candlestick (periode bisa diganti-ganti via ?period=
+    1D/1W/1M/1Y buat tombol timeframe di frontend, gak ikut ngubah skor)."""
+    ticker = ticker.upper()
+    try:
+        hist = _get_history(ticker)
+        result = _score_from_history(ticker, hist, _build_accum_lookup())
+        result["levels"] = support_resistance(hist)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
+    result["sector"] = SECTOR_BY_TICKER.get(ticker, "—")
+
+    try:
+        info = yf.Ticker(f"{ticker}.JK").info
+        result["company"] = {
+            "name": info.get("longName") or NAME_BY_TICKER.get(ticker),
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "employees": info.get("fullTimeEmployees"),
+            "summary": info.get("longBusinessSummary"),
+            "website": info.get("website"),
+        }
+    except Exception:
+        result["company"] = None  # yfinance kadang gak punya profile lengkap buat ticker tertentu, gak fatal
+
+    timeframe = CHART_TIMEFRAMES.get(period, CHART_TIMEFRAMES["1M"])
+    if timeframe == CHART_TIMEFRAMES["1M"]:
+        chart_hist = hist  # udah di-fetch di atas, gak perlu call yfinance lagi
+    else:
+        try:
+            chart_hist = (
+                yf.Ticker(f"{ticker}.JK")
+                .history(period=timeframe["period"], interval=timeframe["interval"])
+                .dropna(subset=["Close"])
+            )
+        except Exception:
+            chart_hist = hist  # gagal fetch periode lain, fallback ke yang udah ada daripada chart kosong
+
+    result["candles"] = _candles_from_hist(chart_hist)
 
     return result

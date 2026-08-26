@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import logo from '../assets/NEXUS.png';
+import { useProfile } from '../hooks/useProfile';
+import { initials } from '../lib/profile';
 
 const NAV_ITEMS = [
   {
@@ -38,6 +40,13 @@ const NAV_ITEMS = [
     ),
   },
   {
+    to: '/mentor-calls',
+    label: 'Mentor Calls',
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" /><path d="M9 12L11 14L15.5 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    ),
+  },
+  {
     to: '/journal',
     label: 'Journal',
     icon: (
@@ -61,6 +70,7 @@ const NAV_ITEMS = [
 ];
 
 export default function Sidebar() {
+  const profile = useProfile();
   return (
     <aside className="w-64 shrink-0 bg-[#0D1220] border-r border-border flex flex-col justify-between fixed h-screen z-20">
       <div>
@@ -93,13 +103,13 @@ export default function Sidebar() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
           Collapse
         </button>
-        <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/5 transition cursor-pointer">
-          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan to-accent flex items-center justify-center text-xs font-bold text-white shrink-0">RA</div>
+        <NavLink to="/settings" className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/5 transition cursor-pointer">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan to-accent flex items-center justify-center text-xs font-bold text-white shrink-0">{initials(profile.name)}</div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-white truncate">Rian Adnan</p>
-            <p className="text-[11px] text-slate-500 truncate">Pro Trader</p>
+            <p className="text-sm font-semibold text-white truncate">{profile.name}</p>
+            <p className="text-[11px] text-slate-500 truncate">{profile.role}</p>
           </div>
-        </div>
+        </NavLink>
       </div>
     </aside>
   );

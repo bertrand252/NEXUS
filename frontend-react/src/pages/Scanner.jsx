@@ -3,19 +3,13 @@ import { Link } from 'react-router-dom';
 import { API_BASE } from '../lib/api';
 import { signalMeta } from '../lib/signal';
 
-// backend doesn't know sector names — keep a small client-side lookup for display only
-const SECTOR = {
-  ANTM: 'Basic Materials', BBRI: 'Banking', ADRO: 'Energy', ASII: 'Consumer',
-  BMRI: 'Banking', ICBP: 'Consumer', TLKM: 'Technology', GOTO: 'Technology', UNVR: 'Consumer', MDKA: 'Basic Materials',
-};
-
 function ScanRow({ s }) {
   const m = signalMeta(s.signal);
   return (
     <tr className="hover:bg-white/[0.03] transition">
       <td className="px-5 py-3">
         <p className="font-sans font-semibold text-white">{s.ticker}</p>
-        <p className="text-[10px] text-slate-500 font-sans">{SECTOR[s.ticker] || '—'}</p>
+        <p className="text-[10px] text-slate-500 font-sans">{s.sector || '—'}</p>
       </td>
       <td className="px-5 py-3 text-slate-300">Rp {s.price.toLocaleString('id-ID')}</td>
       <td className={`px-5 py-3 ${s.change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.change_pct >= 0 ? '+' : ''}{s.change_pct}%</td>
@@ -38,36 +32,53 @@ function ScanRow({ s }) {
 
 export default function Scanner() {
   const [allData, setAllData] = useState([]);
-  const [errors, setErrors] = useState([]);
+  const [warning, setWarning] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [search, setSearch] = useState('');
   const [signal, setSignal] = useState('');
   const [sector, setSector] = useState('');
   const [minScoreOnly, setMinScoreOnly] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/scanner`);
-        if (!res.ok) throw new Error(`Backend error ${res.status}`);
-        const { data, errors } = await res.json();
-        setAllData(data);
-        setErrors(errors);
-        setRefreshedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
-      } catch {
-        setLoadError(true);
-      }
-    })();
-  }, []);
+  async function loadScanner() {
+    try {
+      const res = await fetch(`${API_BASE}/scanner`);
+      if (!res.ok) throw new Error(`Backend error ${res.status}`);
+      const { data, warning } = await res.json();
+      setAllData(data);
+      setWarning(warning || null);
+      setLoadError(false);
+      setRefreshedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
+    } catch {
+      setLoadError(true);
+    }
+  }
+
+  useEffect(() => { loadScanner(); }, []);
+
+  async function runRefresh() {
+    setRefreshing(true);
+    try {
+      const res = await fetch(`${API_BASE}/scanner/refresh`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Refresh gagal (${res.status})`);
+      await loadScanner();
+    } catch (err) {
+      alert('Gagal refresh scanner: ' + err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const sectors = useMemo(() => [...new Set(allData.map((s) => s.sector).filter(Boolean))].sort(), [allData]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toUpperCase();
     return allData.filter((s) => {
       if (q && !s.ticker.includes(q)) return false;
       if (signal && s.signal !== signal) return false;
-      if (sector && SECTOR[s.ticker] !== sector) return false;
+      if (sector && s.sector !== sector) return false;
       if (minScoreOnly && s.total_score < 50) return false;
       return true;
     });
@@ -76,20 +87,22 @@ export default function Scanner() {
   const statusLine = loadError
     ? 'Gagal memuat data'
     : `Showing ${filtered.length} of ${allData.length} IDX tickers` +
-      (refreshedAt ? ` · Refreshed ${refreshedAt} WIB` : '') +
-      (errors.length ? ` · ${errors.length} gagal dimuat (${errors.map((e) => e.ticker).join(', ')})` : '');
+      (refreshedAt ? ` · Terakhir dimuat ${refreshedAt} WIB` : '');
 
   return (
     <>
       <header className="sticky top-0 z-10 bg-[#0B0F1A]/90 backdrop-blur border-b border-border px-8 py-4 flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-white tracking-tight">Scanner</h1>
-          <p className="text-xs text-slate-500 mt-0.5 font-mono">IDX Watchlist</p>
+          <p className="text-xs text-slate-500 mt-0.5 font-mono">IDX Universe · {allData.length} ticker</p>
         </div>
         <div className="flex items-center gap-4">
-          <span className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span> MARKET OPEN
-          </span>
+          <button
+            onClick={runRefresh} disabled={refreshing}
+            className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition disabled:opacity-50"
+          >
+            {refreshing ? 'Nge-refresh 951 ticker... (bisa semenit-an)' : '↻ Refresh dari yfinance'}
+          </button>
           <button className="relative w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center hover:border-accent/50 transition">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8C6 15 3 17 3 17H21S18 15 18 8Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.73 21A2 2 0 0 1 10.27 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-strong"></span>
@@ -98,6 +111,15 @@ export default function Scanner() {
       </header>
 
       <div className="p-8 space-y-5">
+        {warning && (
+          <div className="p-4 rounded-xl bg-moderate/10 border border-moderate/30 text-sm text-moderate flex items-center justify-between">
+            {warning}
+            <button onClick={runRefresh} disabled={refreshing} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-moderate/20 hover:bg-moderate/30 transition shrink-0 ml-4">
+              {refreshing ? 'Memuat...' : 'Refresh sekarang'}
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[220px] max-w-xs">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
@@ -115,11 +137,7 @@ export default function Scanner() {
           </select>
           <select value={sector} onChange={(e) => setSector(e.target.value)} className="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
             <option value="">All Sectors</option>
-            <option>Banking</option>
-            <option>Energy</option>
-            <option>Consumer</option>
-            <option>Technology</option>
-            <option>Basic Materials</option>
+            {sectors.map((s) => <option key={s}>{s}</option>)}
           </select>
           <button
             onClick={() => setMinScoreOnly((v) => !v)}

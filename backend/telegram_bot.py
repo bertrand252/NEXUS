@@ -52,3 +52,22 @@ def send_alert(text: str) -> bool:
     if not chat_id:
         return False
     return send_message(chat_id, text)
+
+
+def send_photo(chat_id: str, photo_bytes: bytes, caption: str) -> bool:
+    res = requests.post(
+        f"{API_BASE}/sendPhoto",
+        data={"chat_id": chat_id, "caption": caption[:1024]},  # limit caption Telegram
+        files={"photo": ("chart.png", photo_bytes, "image/png")},
+        timeout=15,
+    )
+    return res.ok
+
+
+def send_alert_photo(photo_bytes: bytes, caption: str) -> bool:
+    """Sama kayak send_alert() tapi lampiran foto (dipake scheduler.py buat kirim
+    chart + garis support/resistance)."""
+    chat_id = get_saved_chat_id()
+    if not chat_id:
+        return False
+    return send_photo(chat_id, photo_bytes, caption)

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
+import { useProfile } from '../hooks/useProfile';
+import { saveProfile, initials } from '../lib/profile';
 
 function Toggle({ defaultOn }) {
   const [on, setOn] = useState(defaultOn);
@@ -20,6 +22,22 @@ export default function Settings() {
 
   const [watchlist, setWatchlist] = useState(null);
   const [newTicker, setNewTicker] = useState('');
+
+  const profile = useProfile();
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [nameInput, setNameInput] = useState(profile.name);
+  const [emailInput, setEmailInput] = useState(profile.email);
+
+  function startEditProfile() {
+    setNameInput(profile.name);
+    setEmailInput(profile.email);
+    setEditingProfile(true);
+  }
+  function submitProfile() {
+    if (!nameInput.trim()) { alert('Nama gak boleh kosong'); return; }
+    saveProfile({ ...profile, name: nameInput.trim(), email: emailInput.trim() });
+    setEditingProfile(false);
+  }
 
   async function loadWatchlist() {
     try {
@@ -222,15 +240,37 @@ export default function Settings() {
 
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <p className="text-sm font-bold text-white mb-4">Account</p>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-cyan to-accent flex items-center justify-center text-sm font-bold text-white">RA</div>
-            <div>
-              <p className="text-sm font-semibold text-white">Rian Adnan</p>
-              <p className="text-[11px] text-slate-500">rian.adnan@student.ac.id</p>
+
+          {!editingProfile && (
+            <>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-cyan to-accent flex items-center justify-center text-sm font-bold text-white shrink-0">{initials(profile.name)}</div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">{profile.name}</p>
+                  <p className="text-[11px] text-slate-500 truncate">{profile.email}</p>
+                </div>
+              </div>
+              <button onClick={startEditProfile} className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition mb-2">Edit Profile</button>
+              <button className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-strong/10 text-strong border border-strong/30 hover:bg-strong/20 transition">Log Out</button>
+            </>
+          )}
+
+          {editingProfile && (
+            <div className="space-y-2.5">
+              <input
+                type="text" placeholder="Nama" value={nameInput} onChange={(e) => setNameInput(e.target.value)}
+                className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent/60"
+              />
+              <input
+                type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)}
+                className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent/60"
+              />
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => setEditingProfile(false)} className="flex-1 text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition">Batal</button>
+                <button onClick={submitProfile} className="flex-1 text-xs font-semibold px-4 py-2 rounded-lg bg-accent hover:bg-accent/90 text-white transition">Simpan</button>
+              </div>
             </div>
-          </div>
-          <button className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition mb-2">Edit Profile</button>
-          <button className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-strong/10 text-strong border border-strong/30 hover:bg-strong/20 transition">Log Out</button>
+          )}
         </div>
       </div>
     </>

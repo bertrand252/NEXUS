@@ -6,3 +6,5 @@ pydantic>=2.10.0
 yfinance>=0.2.44
 groq>=0.11.0
 requests>=2.32.0
+matplotlib>=3.9.0
+mplfinance>=0.12.10

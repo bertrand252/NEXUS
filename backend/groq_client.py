@@ -31,3 +31,30 @@ def ask_json(system_prompt: str, user_prompt: str) -> dict:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Groq gak balikin JSON valid: {raw[:300]}") from e
+
+
+def translate_to_indonesian(text: str) -> str:
+    """Terjemahin teks (misal deskripsi bisnis perusahaan dari yfinance, bahasa
+    Inggris) ke Bahasa Indonesia natural. Dipanggil on-demand, bukan tiap load."""
+    system_prompt = (
+        'Terjemahin teks berikut ke Bahasa Indonesia yang natural dan enak dibaca, '
+        'gaya formal secukupnya (ini deskripsi bisnis perusahaan). Jangan nambah/ngurangin '
+        'informasi. Balikin JSON: {"translated": "..."}'
+    )
+    result = ask_json(system_prompt, text)
+    return result.get("translated", text)
+
+
+def analyze_alert(ticker: str, score_breakdown: dict, levels: dict) -> dict:
+    """Generate alasan singkat buat alert Telegram — dipanggil scheduler.py.
+    Return: {"alasan_strong": str, "alasan_risk": str}."""
+    system_prompt = (
+        "Kamu analis saham IDX. Dikasih breakdown score teknikal + level "
+        "support/resistance 1 saham, jelasin singkat (maksimal 2 kalimat pendek "
+        "per poin) kenapa sinyalnya kuat, dan kenapa risk-nya segitu. Bahasa "
+        "Indonesia santai, to the point, jangan ngasih rekomendasi eksplisit "
+        "'beli sekarang' — jelasin data yang ada aja. Balikin JSON persis: "
+        '{"alasan_strong": "...", "alasan_risk": "..."}'
+    )
+    user_prompt = json.dumps({"ticker": ticker, **score_breakdown, **levels}, ensure_ascii=False)
+    return ask_json(system_prompt, user_prompt)

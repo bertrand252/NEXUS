@@ -9,6 +9,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Invezgo (opsional) — kosong = fallback ke yfinance/mock, keisi = NEXUS otomatis pakai data Invezgo
+INVEZGO_API_KEY = os.getenv("INVEZGO_API_KEY")
 FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "*").split(",")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
