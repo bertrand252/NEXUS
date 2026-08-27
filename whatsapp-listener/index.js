@@ -1,7 +1,8 @@
 require('dotenv').config();
 const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const qrcode = require('qrcode-terminal');
+const qrcodeTerminal = require('qrcode-terminal');
+const qrcode = require('qrcode');
 const pino = require('pino');
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
@@ -52,7 +53,13 @@ async function start() {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
       console.log('\nScan QR ini pake WhatsApp di NOMOR TUMBAL kamu (Linked Devices > Link a Device):\n');
-      qrcode.generate(qr, { small: true });
+      qrcodeTerminal.generate(qr, { small: true }); // buat lokal — kalau lewat log viewer web (Railway dll), block character-nya sering rusak
+      qrcode.toDataURL(qr, { width: 300 }, (err, dataUrl) => {
+        if (err) return;
+        console.log('\nKalau QR di atas gak kebaca (misal lewat Railway logs), copy baris di bawah ini SELURUHNYA, paste ke address bar browser, Enter — bakal kebuka jadi gambar QR yang bisa di-scan:\n');
+        console.log(dataUrl);
+        console.log('');
+      });
     }
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
