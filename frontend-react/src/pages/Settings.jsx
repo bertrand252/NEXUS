@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
 import { useProfile } from '../hooks/useProfile';
 import { saveProfile, initials } from '../lib/profile';
+import { supabase } from '../lib/supabaseClient';
 
 function Toggle({ defaultOn }) {
   const [on, setOn] = useState(defaultOn);
@@ -251,7 +252,7 @@ export default function Settings() {
                 </div>
               </div>
               <button onClick={startEditProfile} className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition mb-2">Edit Profile</button>
-              <button className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-strong/10 text-strong border border-strong/30 hover:bg-strong/20 transition">Log Out</button>
+              <button onClick={() => supabase.auth.signOut()} className="w-full text-xs font-semibold px-4 py-2 rounded-lg bg-strong/10 text-strong border border-strong/30 hover:bg-strong/20 transition">Log Out</button>
             </>
           )}
 

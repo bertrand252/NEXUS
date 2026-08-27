@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import Login from './pages/Login';
 import MarketEvents from './pages/MarketEvents';
 import Analytics from './pages/Analytics';
 import Journal from './pages/Journal';
@@ -9,12 +10,21 @@ import Dashboard from './pages/Dashboard';
 import PortfolioSimulation from './pages/PortfolioSimulation';
 import MentorCalls from './pages/MentorCalls';
 import Settings from './pages/Settings';
+import { useAuth } from './hooks/useAuth';
+
+function RequireAuth({ children }) {
+  const { session, loading } = useAuth();
+  if (loading) return null;
+  if (!session) return <Navigate to="/login" replace />;
+  return children;
+}
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<Layout />}>
+        <Route path="/login" element={<Login />} />
+        <Route element={<RequireAuth><Layout /></RequireAuth>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/scanner" element={<Scanner />} />

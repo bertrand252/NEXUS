@@ -5,6 +5,7 @@ const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
+const SERVICE_API_KEY = process.env.SERVICE_API_KEY || '';
 // Bisa lebih dari 1 channel — pisahin pake koma di .env, contoh:
 // TARGET_JIDS=123@newsletter,456@newsletter,789@newsletter
 const TARGET_JIDS = (process.env.TARGET_JIDS || process.env.TARGET_JID || '')
@@ -17,7 +18,7 @@ async function forwardToIntel(text) {
   try {
     const res = await fetch(`${BACKEND_URL}/intel`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Service-Key': SERVICE_API_KEY },
       body: JSON.stringify({ sumber: SOURCE_NAME, isi_teks: text }),
     });
     if (!res.ok) console.error('Gagal forward ke /intel:', res.status, await res.text());

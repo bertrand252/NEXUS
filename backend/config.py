@@ -14,6 +14,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 INVEZGO_API_KEY = os.getenv("INVEZGO_API_KEY")
 FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "*").split(",")
 
+# Buat caller mesin-ke-mesin (WhatsApp listener, dst) yang gak bisa login penuh — lihat auth_guard.py
+SERVICE_API_KEY = os.getenv("SERVICE_API_KEY")
+
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL / SUPABASE_KEY missing — copy .env.example to .env and fill it in")
 
