@@ -1,8 +1,23 @@
 import os
+import socket
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
+
+# Railway kadang resolve host luar (misal api.groq.com) ke IPv6 yang rute-nya
+# putus dari egress mereka, connect gagal ("Connection error.") padahal key &
+# host valid (jalan normal dari lokal). Paksa semua resolusi DNS proses ini ke
+# IPv4 aja — semua service yang dipanggil (Groq, Supabase, yfinance, Telegram,
+# Forex Factory) support IPv4 kok.
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _getaddrinfo_ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+
+socket.getaddrinfo = _getaddrinfo_ipv4_only
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")

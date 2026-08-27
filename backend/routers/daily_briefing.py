@@ -1,5 +1,5 @@
 from datetime import date, timedelta
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from config import supabase
 from groq_client import ask_json
 
@@ -66,4 +66,7 @@ def get_daily_briefing():
 
 @router.post("/refresh")
 def refresh_daily_briefing():
-    return _generate_briefing()
+    try:
+        return _generate_briefing()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Groq gagal generate briefing: {e}")

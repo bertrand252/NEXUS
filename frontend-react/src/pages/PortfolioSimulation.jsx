@@ -18,11 +18,15 @@ export default function PortfolioSimulation() {
   const [timeline, setTimeline] = useState([]);
 
   useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
     fetch(`${API_BASE}/market-events`)
       .then((r) => r.json())
-      .then(({ data }) => setTimeline((data || []).slice(0, 6).map((e) => ({
-        date: formatShortDate(e.date), flag: e.flag, label: e.event, impact: e.impact, sector: e.idx_sector_impact,
-      }))))
+      .then(({ data }) => setTimeline((data || [])
+        .filter((e) => e.date >= today)
+        .slice(0, 6)
+        .map((e) => ({
+          date: formatShortDate(e.date), flag: e.flag, label: e.event, impact: e.impact, sector: e.idx_sector_impact,
+        }))))
       .catch(() => setTimeline([]));
   }, []);
 
@@ -36,9 +40,6 @@ export default function PortfolioSimulation() {
 
   const [intel, setIntel] = useState(null);
   const [intelError, setIntelError] = useState(false);
-  const [sumber, setSumber] = useState('Mirae Sekuritas');
-  const [intelText, setIntelText] = useState('');
-  const [savingIntel, setSavingIntel] = useState(false);
 
   const [result, setResult] = useState(null);
   const [simRunning, setSimRunning] = useState(false);
@@ -88,25 +89,6 @@ export default function PortfolioSimulation() {
   }
   function removeHolding(i) {
     setHoldings((hs) => hs.filter((_, idx) => idx !== i));
-  }
-
-  async function saveIntel() {
-    if (!intelText.trim()) { alert('Teks intel gak boleh kosong'); return; }
-    setSavingIntel(true);
-    try {
-      const res = await fetch(`${API_BASE}/intel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sumber, isi_teks: intelText.trim() }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setIntelText('');
-      await loadIntelHistory();
-    } catch (err) {
-      alert('Gagal simpan intel: ' + err.message);
-    } finally {
-      setSavingIntel(false);
-    }
   }
 
   const totalValue = holdings.reduce((sum, h) => sum + h.lot * h.avg_price, 0) || 1;
@@ -187,28 +169,14 @@ export default function PortfolioSimulation() {
 
             <details className="glow-border rounded-2xl bg-card border border-border p-5" open>
               <summary className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white tracking-tight">Manual Intel Input</h3>
+                <h3 className="text-sm font-bold text-white tracking-tight">Berita Terkini</h3>
                 <svg className="chev text-slate-500 transition-transform" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
               </summary>
+              <p className="text-[11px] text-slate-500 mt-2">Otomatis dari WhatsApp/Telegram channel yang di-pantau, dipakai AI buat simulasi di samping.</p>
 
-              <div className="mt-4 space-y-3">
-                <select value={sumber} onChange={(e) => setSumber(e.target.value)} className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
-                  <option>Mirae Sekuritas</option>
-                  <option>Kontan</option>
-                  <option>Custom</option>
-                </select>
-                <textarea
-                  rows={4} placeholder="Paste market outlook pagi ini..." value={intelText} onChange={(e) => setIntelText(e.target.value)}
-                  className="w-full bg-card2 border border-border rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-accent/60 resize-none"
-                />
-                <button onClick={saveIntel} disabled={savingIntel} className="w-full text-sm font-semibold px-4 py-2.5 rounded-lg bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition">
-                  {savingIntel ? 'Menyimpan + meringkas via AI...' : 'Simpan Intel'}
-                </button>
-              </div>
-
-              <div className="mt-5 pt-4 border-t border-border space-y-2">
+              <div className="mt-4 space-y-2">
                 {intelError && <p className="text-xs text-slate-500 text-center py-2">Gak bisa konek ke backend.</p>}
-                {!intelError && intel && intel.length === 0 && <p className="text-xs text-slate-500 text-center py-2">Belum ada intel yang diinput.</p>}
+                {!intelError && intel && intel.length === 0 && <p className="text-xs text-slate-500 text-center py-2">Belum ada berita masuk beberapa hari terakhir.</p>}
                 {!intelError && intel?.map((i, idx) => (
                   <details key={idx} className="text-xs">
                     <summary className="flex items-center justify-between py-1.5">

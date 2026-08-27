@@ -61,7 +61,7 @@ def submit_intel(payload: IntelInput):
 
 @router.get("")
 def get_recent_intel(days: int = 3):
-    """Riwayat intel terakhir, dipakai buat section 'Manual Intel Input' di frontend."""
+    """Riwayat intel terakhir, dipakai buat section 'Berita Terkini' di Portfolio Simulation."""
     res = (
         supabase.table("daily_market_intel")
         .select("*")
