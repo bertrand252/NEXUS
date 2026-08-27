@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from config import supabase
 from routers.scanner import _get_history
 from routers.mentor_calls import refresh_mentor_calls
+from routers.daily_briefing import _generate_briefing
 from levels import support_resistance
 from chart_render import render_chart
 from groq_client import analyze_alert
@@ -189,8 +190,9 @@ async def run_telegram_scrape_listener() -> None:
 
 
 async def run_morning_routine() -> None:
-    """Sekali tiap hari jam MORNING_ROUTINE_HOUR, refresh mentor_calls dari
-    Google Sheets — biar pas dibuka paginya udah fresh, gak nunggu fetch."""
+    """Sekali tiap hari jam MORNING_ROUTINE_HOUR: refresh mentor_calls dari
+    Google Sheets, terus sintesis daily_briefing dari intel yang numpuk
+    beberapa hari terakhir — biar pas dibuka paginya udah fresh, gak nunggu."""
     while True:
         now = datetime.now()
         target = now.replace(hour=MORNING_ROUTINE_HOUR, minute=0, second=0, microsecond=0)
@@ -201,3 +203,7 @@ async def run_morning_routine() -> None:
             refresh_mentor_calls()
         except Exception:
             pass  # gagal hari ini, coba lagi besok — jangan crash scheduler
+        try:
+            _generate_briefing()
+        except Exception:
+            pass

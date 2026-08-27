@@ -20,11 +20,40 @@ function ihsgChartConfig(spark) {
   };
 }
 
+const SENTIMENT_CLASS = {
+  bullish: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+  bearish: 'bg-strong/10 text-strong border-strong/30',
+  neutral: 'bg-slate-500/10 text-slate-400 border-slate-500/30',
+  mixed: 'bg-moderate/10 text-moderate border-moderate/30',
+};
+
 export default function Dashboard() {
   const [scanner, setScanner] = useState(null);
   const [scannerError, setScannerError] = useState(false);
   const [events, setEvents] = useState(null);
   const [ihsg, setIhsg] = useState(null);
+  const [briefing, setBriefing] = useState(null);
+  const [briefingWarning, setBriefingWarning] = useState(null);
+  const [refreshingBriefing, setRefreshingBriefing] = useState(false);
+
+  function loadBriefing() {
+    fetch(`${API_BASE}/daily-briefing`)
+      .then((r) => r.json())
+      .then(({ data, warning }) => { setBriefing(data); setBriefingWarning(warning); })
+      .catch(() => setBriefingWarning('Gak bisa konek ke backend.'));
+  }
+
+  async function runRefreshBriefing() {
+    setRefreshingBriefing(true);
+    try {
+      await fetch(`${API_BASE}/daily-briefing/refresh`, { method: 'POST' });
+      loadBriefing();
+    } catch (err) {
+      alert('Gagal generate briefing: ' + err.message);
+    } finally {
+      setRefreshingBriefing(false);
+    }
+  }
 
   useEffect(() => {
     fetch(`${API_BASE}/scanner`)
@@ -41,6 +70,8 @@ export default function Dashboard() {
       .then((r) => r.json())
       .then(setIhsg)
       .catch(() => setIhsg(null));
+
+    loadBriefing();
   }, []);
 
   const ihsgRef = useChart(ihsgChartConfig(ihsg?.spark));
@@ -73,7 +104,9 @@ export default function Dashboard() {
               <h2 className="text-3xl font-extrabold text-white">{ihsg ? ihsg.price.toLocaleString('id-ID') : '—'}</h2>
               {ihsg && <span className={`text-sm font-semibold font-mono ${ihsg.change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ihsg.change_pct >= 0 ? '+' : ''}{ihsg.change_pct}%</span>}
             </div>
-            <p className="text-sm text-slate-500 mt-1.5 max-w-md">Market mood summary (AI) belum tersedia — nunggu integrasi analisa otomatis.</p>
+            <p className="text-sm text-slate-500 mt-1.5 max-w-md">
+              {briefing ? briefing.ringkasan : 'Ringkasan AI belum ada — lihat card "AI Daily Briefing" di bawah.'}
+            </p>
           </div>
           <div className="relative flex items-center gap-8 pr-4">
             <canvas ref={ihsgRef} width="160" height="64"></canvas>
@@ -104,6 +137,57 @@ export default function Dashboard() {
               );
             })}
           </div>
+        </div>
+
+        <div className="glow-border rounded-2xl bg-card border border-border p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-sm font-bold text-white tracking-tight">AI Daily Briefing</h3>
+              {briefing && (
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${SENTIMENT_CLASS[briefing.market_sentiment] || SENTIMENT_CLASS.neutral}`}>
+                  {briefing.market_sentiment}
+                </span>
+              )}
+            </div>
+            <button onClick={runRefreshBriefing} disabled={refreshingBriefing} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition disabled:opacity-50">
+              {refreshingBriefing ? 'Nge-generate...' : '↻ Generate ulang'}
+            </button>
+          </div>
+
+          {briefingWarning && !briefing && <p className="text-sm text-slate-500">{briefingWarning}</p>}
+
+          {briefing && (
+            <div className="grid grid-cols-3 gap-6 mt-2">
+              <p className="text-sm text-slate-300 leading-relaxed">{briefing.ringkasan}</p>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Tanggal Penting</p>
+                {(!briefing.tanggal_penting || briefing.tanggal_penting.length === 0) && <p className="text-xs text-slate-500">Gak ada event penting kesebut di berita terakhir.</p>}
+                <div className="space-y-2">
+                  {briefing.tanggal_penting?.map((e, i) => (
+                    <div key={i} className="text-xs">
+                      <span className="font-mono font-semibold text-white">{e.saham}</span>
+                      <span className="text-slate-500"> — {e.jenis} · {e.tanggal}</span>
+                      {e.detail && <p className="text-slate-500 mt-0.5">{e.detail}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Rekomendasi</p>
+                {(!briefing.rekomendasi || briefing.rekomendasi.length === 0) && <p className="text-xs text-slate-500">Belum cukup data buat rekomendasi solid.</p>}
+                <div className="space-y-2">
+                  {briefing.rekomendasi?.map((r, i) => (
+                    <div key={i} className="text-xs">
+                      <span className="font-mono font-semibold text-white">{r.saham}</span>
+                      <p className="text-slate-500 mt-0.5">{r.alasan}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-6">

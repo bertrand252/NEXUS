@@ -7,14 +7,16 @@ from groq_client import ask_json
 router = APIRouter()
 
 SUMMARIZE_SYSTEM_PROMPT = """Kamu adalah analyst assistant. Ringkas teks market outlook berikut menjadi JSON terstruktur.
-Jangan menambah opini baru, hanya ekstrak dari teks yang diberikan.
+Jangan menambah opini baru, hanya ekstrak dari teks yang diberikan. Kalau gak ada
+info buat suatu field, isi array kosong — JANGAN ngarang.
 
 Output HARUS JSON valid, format:
 {
   "sentiment": "bullish" | "bearish" | "neutral",
   "sektor_terkait": ["sektor1", "sektor2"],
   "poin_penting": ["poin 1", "poin 2", "poin 3"],
-  "saham_disebut": ["BBCA", "TLKM"]
+  "saham_disebut": ["BBCA", "TLKM"],
+  "event_penting": [{"saham": "BBCA", "jenis": "RUPS" | "dividen" | "stock split" | "lainnya", "tanggal": "YYYY-MM-DD atau teks aslinya kalau tanggal gak pasti", "detail": "ringkasan singkat event-nya"}]
 }"""
 
 
