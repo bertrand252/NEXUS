@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { API_BASE } from '../lib/api';
 import { IMPACT_DOT_CLASS, formatShortDate } from '../lib/events';
 
@@ -267,12 +268,17 @@ export default function PortfolioSimulation() {
                         {d.events.length > 1 && <span className="text-slate-500"> +{d.events.length - 1} lainnya</span>}
                       </p>
                       <div className="absolute bottom-full mb-2 hidden group-hover:block w-56 bg-card2 border border-border rounded-lg p-2.5 text-[10px] text-slate-300 shadow-xl z-20 text-left space-y-2">
-                        {d.events.map((ev, ei) => (
+                        {d.events.slice(0, 3).map((ev, ei) => (
                           <div key={ei}>
                             <span className="font-semibold text-white">{ev.flag} {ev.event}</span>
                             <p className="text-slate-400 mt-0.5">{ev.impact} Impact — affects <span className="text-cyan">{ev.idx_sector_impact}</span> sector</p>
                           </div>
                         ))}
+                        {d.events.length > 3 && (
+                          <Link to="/market-events" className="block pt-1 text-cyan hover:underline">
+                            +{d.events.length - 3} event lain — lihat semua →
+                          </Link>
+                        )}
                       </div>
                     </div>
                   );

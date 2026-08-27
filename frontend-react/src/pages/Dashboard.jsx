@@ -194,7 +194,7 @@ export default function Dashboard() {
           <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-white tracking-tight">Watchlist Summary</h3>
-              <span className="text-[11px] text-slate-500 font-mono">{scanner?.length ?? 0} tickers</span>
+              <span className="text-[11px] text-slate-500 font-mono">Top 5 buat besok</span>
             </div>
             <div className="overflow-x-auto scrollbar-thin">
               <table className="w-full text-sm">
@@ -209,7 +209,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60 font-mono text-[13px]">
-                  {(scanner || []).map((s) => {
+                  {top5.map((s) => {
                     const m = signalMeta(s.signal);
                     return (
                       <tr key={s.ticker} className="hover:bg-white/[0.03] transition">

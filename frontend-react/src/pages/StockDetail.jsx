@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { API_BASE } from '../lib/api';
 import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
@@ -78,11 +78,21 @@ function ScoreCard({ label, value, max, barClass }) {
 
 export default function StockDetail() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const ticker = (params.get('t') || 'ANTM').toUpperCase();
 
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [timeframe, setTimeframe] = useState('1M');
+  const [searchInput, setSearchInput] = useState('');
+
+  function goToTicker(e) {
+    e.preventDefault();
+    const t = searchInput.trim().toUpperCase();
+    if (!t) return;
+    navigate(`/stock-detail?t=${t}`);
+    setSearchInput('');
+  }
 
   useEffect(() => { setData(null); }, [ticker]); // reset pas ganti ticker, tapi gak pas cuma ganti timeframe (biar gak kedip kosong)
 
@@ -130,6 +140,14 @@ export default function StockDetail() {
           <p className="text-xs text-slate-500 mt-0.5 font-mono">{ticker}</p>
         </div>
         <div className="flex items-center gap-4">
+          <form onSubmit={goToTicker} className="relative">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+            <input
+              type="text" placeholder="Cari ticker (e.g. BBCA)" value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="w-48 bg-card border border-border rounded-lg pl-9 pr-3 py-1.5 text-xs text-white font-mono uppercase placeholder:text-slate-500 placeholder:normal-case focus:outline-none focus:border-accent/60"
+            />
+          </form>
           <span className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span> MARKET OPEN
           </span>

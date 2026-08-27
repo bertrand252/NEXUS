@@ -19,6 +19,8 @@ export default function MarketEvents() {
   const [events, setEvents] = useState(null);
   const [warning, setWarning] = useState(null);
   const [error, setError] = useState(false);
+  const [impactFilter, setImpactFilter] = useState('');
+  const [currencyFilter, setCurrencyFilter] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +40,11 @@ export default function MarketEvents() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  const currencyOptions = [...new Map((events || []).map((e) => [e.currency, e.flag])).entries()].sort(([a], [b]) => a.localeCompare(b));
+  const filteredEvents = (events || []).filter((e) =>
+    (!impactFilter || e.impact === impactFilter) && (!currencyFilter || e.currency === currencyFilter)
+  );
 
   return (
     <>
@@ -59,18 +66,15 @@ export default function MarketEvents() {
 
       <div className="p-8 space-y-5">
         <div className="flex items-center gap-3 flex-wrap">
-          <select className="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
-            <option>All Impact</option>
-            <option>High</option>
-            <option>Med</option>
-            <option>Low</option>
+          <select value={impactFilter} onChange={(e) => setImpactFilter(e.target.value)} className="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
+            <option value="">All Impact</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
           </select>
-          <select className="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
-            <option>All Currencies</option>
-            <option>🇺🇸 USD</option>
-            <option>🇮🇩 IDR</option>
-            <option>🇨🇳 CNY</option>
-            <option>🇪🇺 EUR</option>
+          <select value={currencyFilter} onChange={(e) => setCurrencyFilter(e.target.value)} className="bg-card border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-accent/60">
+            <option value="">All Currencies</option>
+            {currencyOptions.map(([code, flag]) => <option key={code} value={code}>{flag} {code}</option>)}
           </select>
           <span className="ml-auto text-xs text-slate-500 font-mono">This week</span>
         </div>
@@ -97,7 +101,10 @@ export default function MarketEvents() {
                 {!error && warning && (
                   <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">{warning}</td></tr>
                 )}
-                {!error && !warning && events?.map((e, i) => <EventRow key={i} e={e} />)}
+                {!error && !warning && events && filteredEvents.length === 0 && (
+                  <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">Gak ada event yang cocok filter.</td></tr>
+                )}
+                {!error && !warning && filteredEvents.map((e, i) => <EventRow key={i} e={e} />)}
               </tbody>
             </table>
           </div>
