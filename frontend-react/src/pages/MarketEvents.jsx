@@ -41,8 +41,10 @@ export default function MarketEvents() {
     return () => { cancelled = true; };
   }, []);
 
-  const currencyOptions = [...new Map((events || []).map((e) => [e.currency, e.flag])).entries()].sort(([a], [b]) => a.localeCompare(b));
-  const filteredEvents = (events || []).filter((e) =>
+  const today = new Date().toISOString().slice(0, 10);
+  const upcomingEvents = (events || []).filter((e) => e.date >= today);
+  const currencyOptions = [...new Map(upcomingEvents.map((e) => [e.currency, e.flag])).entries()].sort(([a], [b]) => a.localeCompare(b));
+  const filteredEvents = upcomingEvents.filter((e) =>
     (!impactFilter || e.impact === impactFilter) && (!currencyFilter || e.currency === currencyFilter)
   );
 

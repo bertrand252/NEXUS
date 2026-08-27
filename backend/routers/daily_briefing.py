@@ -58,7 +58,10 @@ def _generate_briefing(days: int = 3) -> dict:
 
 @router.get("")
 def get_daily_briefing():
-    res = supabase.table("daily_briefing").select("*").order("tanggal", desc=True).limit(1).execute()
+    try:
+        res = supabase.table("daily_briefing").select("*").order("tanggal", desc=True).limit(1).execute()
+    except Exception as e:
+        return {"data": None, "warning": f"Gak bisa akses tabel daily_briefing di Supabase: {e}"}
     if not res.data:
         return {"data": None, "warning": "Belum ada briefing — jalanin POST /daily-briefing/refresh dulu."}
     return {"data": res.data[0], "warning": None}
