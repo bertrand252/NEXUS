@@ -17,16 +17,28 @@ const RISK = {
 export default function PortfolioSimulation() {
   const [timeline, setTimeline] = useState([]);
 
+  const IMPACT_RANK = { High: 3, Medium: 2, Low: 1, Holiday: 0 };
+
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10);
     fetch(`${API_BASE}/market-events`)
       .then((r) => r.json())
-      .then(({ data }) => setTimeline((data || [])
-        .filter((e) => e.date >= today)
-        .slice(0, 6)
-        .map((e) => ({
-          date: formatShortDate(e.date), flag: e.flag, label: e.event, impact: e.impact, sector: e.idx_sector_impact,
-        }))))
+      .then(({ data }) => {
+        const byDate = new Map();
+        for (const e of (data || [])) {
+          if (e.date < today) continue;
+          if (!byDate.has(e.date)) byDate.set(e.date, []);
+          byDate.get(e.date).push(e);
+        }
+        const days = [...byDate.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .slice(0, 7)
+          .map(([date, events]) => ({
+            date: formatShortDate(date),
+            events: [...events].sort((a, b) => (IMPACT_RANK[b.impact] ?? 0) - (IMPACT_RANK[a.impact] ?? 0)),
+          }));
+        setTimeline(days);
+      })
       .catch(() => setTimeline([]));
   }, []);
 
@@ -243,17 +255,28 @@ export default function PortfolioSimulation() {
               <h3 className="text-sm font-bold text-white tracking-tight mb-6">Event Timeline — 7 Hari Ke Depan</h3>
               <div className="timeline-track relative flex justify-between px-2 pt-1">
                 {timeline.length === 0 && <p className="text-xs text-slate-500">Gak ada event minggu ini.</p>}
-                {timeline.map((e, i) => (
-                  <div key={i} className="flex flex-col items-center text-center w-24 group relative">
-                    <div className={`w-4 h-4 rounded-full ${IMPACT_DOT_CLASS[e.impact] || IMPACT_DOT_CLASS.Low} border-2 border-card z-10 cursor-pointer`}></div>
-                    <p className="text-[10px] text-slate-500 font-mono mt-2">{e.date}</p>
-                    <p className="text-lg leading-none mt-1">{e.flag}</p>
-                    <p className="text-[11px] text-slate-300 font-medium mt-1 leading-tight">{e.label}</p>
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block w-40 bg-card2 border border-border rounded-lg p-2.5 text-[10px] text-slate-300 shadow-xl z-20">
-                      <span className="font-semibold text-white">{e.impact} Impact</span> — affects <span className="text-cyan">{e.sector}</span> sector
+                {timeline.map((d, i) => {
+                  const top = d.events[0];
+                  return (
+                    <div key={i} className="flex flex-col items-center text-center w-24 group relative">
+                      <div className={`w-4 h-4 rounded-full ${IMPACT_DOT_CLASS[top.impact] || IMPACT_DOT_CLASS.Low} border-2 border-card z-10 cursor-pointer`}></div>
+                      <p className="text-[10px] text-slate-500 font-mono mt-2">{d.date}</p>
+                      <p className="text-lg leading-none mt-1">{top.flag}</p>
+                      <p className="text-[11px] text-slate-300 font-medium mt-1 leading-tight">
+                        {top.event}
+                        {d.events.length > 1 && <span className="text-slate-500"> +{d.events.length - 1} lainnya</span>}
+                      </p>
+                      <div className="absolute bottom-full mb-2 hidden group-hover:block w-56 bg-card2 border border-border rounded-lg p-2.5 text-[10px] text-slate-300 shadow-xl z-20 text-left space-y-2">
+                        {d.events.map((ev, ei) => (
+                          <div key={ei}>
+                            <span className="font-semibold text-white">{ev.flag} {ev.event}</span>
+                            <p className="text-slate-400 mt-0.5">{ev.impact} Impact — affects <span className="text-cyan">{ev.idx_sector_impact}</span> sector</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
