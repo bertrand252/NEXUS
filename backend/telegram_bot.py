@@ -26,6 +26,27 @@ def get_latest_chat_id() -> str | None:
     return str(updates[-1]["message"]["chat"]["id"])
 
 
+def get_channel_updates(offset: int | None = None, timeout: int = 25) -> list[dict]:
+    """Long-poll getUpdates buat channel_post doang. offset biar Telegram gak
+    ngirim ulang update yang udah di-ack (dipake scheduler.py)."""
+    params = {"timeout": timeout, "allowed_updates": '["channel_post"]'}
+    if offset is not None:
+        params["offset"] = offset
+    res = requests.get(f"{API_BASE}/getUpdates", params=params, timeout=timeout + 10)
+    res.raise_for_status()
+    return res.json().get("result", [])
+
+
+def get_chat_id_by_username(username: str) -> str | None:
+    """Resolve @username channel ke chat_id numerik — dipake sekali pas setup,
+    biar gak perlu nebak-nebak ID channel manual."""
+    username = username if username.startswith("@") else f"@{username}"
+    res = requests.get(f"{API_BASE}/getChat", params={"chat_id": username}, timeout=8)
+    if not res.ok:
+        return None
+    return str(res.json().get("result", {}).get("id"))
+
+
 def get_saved_chat_id() -> str | None:
     res = supabase.table("telegram_settings").select("chat_id").limit(1).execute()
     return res.data[0]["chat_id"] if res.data else None

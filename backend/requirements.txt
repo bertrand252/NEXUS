@@ -8,3 +8,4 @@ groq>=0.11.0
 requests>=2.32.0
 matplotlib>=3.9.0
 mplfinance==0.12.10b0
+beautifulsoup4>=4.12.0

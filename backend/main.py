@@ -5,16 +5,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import supabase, FRONTEND_ORIGINS
 from auth_guard import require_auth
 from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls
-from scheduler import run_scheduler, run_morning_routine
+from scheduler import (
+    run_scheduler,
+    run_morning_routine,
+    run_telegram_channel_listener,
+    run_telegram_scrape_listener,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """2 task background: run_scheduler (cek scanner_cache tiap 15 menit, kirim
-    alert Telegram otomatis buat signal Strong baru) dan run_morning_routine
-    (jam 06:00 tiap hari, refresh mentor_calls sebelum market open). Lihat
-    scheduler.py."""
-    tasks = [asyncio.create_task(run_scheduler()), asyncio.create_task(run_morning_routine())]
+    """4 task background (lihat scheduler.py buat detail tiap fungsi):
+    run_scheduler, run_morning_routine, run_telegram_channel_listener (channel
+    yang bot-nya admin), run_telegram_scrape_listener (channel yang cuma
+    di-subscribe biasa, di-scrape dari preview publik). Semua skip diem-diem
+    kalau config terkait kosong."""
+    tasks = [
+        asyncio.create_task(run_scheduler()),
+        asyncio.create_task(run_morning_routine()),
+        asyncio.create_task(run_telegram_channel_listener()),
+        asyncio.create_task(run_telegram_scrape_listener()),
+    ]
     yield
     for t in tasks:
         t.cancel()

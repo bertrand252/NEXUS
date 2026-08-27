@@ -10,6 +10,16 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Channel Telegram yang mau di-forward otomatis ke /intel — chat_id numerik,
+# pisah koma buat lebih dari 1. Kosong = fitur ini gak jalan (skip diem-diem).
+# Cuma jalan buat channel yang bot-nya udah di-invite jadi admin.
+TELEGRAM_CHANNEL_IDS = [c.strip() for c in os.getenv("TELEGRAM_CHANNEL_IDS", "").split(",") if c.strip()]
+
+# Channel Telegram yang mau di-scrape dari preview publik (t.me/s/<username>) —
+# buat channel yang kita CUMA subscriber biasa, gak bisa jadiin bot admin.
+# Isi username-nya doang (tanpa @), pisah koma.
+TELEGRAM_SCRAPE_CHANNELS = [c.strip().lstrip("@") for c in os.getenv("TELEGRAM_SCRAPE_CHANNELS", "").split(",") if c.strip()]
+
 # Invezgo (opsional) — kosong = fallback ke yfinance/mock, keisi = NEXUS otomatis pakai data Invezgo
 INVEZGO_API_KEY = os.getenv("INVEZGO_API_KEY")
 FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "*").split(",")

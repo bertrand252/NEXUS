@@ -13,7 +13,14 @@ from routers.mentor_calls import refresh_mentor_calls
 from levels import support_resistance
 from chart_render import render_chart
 from groq_client import analyze_alert
-from telegram_bot import send_alert_photo, send_alert
+from telegram_bot import send_alert_photo, send_alert, get_channel_updates
+from telegram_scrape import fetch_channel_posts
+from routers.intel import submit_intel, IntelInput
+from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
+
+TELEGRAM_SCRAPE_INTERVAL_SECONDS = 10 * 60  # preview publik gak realtime kayak bot API, polling 10 menit cukup
+
+_last_seen_post_id: dict[str, int] = {}
 
 MORNING_ROUTINE_HOUR = 6  # 06:00 waktu lokal server, sebelum market IDX buka jam 09:00
 
@@ -114,6 +121,71 @@ async def run_scheduler() -> None:
     while True:
         check_and_alert()
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+
+
+async def run_telegram_channel_listener() -> None:
+    """Long-poll Telegram getUpdates buat channel_post dari TELEGRAM_CHANNEL_IDS,
+    forward teksnya langsung ke submit_intel() (manggil function-nya langsung,
+    bukan HTTP ke diri sendiri — sama proses). Skip diem-diem kalau belum ada
+    channel yang di-setup di .env."""
+    if not TELEGRAM_CHANNEL_IDS:
+        return
+
+    offset = None
+    while True:
+        try:
+            updates = await asyncio.to_thread(get_channel_updates, offset)  # blocking (long-poll 25s), jangan nahan event loop
+        except Exception:
+            await asyncio.sleep(10)
+            continue
+
+        for u in updates:
+            offset = u["update_id"] + 1
+            post = u.get("channel_post")
+            if not post:
+                continue
+            chat_id = str(post["chat"]["id"])
+            if chat_id not in TELEGRAM_CHANNEL_IDS:
+                continue
+            text = post.get("text") or post.get("caption") or ""
+            if not text.strip():
+                continue
+            try:
+                submit_intel(IntelInput(sumber=post["chat"].get("title", "Telegram Channel"), isi_teks=text))
+            except Exception:
+                pass  # gagal simpen/ringkas 1 pesan, lanjut ke update berikutnya
+
+
+async def run_telegram_scrape_listener() -> None:
+    """Poll preview publik Telegram (t.me/s/<username>) buat channel yang kita
+    cuma subscriber biasa (gak bisa jadiin bot admin). Forward post baru ke
+    /intel. Skip diem-diem kalau TELEGRAM_SCRAPE_CHANNELS kosong."""
+    if not TELEGRAM_SCRAPE_CHANNELS:
+        return
+    while True:
+        for username in TELEGRAM_SCRAPE_CHANNELS:
+            try:
+                posts = await asyncio.to_thread(fetch_channel_posts, username)
+            except Exception:
+                continue
+            if not posts:
+                continue
+
+            if username not in _last_seen_post_id:
+                # run pertama kali liat channel ini — catet baseline doang,
+                # jangan forward histori lama yang udah numpuk di halaman preview
+                _last_seen_post_id[username] = max(p["post_id"] for p in posts)
+                continue
+
+            last_seen = _last_seen_post_id[username]
+            new_posts = sorted((p for p in posts if p["post_id"] > last_seen), key=lambda p: p["post_id"])
+            for p in new_posts:
+                try:
+                    submit_intel(IntelInput(sumber=f"Telegram @{username}", isi_teks=p["text"]))
+                except Exception:
+                    pass
+                _last_seen_post_id[username] = p["post_id"]
+        await asyncio.sleep(TELEGRAM_SCRAPE_INTERVAL_SECONDS)
 
 
 async def run_morning_routine() -> None:
