@@ -17,15 +17,26 @@ def ask_json(system_prompt: str, user_prompt: str) -> dict:
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY belum diisi di .env")
 
-    completion = _client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.3,
-    )
+    try:
+        completion = _client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+    except Exception as e:
+        # error asli (misal ConnectError) sering ke-summarize jadi pesan generik
+        # kayak "Connection error." — bongkar cause chain-nya biar keliatan akar
+        # masalahnya beneran apa (DNS? TLS? timeout? refused?)
+        cause = e.__cause__ or e.__context__
+        detail = f"{type(e).__name__}: {e}"
+        if cause is not None and cause is not e:
+            detail += f" | cause: {type(cause).__name__}: {cause}"
+        raise RuntimeError(f"Groq request gagal — {detail}") from e
+
     raw = completion.choices[0].message.content
     try:
         return json.loads(raw)
