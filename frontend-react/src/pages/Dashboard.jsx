@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { API_BASE } from '../lib/api';
 import { signalMeta } from '../lib/signal';
-import { IMPACT_BADGE_CLASS } from '../lib/events';
+import { IMPACT_BADGE_CLASS, formatShortDate } from '../lib/events';
 import { useChart } from '../hooks/useChart';
 
 function ihsgChartConfig(spark) {
@@ -104,6 +104,7 @@ export default function Dashboard() {
               <h2 className="text-3xl font-extrabold text-white">{ihsg ? ihsg.price.toLocaleString('id-ID') : '—'}</h2>
               {ihsg && <span className={`text-sm font-semibold font-mono ${ihsg.change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ihsg.change_pct >= 0 ? '+' : ''}{ihsg.change_pct}%</span>}
             </div>
+            {ihsg?.as_of && <p className="text-[11px] text-slate-500 font-mono mt-1">Closing per {formatShortDate(ihsg.as_of)} — yfinance kadang telat update</p>}
           </div>
           <div className="relative flex items-center gap-8 pr-4">
             <canvas ref={ihsgRef} width="160" height="64"></canvas>

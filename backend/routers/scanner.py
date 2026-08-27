@@ -175,6 +175,9 @@ def get_ihsg():
         "price": round(price_now, 2),
         "change_pct": round(chg_pct, 2),
         "spark": [round(float(c), 2) for c in hist["Close"].tail(20)],
+        # tanggal closing valid terakhir — yfinance kadang NaN/bolong buat ^JKSE
+        # beberapa hari, jadi harga di atas bisa aja bukan closing hari ini
+        "as_of": hist.index[-1].strftime("%Y-%m-%d"),
     }
 
 
