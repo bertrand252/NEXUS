@@ -201,7 +201,7 @@ export default function PortfolioSimulation() {
                     </summary>
                     <ul className="pl-4 pb-2 space-y-1 list-disc marker:text-slate-600">
                       {(i.summary_ai?.poin_penting || []).length
-                        ? i.summary_ai.poin_penting.map((p, pi) => <li key={pi} className="text-slate-400">{p}</li>)
+                        ? i.summary_ai.poin_penting.map((p, pi) => <li key={pi} className="text-slate-400 text-justify">{p}</li>)
                         : <li className="text-slate-500">Belum diringkas</li>}
                     </ul>
                   </details>
@@ -220,7 +220,7 @@ export default function PortfolioSimulation() {
               {simError && <div className="mb-4 p-3 rounded-lg bg-strong/10 border border-strong/30 text-sm text-strong">{simError}</div>}
 
               <div className="rounded-xl bg-riskmed/5 border border-riskmed/20 p-4 mb-5">
-                <p className="text-[15px] text-slate-100 font-medium leading-relaxed">{result?.portfolio_impact_summary || '—'}</p>
+                <p className="text-[15px] text-slate-100 font-medium leading-relaxed text-justify">{result?.portfolio_impact_summary || '—'}</p>
               </div>
 
               <div className="grid grid-cols-3 gap-4 mb-6">
@@ -233,7 +233,7 @@ export default function PortfolioSimulation() {
                         <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border ${r.badge}`}>{r.label}</span>
                       </div>
                       <p className="text-[10px] text-slate-500 mb-2 font-mono">Exposure {s.exposure_pct}%</p>
-                      <p className="text-xs text-slate-400 leading-snug">{s.alasan}</p>
+                      <p className="text-xs text-slate-400 leading-snug text-justify">{s.alasan}</p>
                     </div>
                   );
                 })}
@@ -245,7 +245,7 @@ export default function PortfolioSimulation() {
                   {(result?.rekomendasi_aksi || []).map((r, i) => (
                     <div key={i} className="flex items-start gap-2.5">
                       <svg className="mt-0.5 shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#06B6D4" strokeWidth="1.8" /><path d="M8.5 12.5L11 15L16 9.5" stroke="#06B6D4" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                      <p className="text-sm text-slate-300">{r}</p>
+                      <p className="text-sm text-slate-300 text-justify">{r}</p>
                     </div>
                   ))}
                 </div>

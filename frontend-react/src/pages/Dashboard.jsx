@@ -104,9 +104,6 @@ export default function Dashboard() {
               <h2 className="text-3xl font-extrabold text-white">{ihsg ? ihsg.price.toLocaleString('id-ID') : '—'}</h2>
               {ihsg && <span className={`text-sm font-semibold font-mono ${ihsg.change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ihsg.change_pct >= 0 ? '+' : ''}{ihsg.change_pct}%</span>}
             </div>
-            <p className="text-sm text-slate-500 mt-1.5 max-w-md">
-              {briefing ? briefing.ringkasan : 'Ringkasan AI belum ada — lihat card "AI Daily Briefing" di bawah.'}
-            </p>
           </div>
           <div className="relative flex items-center gap-8 pr-4">
             <canvas ref={ihsgRef} width="160" height="64"></canvas>
@@ -158,7 +155,7 @@ export default function Dashboard() {
 
           {briefing && (
             <div className="grid grid-cols-3 gap-6 mt-2">
-              <p className="text-sm text-slate-300 leading-relaxed">{briefing.ringkasan}</p>
+              <p className="text-sm text-slate-300 leading-relaxed text-justify">{briefing.ringkasan}</p>
 
               <div>
                 <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Tanggal Penting</p>
@@ -168,7 +165,7 @@ export default function Dashboard() {
                     <div key={i} className="text-xs">
                       <span className="font-mono font-semibold text-white">{e.saham}</span>
                       <span className="text-slate-500"> — {e.jenis} · {e.tanggal}</span>
-                      {e.detail && <p className="text-slate-500 mt-0.5">{e.detail}</p>}
+                      {e.detail && <p className="text-slate-500 mt-0.5 text-justify">{e.detail}</p>}
                     </div>
                   ))}
                 </div>
@@ -181,7 +178,7 @@ export default function Dashboard() {
                   {briefing.rekomendasi?.map((r, i) => (
                     <div key={i} className="text-xs">
                       <span className="font-mono font-semibold text-white">{r.saham}</span>
-                      <p className="text-slate-500 mt-0.5">{r.alasan}</p>
+                      <p className="text-slate-500 mt-0.5 text-justify">{r.alasan}</p>
                     </div>
                   ))}
                 </div>
