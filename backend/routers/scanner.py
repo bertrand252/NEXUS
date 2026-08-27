@@ -1,3 +1,4 @@
+import time
 from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException
@@ -110,15 +111,30 @@ def refresh_scanner():
         row["name"] = NAME_BY_TICKER.get(ticker, ticker)
         return row
 
-    results, errors = [], []
-    with ThreadPoolExecutor(max_workers=15) as pool:
-        futures = {pool.submit(_fetch_one, t): t for t in TICKERS}
-        for future in as_completed(futures):
-            t = futures[future]
-            try:
-                results.append(future.result())
-            except Exception as e:
-                errors.append({"ticker": t, "error": str(e)})
+    def _fetch_batch(tickers: list[str], max_workers: int) -> tuple[list[dict], list[dict]]:
+        batch_results, batch_errors = [], []
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_fetch_one, t): t for t in tickers}
+            for future in as_completed(futures):
+                t = futures[future]
+                try:
+                    batch_results.append(future.result())
+                except Exception as e:
+                    batch_errors.append({"ticker": t, "error": str(e)})
+        return batch_results, batch_errors
+
+    # max_workers diturunin dari 15 — di Railway semua request numpang 1 IP,
+    # burst gede lebih gampang kena rate-limit Yahoo dibanding IP rumah.
+    results, errors = _fetch_batch(TICKERS, max_workers=5)
+
+    # retry sekali khusus yang kena rate-limit (bukan yang emang no-data/delisted)
+    rate_limited = [e["ticker"] for e in errors if "Too Many Requests" in e["error"]]
+    if rate_limited:
+        time.sleep(5)  # kasih jeda biar rate-limit window Yahoo reset dulu
+        errors = [e for e in errors if "Too Many Requests" not in e["error"]]
+        retry_results, retry_errors = _fetch_batch(rate_limited, max_workers=3)
+        results.extend(retry_results)
+        errors.extend(retry_errors)
 
     for i in range(0, len(results), 500):
         chunk = results[i:i + 500]
