@@ -491,6 +491,56 @@ async def run_night_recap() -> None:
             pass
 
 
+PRE_MARKET_HOUR = 8
+PRE_MARKET_MINUTE = 45  # 15 menit sebelum market IDX buka jam 09:00
+
+SENTIMENT_EMOJI = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪", "mixed": "🟡"}
+
+
+def _send_morning_briefing() -> None:
+    """"Sarapan pagi" — sintesis ulang daily_briefing (bukan cuma baca cache
+    jam 6 pagi, biar nangkep berita yang masuk di antara jam 6-08:45) terus
+    kirim ke Telegram: ringkasan + tanggal penting + rekomendasi (ini yang
+    jadi "watchlist hari ini")."""
+    try:
+        briefing = _generate_briefing()
+    except Exception:
+        return
+
+    lines = [f"☀️ Sarapan Pagi {SENTIMENT_EMOJI.get(briefing.get('market_sentiment'), '')} {briefing.get('market_sentiment', '')}".strip()]
+    lines.append("")
+    lines.append(briefing.get("ringkasan", "-"))
+
+    tanggal_penting = briefing.get("tanggal_penting") or []
+    if tanggal_penting:
+        lines.append("")
+        lines.append("📅 Tanggal Penting:")
+        for e in tanggal_penting:
+            lines.append(f"- {e.get('saham')} — {e.get('jenis')} · {e.get('tanggal')}")
+
+    rekomendasi = briefing.get("rekomendasi") or []
+    if rekomendasi:
+        lines.append("")
+        lines.append("⭐ Watchlist Hari Ini:")
+        for r in rekomendasi:
+            lines.append(f"- {r.get('saham')}: {r.get('alasan')}")
+
+    send_alert("\n".join(lines))
+
+
+async def run_pre_market_briefing() -> None:
+    while True:
+        now = datetime.now()
+        target = now.replace(hour=PRE_MARKET_HOUR, minute=PRE_MARKET_MINUTE, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            _send_morning_briefing()
+        except Exception:
+            pass
+
+
 async def run_telegram_channel_listener() -> None:
     """Long-poll Telegram getUpdates buat channel_post dari TELEGRAM_CHANNEL_IDS,
     forward teksnya langsung ke submit_intel() (manggil function-nya langsung,
