@@ -509,7 +509,10 @@ async def run_night_recap() -> None:
             pass
 
 
-BSJP_SCREENER_HOUR = 16  # abis market tutup (~15:00-15:50), sebelum Recap Malam jam 20:00
+BSJP_SCREENER_HOUR = 15
+BSJP_SCREENER_MINUTE = 30  # SEBELUM market tutup, bukan sesudah — BSJP beli-nya
+                            # maksimal ~15:57, jadi alert-nya kudu ada buffer buat
+                            # dibaca+eksekusi, bukan telat udah gak bisa beli
 
 
 def _check_bsjp_screener() -> None:
@@ -535,7 +538,8 @@ def _check_bsjp_screener() -> None:
     for row in res.data:
         lines.append(f"- {row['ticker']} (Rp{row['price']:,.0f})")
     lines.append("")
-    lines.append("Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi. Cek Stock Detail buat detail sebelum entry.")
+    lines.append("Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi.")
+    lines.append("⏰ Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.")
 
     if send_alert("\n".join(lines)):
         _bsjp_alerted_today = True
@@ -544,7 +548,7 @@ def _check_bsjp_screener() -> None:
 async def run_bsjp_screener() -> None:
     while True:
         now = datetime.now()
-        target = now.replace(hour=BSJP_SCREENER_HOUR, minute=0, second=0, microsecond=0)
+        target = now.replace(hour=BSJP_SCREENER_HOUR, minute=BSJP_SCREENER_MINUTE, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
