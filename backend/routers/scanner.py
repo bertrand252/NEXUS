@@ -1,12 +1,12 @@
 import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import yfinance as yf
 from scoring import compute_score, bsjp_criteria, invest_criteria
 from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
-from config import supabase
+from config import supabase, today_wib
 from levels import support_resistance
 from groq_client import translate_to_indonesian, explain_levels
 import invezgo_client
@@ -21,7 +21,7 @@ def _build_accum_lookup() -> dict | None:
     (biar refresh_scanner tetap jalan pake mock, gak ikut gagal total)."""
     if not invezgo_client.is_configured():
         return None
-    today = date.today().isoformat()
+    today = today_wib().isoformat()
     lookup: dict = {}
     try:
         acc = invezgo_client.get_top_accumulation(today)

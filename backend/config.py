@@ -1,8 +1,20 @@
 import os
+from datetime import datetime, date
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
+
+WIB = ZoneInfo("Asia/Jakarta")
+
+
+def today_wib() -> date:
+    """date.today() polos ikut timezone server (Railway = UTC, BUKAN WIB) —
+    jam 00:00-07:00 WIB itu masih "kemarin" kalau diitung UTC. Dipake buat
+    semua logic yang nentuin "hari ini" itu tanggal berapa (reset dedup
+    harian, filter intel N hari terakhir, dll)."""
+    return datetime.now(WIB).date()
 
 
 def _env(name: str) -> str | None:

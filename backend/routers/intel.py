@@ -1,7 +1,7 @@
 from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from config import supabase
+from config import supabase, today_wib
 from groq_client import ask_json
 
 router = APIRouter()
@@ -28,7 +28,7 @@ class IntelInput(BaseModel):
 
 @router.post("")
 def submit_intel(payload: IntelInput):
-    tanggal = payload.tanggal or date.today()
+    tanggal = payload.tanggal or today_wib()
 
     # 1. simpan raw text dulu — isi_teks jangan pernah diubah/diedit
     insert_res = supabase.table("daily_market_intel").insert({

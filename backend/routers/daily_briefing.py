@@ -1,6 +1,6 @@
-from datetime import date, timedelta
+from datetime import timedelta
 from fastapi import APIRouter, HTTPException
-from config import supabase
+from config import supabase, today_wib
 from groq_client import ask_json
 
 router = APIRouter()
@@ -29,7 +29,7 @@ MAX_POIN_PER_ENTRY = 4
 
 
 def _generate_briefing(days: int = 3) -> dict:
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (today_wib() - timedelta(days=days)).isoformat()
     res = (
         supabase.table("daily_market_intel")
         .select("sumber,tanggal,summary_ai")
@@ -56,7 +56,7 @@ def _generate_briefing(days: int = 3) -> dict:
         ]
         briefing = ask_json(BRIEFING_SYSTEM_PROMPT, "\n".join(lines))
 
-    briefing["tanggal"] = date.today().isoformat()
+    briefing["tanggal"] = today_wib().isoformat()
     supabase.table("daily_briefing").upsert(briefing, on_conflict="tanggal").execute()
     return briefing
 

@@ -8,7 +8,7 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 import asyncio
 from datetime import date, datetime, timedelta, timezone
 import yfinance as yf
-from config import supabase
+from config import supabase, WIB, today_wib
 from routers.scanner import _get_history
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
@@ -38,8 +38,16 @@ ALERT_OFFHOURS_START = 17  # jam 17:00
 ALERT_OFFHOURS_END = 8     # jam 08:00 — window nginep lewat tengah malam
 
 
+def _now_wib() -> datetime:
+    """Server (Railway) jalan di UTC, BUKAN WIB — datetime.now() polos bakal
+    ngasih jam 7 lebih awal dari yang dimaksud (ketauan dari bug: BSJP yang
+    dimaksud jam 15:30 WIB kekirim jam 22:30 WIB = 15:30 UTC). SEMUA logic
+    penjadwalan (jam berapa kirim apa) wajib pake ini, bukan datetime.now()."""
+    return datetime.now(WIB)
+
+
 def _in_offhours_window() -> bool:
-    hour = datetime.now().hour
+    hour = _now_wib().hour
     return hour >= ALERT_OFFHOURS_START or hour < ALERT_OFFHOURS_END
 
 _alerted_today: set[str] = set()
@@ -66,7 +74,7 @@ def _load_settings() -> dict:
 
 def _reset_if_new_day() -> None:
     global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today, _econ_reminded_today, _bsjp_alerted_today
-    today = date.today()
+    today = today_wib()
     if _alerted_date != today:
         _alerted_date = today
         _alerted_today = set()
@@ -117,7 +125,7 @@ def _recent_news_by_ticker(days: int = 3) -> dict[str, list[dict]]:
     """{ticker: [{tanggal, sentiment, poin_penting, sektor_terkait}]} dari
     daily_market_intel N hari terakhir — dipakai buat cross-check berita di
     seleksi kandidat alert, bukan fetch baru (data udah ada dari intel pipeline)."""
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (today_wib() - timedelta(days=days)).isoformat()
     try:
         res = supabase.table("daily_market_intel").select("tanggal,summary_ai").gte("tanggal", since).execute()
     except Exception:
@@ -410,7 +418,7 @@ def _check_economic_reminders() -> None:
     if not settings["notif_economic_events"]:
         return
 
-    today = date.today().isoformat()
+    today = today_wib().isoformat()
     try:
         events = [e for e in get_forex_events() if e["impact"] == "High" and e["date"] == today]
     except Exception:
@@ -498,7 +506,7 @@ async def run_scheduler() -> None:
 
 async def run_night_recap() -> None:
     while True:
-        now = datetime.now()
+        now = _now_wib()
         target = now.replace(hour=NIGHT_RECAP_HOUR, minute=0, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
@@ -547,7 +555,7 @@ def _check_bsjp_screener() -> None:
 
 async def run_bsjp_screener() -> None:
     while True:
-        now = datetime.now()
+        now = _now_wib()
         target = now.replace(hour=BSJP_SCREENER_HOUR, minute=BSJP_SCREENER_MINUTE, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
@@ -597,7 +605,7 @@ def _send_morning_briefing() -> None:
 
 async def run_pre_market_briefing() -> None:
     while True:
-        now = datetime.now()
+        now = _now_wib()
         target = now.replace(hour=PRE_MARKET_HOUR, minute=PRE_MARKET_MINUTE, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
@@ -678,7 +686,7 @@ async def run_morning_routine() -> None:
     Google Sheets, terus sintesis daily_briefing dari intel yang numpuk
     beberapa hari terakhir — biar pas dibuka paginya udah fresh, gak nunggu."""
     while True:
-        now = datetime.now()
+        now = _now_wib()
         target = now.replace(hour=MORNING_ROUTINE_HOUR, minute=0, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
