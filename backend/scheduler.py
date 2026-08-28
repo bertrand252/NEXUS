@@ -6,7 +6,7 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 — gak butuh cron/Celery/proses terpisah, paling sederhana buat single-user tool.
 """
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import yfinance as yf
 from config import supabase
 from routers.scanner import _get_history
@@ -31,16 +31,18 @@ CHECK_INTERVAL_SECONDS = 60 * 60  # 1 jam — dedup per-ticker jadi gak ngaruh k
 
 _alerted_today: set[str] = set()
 _invalidated_today: set[str] = set()
+_watchlist_alerted_today: set[str] = set()
 _alerted_date: date | None = None
 
 
 def _reset_if_new_day() -> None:
-    global _alerted_date, _alerted_today, _invalidated_today
+    global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today
     today = date.today()
     if _alerted_date != today:
         _alerted_date = today
         _alerted_today = set()
         _invalidated_today = set()
+        _watchlist_alerted_today = set()
         # ponytail: dedup in-memory, bukan tabel Supabase — kalau backend restart
         # di hari yang sama, ticker yang udah dialert bisa ke-alert ulang sekali.
         # Upgrade ke tabel log kalau ini beneran ganggu di pemakaian nyata.
@@ -206,6 +208,53 @@ def _fetch_fundamental_summary(ticker: str) -> dict | None:
     }
 
 
+SIGNAL_TIMEOUT_DAYS = 14  # kalau 14 hari gak kena TP/SL, tutup posisi & itung menang/kalah dari tanda outcome_pct
+
+
+def _check_signal_outcomes() -> None:
+    """Cek tiap signal_alerts yang masih 'open' — udah kena target (tp_hit),
+    stop_loss (sl_hit), atau timeout (>14 hari, belum kena dua-duanya). Dipanggil
+    tiap pagi dari run_morning_routine(), sebelum market buka (data closing
+    kemarin udah final)."""
+    try:
+        res = supabase.table("signal_alerts").select("*").eq("status", "open").execute()
+    except Exception:
+        return  # tabel belum di-setup, skip diem-diem
+
+    now = datetime.now(timezone.utc)
+    for row in res.data:
+        try:
+            hist = _get_history(row["ticker"])
+            price_now = float(hist["Close"].iloc[-1])
+        except Exception:
+            continue  # gagal fetch harga ticker ini, coba lagi besok
+
+        alerted_at = datetime.fromisoformat(row["alerted_at"])
+        days_open = (now - alerted_at).days
+
+        status = None
+        if price_now >= row["target"]:
+            status = "tp_hit"
+        elif price_now <= row["stop_loss"]:
+            status = "sl_hit"
+        elif days_open > SIGNAL_TIMEOUT_DAYS:
+            status = "timeout"
+
+        if not status:
+            continue
+
+        outcome_pct = round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2)
+        try:
+            supabase.table("signal_alerts").update({
+                "status": status,
+                "closed_at": now.isoformat(),
+                "close_price": price_now,
+                "outcome_pct": outcome_pct,
+            }).eq("id", row["id"]).execute()
+        except Exception:
+            pass
+
+
 def check_and_alert() -> None:
     _reset_if_new_day()
     _check_invalidated()
@@ -269,10 +318,53 @@ def check_and_alert() -> None:
 
     _alerted_today.add(ticker)
 
+    try:
+        supabase.table("signal_alerts").insert({
+            "ticker": ticker,
+            "entry_price": float(hist["Close"].iloc[-1]),
+            "target": levels["resistance"],
+            "stop_loss": levels["stop_loss"],
+        }).execute()
+    except Exception:
+        pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
+
+
+def _check_watchlist_alerts() -> None:
+    """Ticker di watchlist user yang breakout+volume kekonfirmasi hari ini
+    (technical_score >= threshold) dapet notif ringan sendiri — independen
+    dari check_and_alert() (yang cuma milih 1 "pick terbaik" se-market),
+    ini soal relevansi personal: ticker yang user pantau sendiri."""
+    try:
+        watch_res = supabase.table("watchlist").select("ticker").execute()
+        tickers = [r["ticker"] for r in watch_res.data]
+    except Exception:
+        return
+    if not tickers:
+        return
+
+    try:
+        scan_res = (
+            supabase.table("scanner_cache")
+            .select("ticker,technical_score")
+            .in_("ticker", tickers)
+            .execute()
+        )
+    except Exception:
+        return
+
+    for row in scan_res.data:
+        ticker = row["ticker"]
+        if ticker in _watchlist_alerted_today:
+            continue
+        if (row.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD:
+            if send_alert(f"⭐ Watchlist: {ticker} breakout+volume kekonfirmasi (technical {row['technical_score']}/20)."):
+                _watchlist_alerted_today.add(ticker)
+
 
 async def run_scheduler() -> None:
     while True:
         check_and_alert()
+        _check_watchlist_alerts()
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 
@@ -357,5 +449,9 @@ async def run_morning_routine() -> None:
             pass  # gagal hari ini, coba lagi besok — jangan crash scheduler
         try:
             _generate_briefing()
+        except Exception:
+            pass
+        try:
+            _check_signal_outcomes()
         except Exception:
             pass

@@ -30,6 +30,23 @@ def get_mentor_calls():
     return {"data": data, "warning": None}
 
 
+@router.get("/scoreboard")
+def get_mentor_scoreboard():
+    """Win rate mentor — proxy dari tanda floating_pnl_pct (bukan parsing status
+    freeform sheet, itu gak reliable). Dipasangin sama /signal-track/stats di
+    Analytics buat perbandingan mentor vs NEXUS."""
+    try:
+        res = supabase.table("mentor_calls").select("floating_pnl_pct").execute()
+    except Exception:
+        return {"total": 0, "win_rate_pct": None, "warning": "Cache masih kosong — jalanin POST /mentor-calls/refresh dulu."}
+
+    rows = [r for r in res.data if r.get("floating_pnl_pct") is not None]
+    total = len(rows)
+    wins = sum(1 for r in rows if r["floating_pnl_pct"] > 0)
+    win_rate_pct = round(wins / total * 100, 1) if total else None
+    return {"total": total, "win_rate_pct": win_rate_pct, "warning": None}
+
+
 @router.post("/refresh")
 def refresh_mentor_calls():
     """Tarik ulang dari Google Sheets, timpa total (sheet mentor itu source of

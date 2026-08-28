@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from config import supabase, FRONTEND_ORIGINS
 from auth_guard import require_auth
-from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls, daily_briefing
+from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls, daily_briefing, signal_track
 from scheduler import (
     run_scheduler,
     run_morning_routine,
@@ -68,3 +68,4 @@ app.include_router(telegram.router, prefix="/telegram", tags=["telegram"], depen
 app.include_router(watchlist.router, prefix="/watchlist", tags=["watchlist"], dependencies=_auth)
 app.include_router(mentor_calls.router, prefix="/mentor-calls", tags=["mentor-calls"], dependencies=_auth)
 app.include_router(daily_briefing.router, prefix="/daily-briefing", tags=["daily-briefing"], dependencies=_auth)
+app.include_router(signal_track.router, prefix="/signal-track", tags=["signal-track"], dependencies=_auth)

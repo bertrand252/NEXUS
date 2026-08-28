@@ -27,6 +27,13 @@ const SENTIMENT_CLASS = {
   mixed: 'bg-moderate/10 text-moderate border-moderate/30',
 };
 
+const HEATMAP_CLASS = (avgScore) => {
+  if (avgScore >= 60) return 'bg-strong/20 border-strong/40 text-strong';
+  if (avgScore >= 45) return 'bg-moderate/20 border-moderate/40 text-moderate';
+  if (avgScore >= 30) return 'bg-cyan/10 border-cyan/30 text-cyan';
+  return 'bg-white/5 border-border text-slate-500';
+};
+
 export default function Dashboard() {
   const [scanner, setScanner] = useState(null);
   const [scannerError, setScannerError] = useState(false);
@@ -35,6 +42,8 @@ export default function Dashboard() {
   const [briefing, setBriefing] = useState(null);
   const [briefingWarning, setBriefingWarning] = useState(null);
   const [refreshingBriefing, setRefreshingBriefing] = useState(false);
+  const [watchlist, setWatchlist] = useState(null);
+  const [sectorHeatmap, setSectorHeatmap] = useState(null);
 
   function loadBriefing() {
     fetch(`${API_BASE}/daily-briefing`)
@@ -71,11 +80,24 @@ export default function Dashboard() {
       .then(setIhsg)
       .catch(() => setIhsg(null));
 
+    fetch(`${API_BASE}/watchlist`)
+      .then((r) => r.json())
+      .then(({ data }) => setWatchlist((data || []).map((w) => w.ticker)))
+      .catch(() => setWatchlist([]));
+
+    fetch(`${API_BASE}/scanner/sectors`)
+      .then((r) => r.json())
+      .then(({ data }) => setSectorHeatmap(data || []))
+      .catch(() => setSectorHeatmap([]));
+
     loadBriefing();
   }, []);
 
   const ihsgRef = useChart(ihsgChartConfig(ihsg?.spark));
   const top5 = scanner ? [...scanner].sort((a, b) => b.total_score - a.total_score).slice(0, 5) : [];
+  const watchlistRows = scanner && watchlist
+    ? scanner.filter((s) => watchlist.includes(s.ticker)).sort((a, b) => b.total_score - a.total_score)
+    : [];
 
   return (
     <>
@@ -139,6 +161,25 @@ export default function Dashboard() {
 
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white tracking-tight">Sector Rotation</h3>
+            <span className="text-[11px] text-slate-500 font-mono">Sektor mana lagi rame Strong signal</span>
+          </div>
+          {sectorHeatmap?.length === 0 && <p className="text-sm text-slate-500 py-2">Cache scanner kosong — refresh dulu di Scanner.</p>}
+          {sectorHeatmap?.length > 0 && (
+            <div className="grid grid-cols-4 gap-3">
+              {sectorHeatmap.map((s) => (
+                <div key={s.sector} className={`rounded-xl border p-3 ${HEATMAP_CLASS(s.avg_score)}`}>
+                  <p className="text-xs font-semibold leading-tight">{s.sector}</p>
+                  <p className="text-lg font-extrabold font-mono mt-1">{s.strong_count}</p>
+                  <p className="text-[10px] font-mono opacity-70">Strong · avg {s.avg_score}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="glow-border rounded-2xl bg-card border border-border p-5">
+          <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2.5">
               <h3 className="text-sm font-bold text-white tracking-tight">AI Daily Briefing</h3>
               {briefing && (
@@ -192,8 +233,10 @@ export default function Dashboard() {
           <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-white tracking-tight">Watchlist Summary</h3>
-              <span className="text-[11px] text-slate-500 font-mono">Top 5 buat besok</span>
+              <Link to="/settings" className="text-[11px] text-cyan hover:text-accent font-mono">Kelola watchlist →</Link>
             </div>
+            {watchlist?.length === 0 && <p className="text-sm text-slate-500 py-4 text-center">Belum ada ticker di watchlist — tambahin di Settings.</p>}
+            {watchlist?.length > 0 && (
             <div className="overflow-x-auto scrollbar-thin">
               <table className="w-full text-sm">
                 <thead>
@@ -207,7 +250,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60 font-mono text-[13px]">
-                  {top5.map((s) => {
+                  {watchlistRows.map((s) => {
                     const m = signalMeta(s.signal);
                     return (
                       <tr key={s.ticker} className="hover:bg-white/[0.03] transition">
@@ -223,6 +266,7 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+            )}
           </div>
 
           <div className="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col">

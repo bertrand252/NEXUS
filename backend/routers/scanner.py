@@ -8,7 +8,7 @@ from scoring import compute_score
 from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
 from config import supabase
 from levels import support_resistance
-from groq_client import translate_to_indonesian
+from groq_client import translate_to_indonesian, explain_levels
 import invezgo_client
 
 router = APIRouter()
@@ -96,6 +96,38 @@ def get_scanner():
     return {"data": res.data, "errors": []}
 
 
+@router.get("/sectors")
+def get_sector_heatmap():
+    """Agregasi scanner_cache per sektor — buat heatmap rotasi sektor di
+    Dashboard. Sektor "—" (ticker yang gak ke-mapping) sengaja dipisah, gak
+    ikut ditampilin di heatmap (bukan sektor asli)."""
+    try:
+        res = supabase.table("scanner_cache").select("sector,total_score,signal").execute()
+    except Exception:
+        return {"data": [], "warning": "Cache masih kosong — jalanin POST /scanner/refresh dulu."}
+    if not res.data:
+        return {"data": [], "warning": "Cache masih kosong — jalanin POST /scanner/refresh dulu."}
+
+    agg: dict[str, dict] = {}
+    for row in res.data:
+        sector = row.get("sector") or "—"
+        if sector == "—":
+            continue
+        a = agg.setdefault(sector, {"sector": sector, "count": 0, "score_sum": 0, "strong_count": 0})
+        a["count"] += 1
+        a["score_sum"] += row["total_score"]
+        if row["signal"] == "Strong":
+            a["strong_count"] += 1
+
+    data = [
+        {"sector": a["sector"], "count": a["count"], "strong_count": a["strong_count"],
+         "avg_score": round(a["score_sum"] / a["count"], 1)}
+        for a in agg.values()
+    ]
+    data.sort(key=lambda d: d["strong_count"], reverse=True)
+    return {"data": data, "warning": None}
+
+
 @router.post("/refresh")
 def refresh_scanner():
     """Live-fetch semua 951 ticker di data/idx_universe.json (paralel via thread pool,
@@ -154,6 +186,29 @@ def translate_summary(payload: TranslateInput):
         return {"translated": translate_to_indonesian(payload.text)}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gagal translate: {e}")
+
+
+@router.post("/{ticker}/annotate")
+def annotate_chart(ticker: str):
+    """Penjelasan Groq buat level support/resistance di chart Stock Detail —
+    on-demand (tombol), BUKAN otomatis tiap buka halaman, biar gak boros call
+    Groq buat user yang cuma window-shopping."""
+    ticker = ticker.upper()
+    try:
+        hist = _get_history(ticker)
+        result = _score_from_history(ticker, hist, _build_accum_lookup())
+        levels = support_resistance(hist)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
+
+    score_breakdown = {
+        "volume_score": result["volume_score"], "price_score": result["price_score"],
+        "accumulation_score": result["accumulation_score"], "technical_score": result["technical_score"],
+    }
+    try:
+        return {"penjelasan": explain_levels(ticker, score_breakdown, levels)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gagal generate penjelasan: {e}")
 
 
 @router.get("/index/ihsg")

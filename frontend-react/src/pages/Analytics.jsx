@@ -22,6 +22,8 @@ export default function Analytics() {
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
   const [data, setData] = useState(null);
   const [error, setError] = useState(false);
+  const [signalStats, setSignalStats] = useState(null);
+  const [mentorScoreboard, setMentorScoreboard] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,6 +39,11 @@ export default function Analytics() {
     })();
     return () => { cancelled = true; };
   }, [viewYear]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/signal-track/stats`).then((r) => r.json()).then(setSignalStats).catch(() => setSignalStats(null));
+    fetch(`${API_BASE}/mentor-calls/scoreboard`).then((r) => r.json()).then(setMentorScoreboard).catch(() => setMentorScoreboard(null));
+  }, []);
 
   const monthlyConfig = data ? {
     type: 'line',
@@ -152,6 +159,35 @@ export default function Analytics() {
           <div className="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col items-center justify-center">
             <h3 className="text-sm font-bold text-white tracking-tight self-start mb-2">Win / Loss Ratio</h3>
             <canvas ref={winRateRef} height="160"></canvas>
+          </div>
+        </div>
+
+        <div className="glow-border rounded-2xl bg-card border border-border p-5">
+          <h3 className="text-sm font-bold text-white tracking-tight mb-1">Mentor vs NEXUS — Track Record</h3>
+          <p className="text-[11px] text-slate-500 mb-4">Win rate real dari alert Telegram (TP vs SL) dan call mentor (floating PnL), bukan asumsi</p>
+          <div className="grid grid-cols-2 gap-5">
+            <div className="rounded-xl border border-border bg-card2 p-4">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">NEXUS Win Rate</p>
+              {signalStats?.warning || signalStats?.win_rate_pct == null ? (
+                <p className="text-sm text-slate-500">Belum cukup data — nunggu alert Telegram ngumpul.</p>
+              ) : (
+                <>
+                  <p className="text-2xl font-extrabold font-mono text-white">{signalStats.win_rate_pct}%</p>
+                  <p className="text-xs text-slate-500 mt-1 font-mono">{signalStats.tp_hit} TP · {signalStats.sl_hit} SL · {signalStats.open} masih jalan</p>
+                </>
+              )}
+            </div>
+            <div className="rounded-xl border border-border bg-card2 p-4">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Mentor Win Rate</p>
+              {mentorScoreboard?.warning || mentorScoreboard?.win_rate_pct == null ? (
+                <p className="text-sm text-slate-500">Belum cukup data — refresh Mentor Calls dulu.</p>
+              ) : (
+                <>
+                  <p className="text-2xl font-extrabold font-mono text-white">{mentorScoreboard.win_rate_pct}%</p>
+                  <p className="text-xs text-slate-500 mt-1 font-mono">dari {mentorScoreboard.total} call aktif</p>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

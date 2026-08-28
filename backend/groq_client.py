@@ -121,3 +121,25 @@ def analyze_alert(ticker: str, score_breakdown: dict, levels: dict, context: dic
         payload["konteks_pendukung"] = context
     user_prompt = json.dumps(payload, ensure_ascii=False)
     return ask_json(system_prompt, user_prompt)
+
+
+def explain_levels(ticker: str, score_breakdown: dict, levels: dict) -> str:
+    """Penjelasan singkat buat chart Stock Detail — KENAPA level support/
+    resistance yang UDAH DIHITUNG (levels.py, rule-based 20-hari min/max) itu
+    relevan buat ticker ini sekarang. Sengaja gak nyuruh Groq nemuin level
+    baru sendiri — itu bikin 2 sumber kebenaran level yang bisa kontradiksi
+    sama breakout logic yang dipake scoring/alert. On-demand doang (tombol),
+    bukan auto tiap buka halaman, biar gak boros call Groq."""
+    system_prompt = (
+        "Kamu analis saham IDX. Dikasih breakdown score teknikal (technical_score "
+        "= breakout resistance 20 hari + volume) dan level support/resistance yang "
+        "UDAH dihitung (jangan nemuin level baru, cuma jelasin yang ada). Jelasin "
+        "dalam 1-2 kalimat pendek, bahasa Indonesia santai: posisi harga sekarang "
+        "relatif ke level-level itu ngapain (deket breakout? masih jauh? udah "
+        "lewat resistance?), dan apa artinya buat trader yang lagi liat chart ini. "
+        "Jangan kasih rekomendasi eksplisit 'beli/jual', jangan mengarang data yang "
+        "gak ada. Balikin JSON persis: {\"penjelasan\": \"...\"}"
+    )
+    user_prompt = json.dumps({"ticker": ticker, **score_breakdown, **levels}, ensure_ascii=False)
+    result = ask_json(system_prompt, user_prompt)
+    return result.get("penjelasan", "")

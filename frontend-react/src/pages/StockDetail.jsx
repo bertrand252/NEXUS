@@ -111,6 +111,22 @@ export default function StockDetail() {
   const [error, setError] = useState(null);
   const [timeframe, setTimeframe] = useState('1M');
   const [searchInput, setSearchInput] = useState('');
+  const [annotation, setAnnotation] = useState(null);
+  const [annotating, setAnnotating] = useState(false);
+
+  async function runAnnotate() {
+    setAnnotating(true);
+    try {
+      const res = await fetch(`${API_BASE}/scanner/${ticker}/annotate`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+      const { penjelasan } = await res.json();
+      setAnnotation(penjelasan);
+    } catch (err) {
+      alert('Gagal generate penjelasan: ' + err.message);
+    } finally {
+      setAnnotating(false);
+    }
+  }
 
   function goToTicker(e) {
     e.preventDefault();
@@ -120,7 +136,7 @@ export default function StockDetail() {
     setSearchInput('');
   }
 
-  useEffect(() => { setData(null); }, [ticker]); // reset pas ganti ticker, tapi gak pas cuma ganti timeframe (biar gak kedip kosong)
+  useEffect(() => { setData(null); setAnnotation(null); }, [ticker]); // reset pas ganti ticker, tapi gak pas cuma ganti timeframe (biar gak kedip kosong)
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +267,17 @@ export default function StockDetail() {
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider">Risk</p>
                   <p className="text-sm font-mono font-semibold text-moderate">{data.levels.risk_pct}%</p>
                 </div>
+              </div>
+            )}
+            {data?.levels && (
+              <div className="mt-4 pt-4 border-t border-border">
+                {!annotation && (
+                  <button onClick={runAnnotate} disabled={annotating} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition disabled:opacity-50">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.5 8.5L21 9.3L16.3 13.9L17.6 20.5L12 17.1L6.4 20.5L7.7 13.9L3 9.3L9.5 8.5L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /></svg>
+                    {annotating ? 'Nge-generate...' : 'Jelasin level ini (AI)'}
+                  </button>
+                )}
+                {annotation && <p className="text-sm text-slate-300 leading-relaxed text-justify">{annotation}</p>}
               </div>
             )}
           </div>
