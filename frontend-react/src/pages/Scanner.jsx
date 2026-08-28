@@ -76,11 +76,15 @@ export default function Scanner() {
   async function runRefresh() {
     setRefreshing(true);
     try {
-      const res = await fetch(`${API_BASE}/scanner/refresh`, { method: 'POST' });
-      if (!res.ok) throw new Error(`Refresh gagal (${res.status})`);
+      const [scanRes, mentorRes] = await Promise.all([
+        fetch(`${API_BASE}/scanner/refresh`, { method: 'POST' }),
+        fetch(`${API_BASE}/mentor-calls/refresh`, { method: 'POST' }).catch(() => null),
+      ]);
+      if (!scanRes.ok) throw new Error(`Refresh scanner gagal (${scanRes.status})`);
+      if (!mentorRes?.ok) console.warn('Refresh mentor calls gagal, lanjut pake data lama');
       await loadScanner();
     } catch (err) {
-      alert('Gagal refresh scanner: ' + err.message);
+      alert('Gagal refresh price: ' + err.message);
     } finally {
       setRefreshing(false);
     }
@@ -117,7 +121,7 @@ export default function Scanner() {
             onClick={runRefresh} disabled={refreshing}
             className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition disabled:opacity-50"
           >
-            {refreshing ? 'Nge-refresh 951 ticker... (bisa semenit-an)' : '↻ Refresh dari yfinance'}
+            {refreshing ? 'Refresh Price... (bisa semenit-an)' : '↻ Refresh Price'}
           </button>
           <button className="relative w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center hover:border-accent/50 transition">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8C6 15 3 17 3 17H21S18 15 18 8Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.73 21A2 2 0 0 1 10.27 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
