@@ -7,7 +7,8 @@ import yfinance as yf
 from scoring import compute_score, bsjp_criteria, invest_criteria
 from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
 from config import supabase, today_wib
-from levels import support_resistance
+from levels import support_resistance, detect_pivot_zones
+from prediction import predict_direction
 from groq_client import translate_to_indonesian, explain_levels
 import invezgo_client
 
@@ -324,6 +325,8 @@ def get_stock_detail(ticker: str, period: str = "1M"):
         hist = _get_history(ticker)
         result = _score_from_history(ticker, hist, _build_accum_lookup())
         result["levels"] = support_resistance(hist)
+        result["ai_zones"] = detect_pivot_zones(hist)
+        result["ai_prediction"] = predict_direction(hist)
     except Exception:
         raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
     result["sector"] = SECTOR_BY_TICKER.get(ticker, "—")

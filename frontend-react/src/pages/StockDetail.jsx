@@ -155,7 +155,7 @@ export default function StockDetail() {
   }, [ticker, timeframe]);
 
   const candles = data ? data.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })) : null;
-  const candleRef = useCandlestickChart(candles, data?.levels);
+  const candleRef = useCandlestickChart(candles, data?.levels, data?.ai_zones);
 
   const brokerConfig = {
     type: 'bar',
@@ -326,8 +326,27 @@ export default function StockDetail() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.5 8.5L21 9.3L16.3 13.9L17.6 20.5L12 17.1L6.4 20.5L7.7 13.9L3 9.3L9.5 8.5L12 2Z" stroke="#06B6D4" strokeWidth="1.8" strokeLinejoin="round" /></svg>
               <h3 className="text-sm font-bold text-white tracking-tight">AI Prediction</h3>
             </div>
-            <span className="inline-block text-xs font-bold px-3 py-1.5 rounded-full bg-white/5 text-slate-400 border border-border mb-3">Belum tersedia</span>
-            <p className="text-sm text-slate-500">Model LSTM/XGBoost buat prediksi arah harga 1-5 hari belum diimplementasi.</p>
+            {!data?.ai_prediction && (
+              <>
+                <span className="inline-block text-xs font-bold px-3 py-1.5 rounded-full bg-white/5 text-slate-400 border border-border mb-3">Belum tersedia</span>
+                <p className="text-sm text-slate-500">Model XGBoost buat prediksi arah harga 5 hari belum di-training buat ticker ini (atau belum ada modelnya sama sekali).</p>
+              </>
+            )}
+            {data?.ai_prediction && (
+              <>
+                <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border mb-3 ${data.ai_prediction.direction === 'up' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-strong/10 text-strong border-strong/30'}`}>
+                  {data.ai_prediction.direction === 'up' ? '▲ Naik' : '▼ Turun'} · {(data.ai_prediction.probability * 100).toFixed(0)}%
+                </span>
+                <p className="text-sm text-slate-400 mb-3">Prediksi arah harga 5 hari ke depan, dari model XGBoost (fitur teknikal).</p>
+                {data.ai_prediction.model_accuracy != null && (
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Akurasi historis model: <span className="text-slate-300 font-semibold">{(data.ai_prediction.model_accuracy * 100).toFixed(0)}%</span>
+                    {data.ai_prediction.baseline_accuracy != null && ` (baseline tebak asal: ${(data.ai_prediction.baseline_accuracy * 100).toFixed(0)}%)`}
+                    {' '}— pertimbangan tambahan, bukan jaminan.
+                  </p>
+                )}
+              </>
+            )}
           </div>
 
           <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">

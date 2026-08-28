@@ -9,3 +9,5 @@ requests>=2.32.0
 matplotlib>=3.9.0
 mplfinance==0.12.10b0
 beautifulsoup4>=4.12.0
+xgboost>=2.1.0
+scikit-learn>=1.5.0

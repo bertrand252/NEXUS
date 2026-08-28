@@ -7,11 +7,15 @@ const DARK = { bg: 'transparent', grid: '#1F2937', text: '#64748B' };
 // Creates a lightweight-charts candlestick chart with SMA5/10/15 overlaid.
 // `candles` is [{time, open, high, low, close}]. `levels` (optional) is
 // {support, resistance} from backend/levels.py, drawn as horizontal price lines.
-export function useCandlestickChart(candles, levels) {
+// `zones` (optional) is AI-detected pivot zones (backend/levels.py::detect_pivot_zones)
+// — level TAMBAHAN, digambar beda visual (titik-titik, warna beda) dari
+// Support/Resistance resmi biar gak ketuker jadi 1 sumber kebenaran.
+export function useCandlestickChart(candles, levels, zones) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef({});
   const priceLinesRef = useRef([]);
+  const zoneLinesRef = useRef([]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -76,6 +80,24 @@ export function useCandlestickChart(candles, levels) {
       axisLabelVisible: true, title: 'Resistance',
     }));
   }, [levels]);
+
+  useEffect(() => {
+    const s = seriesRef.current;
+    if (!s.candle) return;
+
+    zoneLinesRef.current.forEach((line) => s.candle.removePriceLine(line));
+    zoneLinesRef.current = [];
+
+    if (!zones || zones.length === 0) return;
+    for (const z of zones) {
+      zoneLinesRef.current.push(s.candle.createPriceLine({
+        price: z.price,
+        color: z.type === 'resistance' ? '#F472B6' : '#34D399', // beda dari Support(#10B981)/Resistance(#EF4444) resmi
+        lineWidth: 1, lineStyle: 1, // dotted, tipis — jelas kelihatan "tambahan" bukan level resmi
+        axisLabelVisible: true, title: `Zona AI (${z.touches}x)`,
+      }));
+    }
+  }, [zones]);
 
   return containerRef;
 }
