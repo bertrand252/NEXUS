@@ -3,12 +3,17 @@ import { Link } from 'react-router-dom';
 import { API_BASE } from '../lib/api';
 import { signalMeta } from '../lib/signal';
 
-function ScanRow({ s }) {
+function ScanRow({ s, isMentorCall }) {
   const m = signalMeta(s.signal);
   return (
     <tr className="hover:bg-white/[0.03] transition">
       <td className="px-5 py-3">
-        <p className="font-sans font-semibold text-white">{s.ticker}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="font-sans font-semibold text-white">{s.ticker}</p>
+          {isMentorCall && (
+            <span title="Mentor punya call aktif buat ticker ini" className="text-[9px] font-sans font-semibold px-1.5 py-0.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30">Mentor</span>
+          )}
+        </div>
         <p className="text-[10px] text-slate-500 font-sans">{s.sector || '—'}</p>
       </td>
       <td className="px-5 py-3 text-slate-300">Rp {s.price.toLocaleString('id-ID')}</td>
@@ -41,16 +46,26 @@ export default function Scanner() {
   const [signal, setSignal] = useState('');
   const [sector, setSector] = useState('');
   const [minScoreOnly, setMinScoreOnly] = useState(false);
+  const [mentorOnly, setMentorOnly] = useState(false);
+  const [mentorTickers, setMentorTickers] = useState(new Set());
 
   async function loadScanner() {
     try {
-      const res = await fetch(`${API_BASE}/scanner`);
-      if (!res.ok) throw new Error(`Backend error ${res.status}`);
-      const { data, warning } = await res.json();
+      const [scanRes, mentorRes] = await Promise.all([
+        fetch(`${API_BASE}/scanner`),
+        fetch(`${API_BASE}/mentor-calls`).catch(() => null),
+      ]);
+      if (!scanRes.ok) throw new Error(`Backend error ${scanRes.status}`);
+      const { data, warning } = await scanRes.json();
       setAllData(data);
       setWarning(warning || null);
       setLoadError(false);
       setRefreshedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
+
+      if (mentorRes?.ok) {
+        const { data: mentorData } = await mentorRes.json();
+        setMentorTickers(new Set((mentorData || []).map((c) => c.ticker)));
+      }
     } catch {
       setLoadError(true);
     }
@@ -80,9 +95,10 @@ export default function Scanner() {
       if (signal && s.signal !== signal) return false;
       if (sector && s.sector !== sector) return false;
       if (minScoreOnly && s.total_score < 50) return false;
+      if (mentorOnly && !mentorTickers.has(s.ticker)) return false;
       return true;
     });
-  }, [allData, search, signal, sector, minScoreOnly]);
+  }, [allData, search, signal, sector, minScoreOnly, mentorOnly, mentorTickers]);
 
   const statusLine = loadError
     ? 'Gagal memuat data'
@@ -140,10 +156,19 @@ export default function Scanner() {
             {sectors.map((s) => <option key={s}>{s}</option>)}
           </select>
           <button
+            onClick={() => setMentorOnly((v) => !v)}
+            className={mentorOnly
+              ? 'ml-auto flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-cyan text-white border border-cyan transition'
+              : 'ml-auto flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" /><path d="M9 12L11 14L15.5 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            Mentor Calls Only
+          </button>
+          <button
             onClick={() => setMinScoreOnly((v) => !v)}
             className={minScoreOnly
-              ? 'ml-auto flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-accent text-white border border-accent transition'
-              : 'ml-auto flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition'}
+              ? 'flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-accent text-white border border-accent transition'
+              : 'flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition'}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 4V20M4 4H14L20 10V20H4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             Score ≥ 50 filter
@@ -173,7 +198,7 @@ export default function Scanner() {
                 {!loadError && filtered.length === 0 && (
                   <tr><td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-500">Gak ada saham yang cocok dengan filter ini.</td></tr>
                 )}
-                {!loadError && filtered.map((s) => <ScanRow key={s.ticker} s={s} />)}
+                {!loadError && filtered.map((s) => <ScanRow key={s.ticker} s={s} isMentorCall={mentorTickers.has(s.ticker)} />)}
               </tbody>
             </table>
           </div>

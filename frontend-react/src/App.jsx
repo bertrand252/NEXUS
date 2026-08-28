@@ -8,7 +8,6 @@ import Scanner from './pages/Scanner';
 import StockDetail from './pages/StockDetail';
 import Dashboard from './pages/Dashboard';
 import PortfolioSimulation from './pages/PortfolioSimulation';
-import MentorCalls from './pages/MentorCalls';
 import Settings from './pages/Settings';
 import { useAuth } from './hooks/useAuth';
 
@@ -31,7 +30,6 @@ export default function App() {
           <Route path="/stock-detail" element={<StockDetail />} />
           <Route path="/market-events" element={<MarketEvents />} />
           <Route path="/portfolio-simulation" element={<PortfolioSimulation />} />
-          <Route path="/mentor-calls" element={<MentorCalls />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />

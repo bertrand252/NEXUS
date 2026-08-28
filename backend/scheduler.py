@@ -7,13 +7,15 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 """
 import asyncio
 from datetime import date, datetime, timedelta
+import yfinance as yf
 from config import supabase
 from routers.scanner import _get_history
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance
 from chart_render import render_chart
-from groq_client import analyze_alert
+from groq_client import analyze_alert, pick_alert_candidate
+from forex_factory import get_forex_events
 from telegram_bot import send_alert_photo, send_alert, get_channel_updates
 from telegram_scrape import fetch_channel_posts
 from routers.intel import submit_intel, IntelInput
@@ -64,9 +66,11 @@ def _check_invalidated() -> None:
             _invalidated_today.add(row["ticker"])
 
 
-def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict) -> str:
+def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
+    faktor_line = f"Faktor pendukung: {'; '.join(faktor_pendukung)}\n\n" if faktor_pendukung else ""
     return (
         f"🔴 STRONG SIGNAL — {ticker} (score {total_score}/100)\n\n"
+        f"{faktor_line}"
         f"Kenapa kuat: {reasoning.get('alasan_strong', '-')}\n\n"
         f"Entry: Rp{levels['entry_low']:,.0f} - Rp{levels['entry_high']:,.0f}\n"
         f"Stop loss: Rp{levels['stop_loss']:,.0f}\n"
@@ -75,43 +79,177 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict)
     )
 
 
+def _recent_news_by_ticker(days: int = 3) -> dict[str, list[dict]]:
+    """{ticker: [{tanggal, sentiment, poin_penting, sektor_terkait}]} dari
+    daily_market_intel N hari terakhir — dipakai buat cross-check berita di
+    seleksi kandidat alert, bukan fetch baru (data udah ada dari intel pipeline)."""
+    since = (date.today() - timedelta(days=days)).isoformat()
+    try:
+        res = supabase.table("daily_market_intel").select("tanggal,summary_ai").gte("tanggal", since).execute()
+    except Exception:
+        return {}
+
+    by_ticker: dict[str, list[dict]] = {}
+    for row in res.data:
+        summary = row.get("summary_ai")
+        if not summary:
+            continue
+        for t in summary.get("saham_disebut", []):
+            by_ticker.setdefault(t.upper(), []).append({
+                "tanggal": row["tanggal"],
+                "sentiment": summary.get("sentiment"),
+                "poin_penting": summary.get("poin_penting", []),
+                "sektor_terkait": summary.get("sektor_terkait", []),
+            })
+    return by_ticker
+
+
+def _active_mentor_calls() -> dict[str, dict]:
+    """{ticker: row} buat mentor_calls yang status-nya masih "Running" (bukan
+    yang udah closed/TP/CL)."""
+    try:
+        res = supabase.table("mentor_calls").select("*").execute()
+    except Exception:
+        return {}
+    return {r["ticker"]: r for r in res.data if "run" in (r.get("status") or "").lower()}
+
+
+def _macro_sector_set(macro_events: list[dict]) -> set[str]:
+    """Sektor spesifik yang kena macro event High/Medium minggu ini. "All
+    Sectors" (mapping default event USD, hampir selalu ada tiap minggu)
+    sengaja DIKELUARIN — itu bukan faktor pendukung yang informatif buat 1
+    ticker spesifik, cuma bikin macro_sector_match kebobolan match ke semua
+    kandidat."""
+    sectors = set()
+    for e in macro_events:
+        for s in (e.get("idx_sector_impact") or "").split(","):
+            s = s.strip()
+            if s and s not in ("—", "All Sectors"):
+                sectors.add(s)
+    return sectors
+
+
+def _gather_candidates(macro_events: list[dict], pool_limit: int = 20) -> list[dict]:
+    """Pool kandidat alert: scanner_cache Strong/Moderate UNION mentor call
+    aktif, exclude yang udah ke-alert hari ini, di-enrich sama berita + info
+    mentor call. Universe IDX-nya 951 ticker, jadi Strong/Moderate doang bisa
+    ratusan — filter dulu ke yang punya faktor pendukung eksternal (berita/
+    mentor/macro sektor), sisanya bakal ditolak Groq juga (lihat syarat di
+    pick_alert_candidate), jadi gak perlu ikut dikirim & makan token/TPM
+    limit Groq buat sia-sia."""
+    try:
+        scan_res = (
+            supabase.table("scanner_cache")
+            .select("ticker,total_score,signal,sector")
+            .in_("signal", ["Strong", "Moderate"])
+            .execute()
+        )
+        scan_by_ticker = {r["ticker"]: r for r in scan_res.data}
+    except Exception:
+        scan_by_ticker = {}
+
+    mentor_by_ticker = _active_mentor_calls()
+    news_by_ticker = _recent_news_by_ticker()
+    macro_sectors = _macro_sector_set(macro_events)
+
+    pool = (set(scan_by_ticker) | set(mentor_by_ticker)) - _alerted_today
+
+    candidates = []
+    for ticker in pool:
+        scan = scan_by_ticker.get(ticker)
+        mentor = mentor_by_ticker.get(ticker)
+        berita = news_by_ticker.get(ticker)
+        sector = scan["sector"] if scan else None
+        macro_match = bool(sector) and sector in macro_sectors
+        if not (berita or mentor or macro_match):
+            continue  # gak ada faktor pendukung eksternal sama sekali — bakal ditolak Groq juga
+        candidates.append({
+            "ticker": ticker,
+            "total_score": scan["total_score"] if scan else None,
+            "signal": scan["signal"] if scan else None,
+            "sector": sector,
+            "mentor_call": (
+                {"status": mentor["status"], "buy_price": mentor["buy_price"]} if mentor else None
+            ),
+            "berita": berita,
+            "macro_sector_match": macro_match,
+        })
+
+    candidates.sort(key=lambda c: c["total_score"] or 0, reverse=True)
+    return candidates[:pool_limit]
+
+
+def _fetch_fundamental_summary(ticker: str) -> dict | None:
+    """Ringkasan fundamental buat 1 ticker doang (pemenang fase 1) — pola sama
+    kayak scanner.py::get_stock_detail, tapi cuma dipanggil 1x per alert biar
+    gak nambah beban rate-limit yfinance ke seluruh pool kandidat."""
+    try:
+        info = yf.Ticker(f"{ticker}.JK").info
+    except Exception:
+        return None
+    return {
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "summary": (info.get("longBusinessSummary") or "")[:500],
+    }
+
+
 def check_and_alert() -> None:
     _reset_if_new_day()
     _check_invalidated()
 
-    try:
-        res = (
-            supabase.table("scanner_cache")
-            .select("ticker,total_score,signal,volume_score,price_score,accumulation_score,technical_score")
-            .eq("signal", "Strong")
-            .order("total_score", desc=True)
-            .execute()
-        )
-    except Exception:
-        return  # scanner_cache belum ke-refresh / Supabase lagi bermasalah, coba lagi interval berikutnya
-
-    candidates = [r for r in res.data if r["ticker"] not in _alerted_today]
+    macro_events = [e for e in get_forex_events() if e["impact"] in ("High", "Medium")]
+    candidates = _gather_candidates(macro_events)
     if not candidates:
         return
 
-    top = candidates[0]  # cuma kirim #1, bukan semua ticker Strong
-    ticker = top["ticker"]
+    try:
+        pick = pick_alert_candidate(candidates, macro_events)
+    except Exception:
+        return  # Groq gagal, coba lagi interval berikutnya
+
+    ticker = pick.get("pilih")
+    if not ticker:
+        return  # sengaja gak ada yang meyakinkan — mending gak ada call daripada call asal
+
+    candidate = next((c for c in candidates if c["ticker"] == ticker), None)
+    if candidate is None or candidate.get("signal") not in ("Strong", "Moderate"):
+        return  # jaga-jaga kalau Groq halusinasi ticker di luar pool / gak penuhi syarat skor
+
+    try:
+        score_res = (
+            supabase.table("scanner_cache")
+            .select("total_score,volume_score,price_score,accumulation_score,technical_score")
+            .eq("ticker", ticker)
+            .limit(1)
+            .execute()
+        )
+        score_row = score_res.data[0]
+    except Exception:
+        return
 
     try:
         hist = _get_history(ticker)
         levels = support_resistance(hist)
         chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"])
         score_breakdown = {
-            "volume_score": top["volume_score"],
-            "price_score": top["price_score"],
-            "accumulation_score": top["accumulation_score"],
-            "technical_score": top["technical_score"],
+            "volume_score": score_row["volume_score"],
+            "price_score": score_row["price_score"],
+            "accumulation_score": score_row["accumulation_score"],
+            "technical_score": score_row["technical_score"],
         }
-        reasoning = analyze_alert(ticker, score_breakdown, levels)
+        context = {
+            "faktor_pendukung": pick.get("faktor_pendukung", []),
+            "berita": candidate.get("berita"),
+            "mentor_call": candidate.get("mentor_call"),
+            "event_ekonomi_global": macro_events,
+            "fundamental": _fetch_fundamental_summary(ticker),
+        }
+        reasoning = analyze_alert(ticker, score_breakdown, levels, context)
     except Exception:
         return  # gagal di yfinance/Groq/render — coba lagi interval berikutnya, jangan tandain alerted
 
-    caption = _build_caption(ticker, top["total_score"], levels, reasoning)
+    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []))
     if not send_alert_photo(chart_png, caption):
         return  # Telegram belum di-connect di Settings, atau gagal kirim
 

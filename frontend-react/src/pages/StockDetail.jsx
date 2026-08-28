@@ -64,6 +64,32 @@ function CompanyInfo({ company, ticker }) {
   );
 }
 
+function fmtRupiah(v) {
+  return v == null ? '—' : `Rp${v.toLocaleString('id-ID')}`;
+}
+function fmtPct(v) {
+  return v == null ? '—' : `${v >= 0 ? '+' : ''}${v}%`;
+}
+
+function MentorCallCard({ call }) {
+  return (
+    <div className="glow-border rounded-2xl bg-card border border-cyan/30 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-white tracking-tight">Mentor Call</h3>
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30">{call.status || '—'}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-4 text-xs">
+        <div><p className="text-slate-500 mb-1">Recom Date</p><p className="font-mono text-slate-200">{call.recom_date || '—'}</p></div>
+        <div><p className="text-slate-500 mb-1">Buy Price</p><p className="font-mono text-slate-200">{fmtRupiah(call.buy_price)}</p></div>
+        <div><p className="text-slate-500 mb-1">Current Price</p><p className="font-mono text-slate-200">{fmtRupiah(call.current_price)}</p></div>
+        <div><p className="text-slate-500 mb-1">TP1 / TP2</p><p className="font-mono text-slate-200">{fmtRupiah(call.tp1)} / {fmtRupiah(call.tp2)}</p></div>
+        <div><p className="text-slate-500 mb-1">Cut Loss</p><p className="font-mono text-slate-200">{fmtRupiah(call.cl)}</p></div>
+        <div><p className="text-slate-500 mb-1">Floating PnL</p><p className={`font-mono font-semibold ${call.floating_pnl_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPct(call.floating_pnl_pct)}</p></div>
+      </div>
+    </div>
+  );
+}
+
 function ScoreCard({ label, value, max, barClass }) {
   return (
     <div className="glow-border rounded-2xl bg-card border border-border p-4">
@@ -265,6 +291,7 @@ export default function StockDetail() {
         </div>
 
         {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} />}
+        {data?.mentor_call && <MentorCallCard call={data.mentor_call} />}
 
         <div className="grid grid-cols-3 gap-6">
           <div className="glow-border rounded-2xl bg-gradient-to-br from-card to-card2 border border-accent/30 p-5">

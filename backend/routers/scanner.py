@@ -230,6 +230,12 @@ def get_stock_detail(ticker: str, period: str = "1M"):
     except Exception:
         result["company"] = None  # yfinance kadang gak punya profile lengkap buat ticker tertentu, gak fatal
 
+    try:
+        mentor_res = supabase.table("mentor_calls").select("*").eq("ticker", ticker).limit(1).execute()
+        result["mentor_call"] = mentor_res.data[0] if mentor_res.data else None
+    except Exception:
+        result["mentor_call"] = None
+
     timeframe = CHART_TIMEFRAMES.get(period, CHART_TIMEFRAMES["1M"])
     if timeframe == CHART_TIMEFRAMES["1M"]:
         chart_hist = hist  # udah di-fetch di atas, gak perlu call yfinance lagi

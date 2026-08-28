@@ -56,16 +56,54 @@ def translate_to_indonesian(text: str) -> str:
     return result.get("translated", text)
 
 
-def analyze_alert(ticker: str, score_breakdown: dict, levels: dict) -> dict:
-    """Generate alasan singkat buat alert Telegram — dipanggil scheduler.py.
-    Return: {"alasan_strong": str, "alasan_risk": str}."""
+def pick_alert_candidate(candidates: list[dict], macro_events: list[dict]) -> dict:
+    """Fase 1 seleksi alert Telegram — dikasih pool kandidat (score NEXUS + berita
+    terkait + status call mentor kalau ada) plus event ekonomi global minggu ini.
+    Groq milih PALING BANYAK 1 ticker yang layak di-alert, atau nolak semua kalau
+    gak ada yang meyakinkan. Return: {"pilih": str|None, "faktor_pendukung": [str],
+    "alasan_singkat": str}."""
     system_prompt = (
-        "Kamu analis saham IDX. Dikasih breakdown score teknikal + level "
-        "support/resistance 1 saham, jelasin singkat (maksimal 2 kalimat pendek "
-        "per poin) kenapa sinyalnya kuat, dan kenapa risk-nya segitu. Bahasa "
-        "Indonesia santai, to the point, jangan ngasih rekomendasi eksplisit "
-        "'beli sekarang' — jelasin data yang ada aja. Balikin JSON persis: "
-        '{"alasan_strong": "...", "alasan_risk": "..."}'
+        "Kamu analis saham IDX yang skeptis, bukan yang gampang excited. Dikasih "
+        "daftar kandidat saham (skor teknikal NEXUS, dan kalau ada: berita terkait "
+        "beberapa hari terakhir, status call aktif dari mentor trading) plus event "
+        "ekonomi global minggu ini. Tugas kamu: pilih PALING BANYAK 1 ticker yang "
+        "layak di-alert. SYARAT WAJIB: skor teknikal-nya Strong/Moderate DAN ada "
+        "minimal 1 faktor pendukung KONKRET di luar skor — berita yang sejalan "
+        "sama ticker/sektornya, ATAU jadi call aktif mentor, ATAU event ekonomi "
+        "global yang mendukung sektornya. JANGAN pilih cuma modal skor tinggi "
+        "tanpa faktor pendukung lain, dan jangan mengarang faktor yang gak ada di "
+        "data. Kalau gak ada kandidat yang beneran meyakinkan, WAJIB balikin "
+        "pilih: null — mending gak ada call daripada call asal-asalan. Balikin "
+        "JSON persis: {\"pilih\": \"TICKER\" atau null, \"faktor_pendukung\": "
+        '["poin 1", "poin 2"], "alasan_singkat": "1 kalimat"}'
     )
-    user_prompt = json.dumps({"ticker": ticker, **score_breakdown, **levels}, ensure_ascii=False)
+    user_prompt = json.dumps(
+        {"kandidat": candidates, "event_ekonomi_global": macro_events}, ensure_ascii=False
+    )
+    result = ask_json(system_prompt, user_prompt)
+    if not result.get("pilih") or result.get("pilih") == "null":
+        result["pilih"] = None
+    return result
+
+
+def analyze_alert(ticker: str, score_breakdown: dict, levels: dict, context: dict | None = None) -> dict:
+    """Generate alasan alert Telegram — dipanggil scheduler.py. `context` opsional
+    (dari pick_alert_candidate + fase 2): berita, mentor call, event ekonomi global,
+    ringkasan fundamental — biar alasannya ngerujuk bukti konkret, bukan cuma angka
+    score. Return: {"alasan_strong": str, "alasan_risk": str}."""
+    system_prompt = (
+        "Kamu analis saham IDX. Dikasih breakdown score teknikal, level "
+        "support/resistance, dan (kalau ada) konteks pendukung — berita, call "
+        "mentor, event ekonomi global, ringkasan fundamental perusahaan. Jelasin "
+        "singkat (maksimal 2-3 kalimat pendek per poin) kenapa sinyalnya kuat — "
+        "SEBUTIN faktor pendukung konkret yang dikasih kalau ada, jangan cuma "
+        "ngomongin angka score — dan kenapa risk-nya segitu. Bahasa Indonesia "
+        "santai, to the point, jangan ngasih rekomendasi eksplisit 'beli sekarang' "
+        "— jelasin data yang ada aja, jangan mengarang yang gak ada di data. "
+        "Balikin JSON persis: {\"alasan_strong\": \"...\", \"alasan_risk\": \"...\"}"
+    )
+    payload = {"ticker": ticker, **score_breakdown, **levels}
+    if context:
+        payload["konteks_pendukung"] = context
+    user_prompt = json.dumps(payload, ensure_ascii=False)
     return ask_json(system_prompt, user_prompt)
