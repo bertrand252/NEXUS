@@ -16,7 +16,7 @@ function ScanRow({ s, isMentorCall }) {
         </div>
         <p className="text-[10px] text-slate-500 font-sans">{s.sector || '—'}</p>
       </td>
-      <td className="px-5 py-3 text-slate-300">Rp {s.price.toLocaleString('id-ID')}</td>
+      <td className="px-5 py-3 text-slate-300">{s.price != null ? `Rp ${s.price.toLocaleString('id-ID')}` : '—'}</td>
       <td className={`px-5 py-3 ${s.change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.change_pct >= 0 ? '+' : ''}{s.change_pct}%</td>
       <td className="px-5 py-3 text-slate-300">{s.volume_ratio}x</td>
       <td className="px-5 py-3">

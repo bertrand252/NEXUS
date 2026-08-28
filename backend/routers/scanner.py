@@ -185,7 +185,17 @@ def refresh_fundamentals():
     criteria — TERPISAH dari POST /refresh (harga/volume) karena beda cadence
     (fundamental jarang berubah harian, gak perlu di-refresh tiap kali harga
     di-refresh) dan `.info` lebih berat ke yfinance dibanding `.history()`.
-    Manual trigger doang, belum ada scheduler otomatis (gak ada urgensi)."""
+    Manual trigger doang, belum ada scheduler otomatis (gak ada urgensi).
+    Cuma nyentuh ticker yang UDAH ada row-nya di scanner_cache — kalau upsert
+    dibiarin bikin row baru buat ticker yang belum pernah lolos refresh price
+    (`POST /refresh`), row itu bakal punya price/total_score/signal NULL, dan
+    frontend crash pas manggil `.toLocaleString()` di harga yang null."""
+    try:
+        existing = supabase.table("scanner_cache").select("ticker").execute()
+        existing_tickers = {r["ticker"] for r in existing.data}
+    except Exception:
+        return {"refreshed": 0, "failed": 0, "errors": [], "warning": "scanner_cache kosong — jalanin POST /refresh dulu"}
+
     def _fetch_one(ticker: str) -> dict:
         info = yf.Ticker(f"{ticker}.JK").info
         per = info.get("trailingPE")
@@ -202,9 +212,11 @@ def refresh_fundamentals():
             "fundamentals_updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    tickers_to_fetch = [t for t in TICKERS if t in existing_tickers]
+
     results, errors = [], []
     with ThreadPoolExecutor(max_workers=5) as pool:  # sama kayak POST /refresh — .info lebih berat, jangan naikin
-        futures = {pool.submit(_fetch_one, t): t for t in TICKERS}
+        futures = {pool.submit(_fetch_one, t): t for t in tickers_to_fetch}
         for future in as_completed(futures):
             t = futures[future]
             try:
