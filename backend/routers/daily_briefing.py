@@ -24,15 +24,20 @@ Output HARUS JSON valid, format:
 }"""
 
 
+MAX_ENTRIES = 15  # cap biar gak kena limit TPM Groq (8000 token/menit) kalau intel numpuk banyak
+MAX_POIN_PER_ENTRY = 4
+
+
 def _generate_briefing(days: int = 3) -> dict:
     since = (date.today() - timedelta(days=days)).isoformat()
     res = (
         supabase.table("daily_market_intel")
         .select("sumber,tanggal,summary_ai")
         .gte("tanggal", since)
+        .order("tanggal", desc=True)
         .execute()
     )
-    entries = [e for e in res.data if e.get("summary_ai")]
+    entries = [e for e in res.data if e.get("summary_ai")][:MAX_ENTRIES]
 
     if not entries:
         briefing = {
@@ -44,9 +49,9 @@ def _generate_briefing(days: int = 3) -> dict:
     else:
         lines = [
             f"[{e['tanggal']} - {e['sumber']}] sentiment={e['summary_ai'].get('sentiment')}, "
-            f"saham={e['summary_ai'].get('saham_disebut', [])}, "
-            f"poin={e['summary_ai'].get('poin_penting', [])}, "
-            f"event={e['summary_ai'].get('event_penting', [])}"
+            f"saham={e['summary_ai'].get('saham_disebut', [])[:8]}, "
+            f"poin={e['summary_ai'].get('poin_penting', [])[:MAX_POIN_PER_ENTRY]}, "
+            f"event={e['summary_ai'].get('event_penting', [])[:MAX_POIN_PER_ENTRY]}"
             for e in entries
         ]
         briefing = ask_json(BRIEFING_SYSTEM_PROMPT, "\n".join(lines))
