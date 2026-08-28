@@ -47,7 +47,7 @@ export default function Dashboard() {
 
   function loadBriefing() {
     fetch(`${API_BASE}/daily-briefing`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data, warning }) => { setBriefing(data); setBriefingWarning(warning); })
       .catch(() => setBriefingWarning('Gak bisa konek ke backend.'));
   }
@@ -66,27 +66,27 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetch(`${API_BASE}/scanner`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => setScanner(data))
       .catch(() => setScannerError(true));
 
     fetch(`${API_BASE}/market-events`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => setEvents((data || []).slice(0, 4)))
       .catch(() => setEvents([]));
 
     fetch(`${API_BASE}/scanner/index/ihsg`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setIhsg)
       .catch(() => setIhsg(null));
 
     fetch(`${API_BASE}/watchlist`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => setWatchlist((data || []).map((w) => w.ticker)))
       .catch(() => setWatchlist([]));
 
     fetch(`${API_BASE}/scanner/sectors`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => setSectorHeatmap(data || []))
       .catch(() => setSectorHeatmap([]));
 
@@ -123,7 +123,7 @@ export default function Dashboard() {
           <div className="relative">
             <p className="text-xs uppercase tracking-widest text-cyan font-semibold mb-1">IHSG</p>
             <div className="flex items-center gap-3">
-              <h2 className="text-3xl font-extrabold text-white">{ihsg ? ihsg.price.toLocaleString('id-ID') : '—'}</h2>
+              <h2 className="text-3xl font-extrabold text-white">{ihsg?.price != null ? ihsg.price.toLocaleString('id-ID') : '—'}</h2>
               {ihsg && <span className={`text-sm font-semibold font-mono ${ihsg.change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ihsg.change_pct >= 0 ? '+' : ''}{ihsg.change_pct}%</span>}
             </div>
             {ihsg?.as_of && <p className="text-[11px] text-slate-500 font-mono mt-1">Closing per {formatShortDate(ihsg.as_of)} — yfinance kadang telat update</p>}

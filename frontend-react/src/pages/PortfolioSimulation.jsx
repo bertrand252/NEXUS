@@ -23,7 +23,7 @@ export default function PortfolioSimulation() {
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10);
     fetch(`${API_BASE}/market-events`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => {
         const byDate = new Map();
         for (const e of (data || [])) {

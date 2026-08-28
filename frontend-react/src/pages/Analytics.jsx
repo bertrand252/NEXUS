@@ -41,8 +41,8 @@ export default function Analytics() {
   }, [viewYear]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/signal-track/stats`).then((r) => r.json()).then(setSignalStats).catch(() => setSignalStats(null));
-    fetch(`${API_BASE}/mentor-calls/scoreboard`).then((r) => r.json()).then(setMentorScoreboard).catch(() => setMentorScoreboard(null));
+    fetch(`${API_BASE}/signal-track/stats`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setSignalStats).catch(() => setSignalStats(null));
+    fetch(`${API_BASE}/mentor-calls/scoreboard`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setMentorScoreboard).catch(() => setMentorScoreboard(null));
   }, []);
 
   const monthlyConfig = data ? {

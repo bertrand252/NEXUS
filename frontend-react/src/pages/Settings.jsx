@@ -43,7 +43,7 @@ export default function Settings() {
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ warning, ...s }) => { setSettings(s); setThresholdDraft(s.alert_threshold); })
       .catch(() => {});
   }, []);
