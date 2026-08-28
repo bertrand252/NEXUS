@@ -50,18 +50,17 @@ def _recent_intel_summaries(days: int = 3) -> list[dict[str, Any]]:
     return [r for r in res.data if r.get("summary_ai")]
 
 
-@router.post("/simulate")
-def simulate_portfolio(payload: SimulateInput):
-    if not payload.holdings:
-        raise HTTPException(status_code=400, detail="Portofolio kosong")
-
-    total_value = sum(h.lot * h.avg_price for h in payload.holdings)
+def _simulate(holdings: list[dict]) -> dict:
+    """Logic inti simulasi — reusable dari route HTTP maupun scheduler.py
+    (buat _check_portfolio_risk, cek risk harian tanpa nunggu user klik
+    tombol). `holdings`: list of {kode, lot, avg_price}."""
+    total_value = sum(h["lot"] * h["avg_price"] for h in holdings)
     if total_value == 0:
-        raise HTTPException(status_code=400, detail="Total nilai portofolio tidak boleh 0")
+        raise ValueError("Total nilai portofolio tidak boleh 0")
 
     holdings_text = "\n".join(
-        f"- {h.kode}: {h.lot} lot @ Rp{h.avg_price:,.0f} (exposure {h.lot * h.avg_price / total_value * 100:.1f}%)"
-        for h in payload.holdings
+        f"- {h['kode']}: {h['lot']} lot @ Rp{h['avg_price']:,.0f} (exposure {h['lot'] * h['avg_price'] / total_value * 100:.1f}%)"
+        for h in holdings
     )
 
     intel = _recent_intel_summaries(days=3)
@@ -81,9 +80,25 @@ def simulate_portfolio(payload: SimulateInput):
 === GEOPOLITIK / EVENT KHUSUS IDX (RUPS, dividen, MSCI, dll) ===
 Belum tersedia — nunggu sumber data otomatis (belum ada API gratis buat data ini)."""
 
+    return ask_json(SIMULATE_SYSTEM_PROMPT, user_prompt)
+
+
+@router.post("/simulate")
+def simulate_portfolio(payload: SimulateInput):
+    if not payload.holdings:
+        raise HTTPException(status_code=400, detail="Portofolio kosong")
+
+    holdings = [h.model_dump() for h in payload.holdings]
     try:
-        result = ask_json(SIMULATE_SYSTEM_PROMPT, user_prompt)
+        result = _simulate(holdings)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Groq gagal memproses simulasi: {e}")
+
+    try:
+        supabase.table("portfolio_holdings").upsert({"id": 1, "holdings": holdings}).execute()
+    except Exception:
+        pass  # tabel belum di-setup — jangan gagalin simulasi cuma gara-gara ini, cuma nge-skip persist buat _check_portfolio_risk
 
     return result

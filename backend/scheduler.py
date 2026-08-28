@@ -19,6 +19,7 @@ from forex_factory import get_forex_events
 from telegram_bot import send_alert_photo, send_alert, get_channel_updates
 from telegram_scrape import fetch_channel_posts
 from routers.intel import submit_intel, IntelInput
+from routers.settings import DEFAULTS as SETTINGS_DEFAULTS
 from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
 
 TELEGRAM_SCRAPE_INTERVAL_SECONDS = 10 * 60  # preview publik gak realtime kayak bot API, polling 10 menit cukup
@@ -32,17 +33,33 @@ CHECK_INTERVAL_SECONDS = 60 * 60  # 1 jam — dedup per-ticker jadi gak ngaruh k
 _alerted_today: set[str] = set()
 _invalidated_today: set[str] = set()
 _watchlist_alerted_today: set[str] = set()
+_econ_reminded_today: set[str] = set()
 _alerted_date: date | None = None
 
 
+def _load_settings() -> dict:
+    """Baca app_settings (single-row, id=1) — fallback ke default kalau tabel
+    belum di-setup / Supabase error, biar semua scheduled check tetep jalan
+    (behavior default) walau user belum sempet jalanin SQL setup."""
+    try:
+        res = supabase.table("app_settings").select("*").eq("id", 1).limit(1).execute()
+        if res.data:
+            row = res.data[0]
+            return {**SETTINGS_DEFAULTS, **{k: row[k] for k in SETTINGS_DEFAULTS if k in row}}
+    except Exception:
+        pass
+    return SETTINGS_DEFAULTS
+
+
 def _reset_if_new_day() -> None:
-    global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today
+    global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today, _econ_reminded_today
     today = date.today()
     if _alerted_date != today:
         _alerted_date = today
         _alerted_today = set()
         _invalidated_today = set()
         _watchlist_alerted_today = set()
+        _econ_reminded_today = set()
         # ponytail: dedup in-memory, bukan tabel Supabase — kalau backend restart
         # di hari yang sama, ticker yang udah dialert bisa ke-alert ulang sekali.
         # Upgrade ke tabel log kalau ini beneran ganggu di pemakaian nyata.
@@ -134,7 +151,7 @@ def _macro_sector_set(macro_events: list[dict]) -> set[str]:
 BREAKOUT_TECHNICAL_THRESHOLD = 12  # technical_score minimal (dari 20) buat dianggap "breakout+volume kekonfirmasi"
 
 
-def _gather_candidates(macro_events: list[dict], pool_limit: int = 20) -> list[dict]:
+def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int = 20) -> list[dict]:
     """Pool kandidat alert: filosofi "buy on breakout+volume, bukan buy on news"
     (berita/hype publik biasanya udah telat, smart money masuk duluan sebelum
     ramai diberitakan) — jadi syarat UTAMA masuk pool itu Technical Score tinggi
@@ -143,12 +160,14 @@ def _gather_candidates(macro_events: list[dict], pool_limit: int = 20) -> list[d
     manusia beneran, beda kelas sama hype berita). Berita/macro tetap di-enrich
     di bawah, tapi cuma jadi konteks tambahan buat Groq — bahkan kalau beritanya
     udah rame duluan padahal belum breakout, itu jadi WARNING telat, bukan
-    pendukung (lihat pick_alert_candidate)."""
+    pendukung (lihat pick_alert_candidate). Baseline total_score minimal-nya
+    dari `settings["alert_threshold"]` — user-configurable via Settings
+    (slider "Alert Threshold"), bukan hardcoded lagi."""
     try:
         scan_res = (
             supabase.table("scanner_cache")
             .select("ticker,total_score,signal,sector,technical_score")
-            .in_("signal", ["Strong", "Moderate"])
+            .gte("total_score", settings["alert_threshold"])
             .execute()
         )
         scan_by_ticker = {r["ticker"]: r for r in scan_res.data}
@@ -257,10 +276,14 @@ def _check_signal_outcomes() -> None:
 
 def check_and_alert() -> None:
     _reset_if_new_day()
+    settings = _load_settings()
+    if not settings["notif_strong_signal"]:
+        return  # user matiin "Strong signal alerts" di Settings
+
     _check_invalidated()
 
     macro_events = [e for e in get_forex_events() if e["impact"] in ("High", "Medium")]
-    candidates = _gather_candidates(macro_events)
+    candidates = _gather_candidates(macro_events, settings)
     if not candidates:
         return
 
@@ -361,11 +384,111 @@ def _check_watchlist_alerts() -> None:
                 _watchlist_alerted_today.add(ticker)
 
 
+def _check_economic_reminders() -> None:
+    """Gated `notif_economic_events` di Settings. Event High impact hari ini
+    (dari Forex Factory, udah di-cache 5 menit di forex_factory.py), dedup
+    in-memory biar gak nge-spam tiap jam buat event yang sama."""
+    settings = _load_settings()
+    if not settings["notif_economic_events"]:
+        return
+
+    today = date.today().isoformat()
+    try:
+        events = [e for e in get_forex_events() if e["impact"] == "High" and e["date"] == today]
+    except Exception:
+        return
+    new_events = [e for e in events if e["event"] not in _econ_reminded_today]
+    if not new_events:
+        return
+
+    lines = ["📅 Event Ekonomi High Impact Hari Ini:"]
+    for e in new_events:
+        lines.append(f"{e['flag']} {e['time_wib']} WIB — {e['event']} ({e['currency']})")
+    if send_alert("\n".join(lines)):
+        for e in new_events:
+            _econ_reminded_today.add(e["event"])
+
+
+def _check_portfolio_risk() -> None:
+    """Gated `notif_portfolio_risk` di Settings. Reuse holdings terakhir yang
+    kesimpen otomatis pas user klik "Jalankan Simulasi" di Portfolio Simulation
+    (routers/portfolio.py::simulate_portfolio) — gak ada UI simpan-portofolio
+    terpisah, ini "nangkep" opportunistic."""
+    settings = _load_settings()
+    if not settings["notif_portfolio_risk"]:
+        return
+
+    try:
+        res = supabase.table("portfolio_holdings").select("holdings").eq("id", 1).limit(1).execute()
+    except Exception:
+        return
+    if not res.data or not res.data[0].get("holdings"):
+        return
+
+    from routers.portfolio import _simulate
+    try:
+        result = _simulate(res.data[0]["holdings"])
+    except Exception:
+        return
+
+    if result.get("overall_risk") == "high":
+        send_alert(f"⚠️ Portfolio Risk HIGH\n\n{result.get('portfolio_impact_summary', '-')}")
+
+
+NIGHT_RECAP_HOUR = 20  # 20:00 waktu lokal server, abis market tutup
+
+
+def _send_night_recap() -> None:
+    """Gated `notif_daily_recap` di Settings. Recap ringan: closing IHSG,
+    jumlah Strong signal hari ini, win rate NEXUS kalau datanya udah ada."""
+    settings = _load_settings()
+    if not settings["notif_daily_recap"]:
+        return
+
+    from routers.scanner import get_ihsg
+    from routers.signal_track import get_signal_track_stats
+
+    try:
+        ihsg = get_ihsg()
+    except Exception:
+        ihsg = None
+
+    try:
+        strong_res = supabase.table("scanner_cache").select("ticker").eq("signal", "Strong").execute()
+        strong_count = len(strong_res.data)
+    except Exception:
+        strong_count = 0
+
+    stats = get_signal_track_stats()
+
+    lines = ["🌙 Recap Malam Ini"]
+    if ihsg:
+        lines.append(f"IHSG: {ihsg['price']:,.0f} ({ihsg['change_pct']:+.2f}%)")
+    lines.append(f"Strong signal hari ini: {strong_count} ticker")
+    if stats.get("win_rate_pct") is not None:
+        lines.append(f"Win rate NEXUS: {stats['win_rate_pct']}% ({stats['tp_hit']} TP / {stats['sl_hit']} SL)")
+    send_alert("\n".join(lines))
+
+
 async def run_scheduler() -> None:
     while True:
         check_and_alert()
         _check_watchlist_alerts()
+        _check_economic_reminders()
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+
+
+async def run_night_recap() -> None:
+    while True:
+        now = datetime.now()
+        target = now.replace(hour=NIGHT_RECAP_HOUR, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            _send_night_recap()
+        except Exception:
+            pass
 
 
 async def run_telegram_channel_listener() -> None:
@@ -453,5 +576,9 @@ async def run_morning_routine() -> None:
             pass
         try:
             _check_signal_outcomes()
+        except Exception:
+            pass
+        try:
+            _check_portfolio_risk()
         except Exception:
             pass

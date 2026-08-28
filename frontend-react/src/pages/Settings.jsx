@@ -4,13 +4,27 @@ import { useProfile } from '../hooks/useProfile';
 import { saveProfile, initials } from '../lib/profile';
 import { supabase } from '../lib/supabaseClient';
 
-function Toggle({ defaultOn }) {
-  const [on, setOn] = useState(defaultOn);
+function Toggle({ checked, onChange }) {
   return (
-    <div className={`toggle ${on ? 'on' : ''}`} onClick={() => setOn((v) => !v)}>
+    <div className={`toggle ${checked ? 'on' : ''}`} onClick={onChange}>
       <div className="toggle-dot"></div>
     </div>
   );
+}
+
+const SETTINGS_DEFAULTS = {
+  alert_threshold: 50,
+  notif_strong_signal: true,
+  notif_daily_recap: true,
+  notif_economic_events: true,
+  notif_portfolio_risk: true,
+};
+
+function thresholdLabel(v) {
+  if (v >= 75) return 'Strong';
+  if (v >= 50) return 'Moderate';
+  if (v >= 25) return 'Weak';
+  return 'None';
 }
 
 export default function Settings() {
@@ -23,6 +37,33 @@ export default function Settings() {
 
   const [watchlist, setWatchlist] = useState(null);
   const [newTicker, setNewTicker] = useState('');
+
+  const [settings, setSettings] = useState(SETTINGS_DEFAULTS);
+  const [thresholdDraft, setThresholdDraft] = useState(SETTINGS_DEFAULTS.alert_threshold);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((r) => r.json())
+      .then(({ warning, ...s }) => { setSettings(s); setThresholdDraft(s.alert_threshold); })
+      .catch(() => {});
+  }, []);
+
+  async function saveSettings(next) {
+    const prev = settings;
+    setSettings(next);
+    try {
+      const res = await fetch(`${API_BASE}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    } catch (err) {
+      alert('Gagal simpan setting: ' + err.message);
+      setSettings(prev);
+      setThresholdDraft(prev.alert_threshold);
+    }
+  }
 
   const profile = useProfile();
   const [editingProfile, setEditingProfile] = useState(false);
@@ -191,25 +232,31 @@ export default function Settings() {
 
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <p className="text-sm font-bold text-white mb-1">Alert Threshold</p>
-          <p className="text-xs text-slate-500 mb-5">Only notify when accumulation score crosses this value.</p>
+          <p className="text-xs text-slate-500 mb-5">Score minimal (Total Score 0-100) buat masuk pool kandidat alert Telegram.</p>
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] text-slate-500 font-mono">0</span>
-            <span className="text-2xl font-extrabold text-cyan font-mono">30</span>
-            <span className="text-[11px] text-slate-500 font-mono">45</span>
+            <span className="text-2xl font-extrabold text-cyan font-mono">{thresholdDraft}</span>
+            <span className="text-[11px] text-slate-500 font-mono">100</span>
           </div>
-          <input type="range" min="0" max="45" defaultValue="30" className="w-full accent-cyan" />
+          <input
+            type="range" min="0" max="100" value={thresholdDraft} className="w-full accent-cyan"
+            onChange={(e) => setThresholdDraft(Number(e.target.value))}
+            onMouseUp={() => saveSettings({ ...settings, alert_threshold: thresholdDraft })}
+            onTouchEnd={() => saveSettings({ ...settings, alert_threshold: thresholdDraft })}
+          />
           <div className="flex justify-between text-[10px] text-slate-500 mt-2 font-mono">
-            <span>None</span><span>Weak</span><span>Moderate</span><span>Strong</span>
+            <span>None</span><span>Weak (25)</span><span>Moderate (50)</span><span>Strong (75)</span>
           </div>
+          <p className="text-[10px] text-slate-500 mt-2 font-mono">Sekarang: {thresholdLabel(thresholdDraft)}</p>
         </div>
 
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <p className="text-sm font-bold text-white mb-4">Notification Preferences</p>
           <div className="space-y-4">
-            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Strong signal alerts</span><Toggle defaultOn /></div>
-            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Daily night recap</span><Toggle defaultOn /></div>
-            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Economic event reminders</span><Toggle /></div>
-            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Portfolio risk warnings</span><Toggle defaultOn /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Strong signal alerts</span><Toggle checked={settings.notif_strong_signal} onChange={() => saveSettings({ ...settings, notif_strong_signal: !settings.notif_strong_signal })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Daily night recap</span><Toggle checked={settings.notif_daily_recap} onChange={() => saveSettings({ ...settings, notif_daily_recap: !settings.notif_daily_recap })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Economic event reminders</span><Toggle checked={settings.notif_economic_events} onChange={() => saveSettings({ ...settings, notif_economic_events: !settings.notif_economic_events })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Portfolio risk warnings</span><Toggle checked={settings.notif_portfolio_risk} onChange={() => saveSettings({ ...settings, notif_portfolio_risk: !settings.notif_portfolio_risk })} /></div>
           </div>
         </div>
 

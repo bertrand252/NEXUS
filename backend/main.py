@@ -4,10 +4,11 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from config import supabase, FRONTEND_ORIGINS
 from auth_guard import require_auth
-from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls, daily_briefing, signal_track
+from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls, daily_briefing, signal_track, settings
 from scheduler import (
     run_scheduler,
     run_morning_routine,
+    run_night_recap,
     run_telegram_channel_listener,
     run_telegram_scrape_listener,
 )
@@ -15,14 +16,15 @@ from scheduler import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """4 task background (lihat scheduler.py buat detail tiap fungsi):
-    run_scheduler, run_morning_routine, run_telegram_channel_listener (channel
-    yang bot-nya admin), run_telegram_scrape_listener (channel yang cuma
+    """5 task background (lihat scheduler.py buat detail tiap fungsi):
+    run_scheduler, run_morning_routine, run_night_recap, run_telegram_channel_listener
+    (channel yang bot-nya admin), run_telegram_scrape_listener (channel yang cuma
     di-subscribe biasa, di-scrape dari preview publik). Semua skip diem-diem
-    kalau config terkait kosong."""
+    kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
         asyncio.create_task(run_morning_routine()),
+        asyncio.create_task(run_night_recap()),
         asyncio.create_task(run_telegram_channel_listener()),
         asyncio.create_task(run_telegram_scrape_listener()),
     ]
@@ -69,3 +71,4 @@ app.include_router(watchlist.router, prefix="/watchlist", tags=["watchlist"], de
 app.include_router(mentor_calls.router, prefix="/mentor-calls", tags=["mentor-calls"], dependencies=_auth)
 app.include_router(daily_briefing.router, prefix="/daily-briefing", tags=["daily-briefing"], dependencies=_auth)
 app.include_router(signal_track.router, prefix="/signal-track", tags=["signal-track"], dependencies=_auth)
+app.include_router(settings.router, prefix="/settings", tags=["settings"], dependencies=_auth)
