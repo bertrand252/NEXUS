@@ -6,7 +6,7 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 — gak butuh cron/Celery/proses terpisah, paling sederhana buat single-user tool.
 """
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import yfinance as yf
 from config import supabase, WIB, today_wib
 from routers.scanner import _get_history
@@ -50,13 +50,6 @@ def _in_offhours_window() -> bool:
     hour = _now_wib().hour
     return hour >= ALERT_OFFHOURS_START or hour < ALERT_OFFHOURS_END
 
-_alerted_today: set[str] = set()
-_invalidated_today: set[str] = set()
-_watchlist_alerted_today: set[str] = set()
-_econ_reminded_today: set[str] = set()
-_bsjp_alerted_today = False
-_alerted_date: date | None = None
-
 
 def _load_settings() -> dict:
     """Baca app_settings (single-row, id=1) — fallback ke default kalau tabel
@@ -72,26 +65,51 @@ def _load_settings() -> dict:
     return SETTINGS_DEFAULTS
 
 
-def _reset_if_new_day() -> None:
-    global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today, _econ_reminded_today, _bsjp_alerted_today
-    today = today_wib()
-    if _alerted_date != today:
-        _alerted_date = today
-        _alerted_today = set()
-        _invalidated_today = set()
-        _watchlist_alerted_today = set()
-        _econ_reminded_today = set()
-        _bsjp_alerted_today = False
-        # ponytail: dedup in-memory, bukan tabel Supabase — kalau backend restart
-        # di hari yang sama, ticker yang udah dialert bisa ke-alert ulang sekali.
-        # Upgrade ke tabel log kalau ini beneran ganggu di pemakaian nyata.
+def _dedup_seen(category: str, key: str) -> bool:
+    """Dedup di tabel Supabase (alert_dedup), BUKAN in-memory — dedup in-memory
+    kena reset tiap Railway redeploy/restart, bikin alert yang sama kekirim
+    ulang tiap kali ada deploy (ketauan dari laporan user, event ekonomi yang
+    sama kekirim berkali-kali gara-gara sesi ngoding aktif push berkali-kali).
+    Scoped per (category, key, dedup_date=hari ini WIB)."""
+    try:
+        res = (
+            supabase.table("alert_dedup").select("id")
+            .eq("category", category).eq("key", key).eq("dedup_date", today_wib().isoformat())
+            .limit(1).execute()
+        )
+        return bool(res.data)
+    except Exception:
+        return False  # tabel belum di-setup / gagal query — jangan block alert cuma gara-gara ini
+
+
+def _dedup_seen_keys(category: str) -> set[str]:
+    """Semua key yang udah ke-dedup hari ini buat 1 category (dipake
+    _check_invalidated buat tau semua ticker yang udah dialert)."""
+    try:
+        res = (
+            supabase.table("alert_dedup").select("key")
+            .eq("category", category).eq("dedup_date", today_wib().isoformat())
+            .execute()
+        )
+        return {r["key"] for r in res.data}
+    except Exception:
+        return set()
+
+
+def _dedup_mark(category: str, key: str) -> None:
+    try:
+        supabase.table("alert_dedup").insert({
+            "category": category, "key": key, "dedup_date": today_wib().isoformat(),
+        }).execute()
+    except Exception:
+        pass  # tabel belum ada, atau race/duplicate — gak fatal, worst case kirim dobel sesekali
 
 
 def _check_invalidated() -> None:
     """Ticker yang tadinya di-alert Strong hari ini, cek ulang statusnya —
     kalau udah gak Strong lagi, kirim 1 notif teks (bukan foto), sekali aja
     per ticker per hari."""
-    pending = _alerted_today - _invalidated_today
+    pending = _dedup_seen_keys("alerted") - _dedup_seen_keys("invalidated")
     if not pending:
         return
     try:
@@ -104,7 +122,7 @@ def _check_invalidated() -> None:
                 f"⚪ Update: {row['ticker']} udah gak Strong lagi "
                 f"(sekarang {row['signal']}, score {row['total_score']}/100)."
             )
-            _invalidated_today.add(row["ticker"])
+            _dedup_mark("invalidated", row["ticker"])
 
 
 def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
@@ -205,7 +223,7 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
         t for t, r in scan_by_ticker.items()
         if (r.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD
     }
-    pool = (breakout_tickers | set(mentor_by_ticker)) - _alerted_today
+    pool = (breakout_tickers | set(mentor_by_ticker)) - _dedup_seen_keys("alerted")
 
     candidates = []
     for ticker in pool:
@@ -298,7 +316,6 @@ def _check_signal_outcomes() -> None:
 
 
 def check_and_alert() -> None:
-    _reset_if_new_day()
     if not _in_offhours_window():
         return  # Swing itu non-urgent, sengaja cuma alert pas market tutup (17:00-08:00)
 
@@ -365,7 +382,7 @@ def check_and_alert() -> None:
     if not send_alert_photo(chart_png, caption):
         return  # Telegram belum di-connect di Settings, atau gagal kirim
 
-    _alerted_today.add(ticker)
+    _dedup_mark("alerted", ticker)
 
     try:
         supabase.table("signal_alerts").insert({
@@ -403,17 +420,18 @@ def _check_watchlist_alerts() -> None:
 
     for row in scan_res.data:
         ticker = row["ticker"]
-        if ticker in _watchlist_alerted_today:
+        if _dedup_seen("watchlist", ticker):
             continue
         if (row.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD:
             if send_alert(f"⭐ Watchlist: {ticker} breakout+volume kekonfirmasi (technical {row['technical_score']}/20)."):
-                _watchlist_alerted_today.add(ticker)
+                _dedup_mark("watchlist", ticker)
 
 
 def _check_economic_reminders() -> None:
     """Gated `notif_economic_events` di Settings. Event High impact hari ini
     (dari Forex Factory, udah di-cache 5 menit di forex_factory.py), dedup
-    in-memory biar gak nge-spam tiap jam buat event yang sama."""
+    di Supabase biar gak nge-spam tiap jam (atau tiap redeploy) buat event
+    yang sama."""
     settings = _load_settings()
     if not settings["notif_economic_events"]:
         return
@@ -423,7 +441,7 @@ def _check_economic_reminders() -> None:
         events = [e for e in get_forex_events() if e["impact"] == "High" and e["date"] == today]
     except Exception:
         return
-    new_events = [e for e in events if e["event"] not in _econ_reminded_today]
+    new_events = [e for e in events if not _dedup_seen("econ", e["event"])]
     if not new_events:
         return
 
@@ -432,7 +450,7 @@ def _check_economic_reminders() -> None:
         lines.append(f"{e['flag']} {e['time_wib']} WIB — {e['event']} ({e['currency']})")
     if send_alert("\n".join(lines)):
         for e in new_events:
-            _econ_reminded_today.add(e["event"])
+            _dedup_mark("econ", e["event"])
 
 
 def _check_portfolio_risk() -> None:
@@ -528,8 +546,7 @@ def _check_bsjp_screener() -> None:
     BUKAN 1 "pick terbaik" kayak Swing — jadi kirim SEMUA ticker yang lolos
     sekaligus, gak lewat Groq/pick_alert_candidate (gak butuh judgment call
     multi-faktor, syaratnya udah jelas AND semua)."""
-    global _bsjp_alerted_today
-    if _bsjp_alerted_today:
+    if _dedup_seen("bsjp", "screener"):
         return
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
@@ -550,7 +567,7 @@ def _check_bsjp_screener() -> None:
     lines.append("⏰ Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.")
 
     if send_alert("\n".join(lines)):
-        _bsjp_alerted_today = True
+        _dedup_mark("bsjp", "screener")
 
 
 async def run_bsjp_screener() -> None:
