@@ -57,25 +57,34 @@ def translate_to_indonesian(text: str) -> str:
 
 
 def pick_alert_candidate(candidates: list[dict], macro_events: list[dict]) -> dict:
-    """Fase 1 seleksi alert Telegram — dikasih pool kandidat (score NEXUS + berita
-    terkait + status call mentor kalau ada) plus event ekonomi global minggu ini.
-    Groq milih PALING BANYAK 1 ticker yang layak di-alert, atau nolak semua kalau
-    gak ada yang meyakinkan. Return: {"pilih": str|None, "faktor_pendukung": [str],
-    "alasan_singkat": str}."""
+    """Fase 1 seleksi alert Telegram — dikasih pool kandidat (technical_score/
+    breakout_confirmed dari NEXUS, berita terkait kalau ada, status call mentor
+    kalau ada) plus event ekonomi global minggu ini. Groq milih PALING BANYAK 1
+    ticker yang layak di-alert, atau nolak semua kalau gak ada yang meyakinkan.
+    Return: {"pilih": str|None, "faktor_pendukung": [str], "alasan_singkat": str}."""
     system_prompt = (
-        "Kamu analis saham IDX yang skeptis, bukan yang gampang excited. Dikasih "
-        "daftar kandidat saham (skor teknikal NEXUS, dan kalau ada: berita terkait "
-        "beberapa hari terakhir, status call aktif dari mentor trading) plus event "
-        "ekonomi global minggu ini. Tugas kamu: pilih PALING BANYAK 1 ticker yang "
-        "layak di-alert. SYARAT WAJIB: skor teknikal-nya Strong/Moderate DAN ada "
-        "minimal 1 faktor pendukung KONKRET di luar skor — berita yang sejalan "
-        "sama ticker/sektornya, ATAU jadi call aktif mentor, ATAU event ekonomi "
-        "global yang mendukung sektornya. JANGAN pilih cuma modal skor tinggi "
-        "tanpa faktor pendukung lain, dan jangan mengarang faktor yang gak ada di "
-        "data. Kalau gak ada kandidat yang beneran meyakinkan, WAJIB balikin "
-        "pilih: null — mending gak ada call daripada call asal-asalan. Balikin "
-        "JSON persis: {\"pilih\": \"TICKER\" atau null, \"faktor_pendukung\": "
-        '["poin 1", "poin 2"], "alasan_singkat": "1 kalimat"}'
+        "Kamu analis saham IDX yang pegang prinsip 'buy on breakout+volume, sell "
+        "on news' — begitu suatu saham udah rame diberitakan/viral, biasanya udah "
+        "TELAT buat masuk (pemain besar udah akumulasi duluan sebelum publik tau). "
+        "Dikasih daftar kandidat saham: breakout_confirmed (udah tembus resistance "
+        "20 hari + volume gede, dikonfirmasi data harga real), signal/score NEXUS, "
+        "dan kalau ada: berita terkait beberapa hari terakhir, status call aktif "
+        "mentor trading, macro_sector_match (event ekonomi global yang searah "
+        "sektornya). Tugas kamu: pilih PALING BANYAK 1 ticker yang layak di-alert.\n\n"
+        "SYARAT WAJIB: breakout_confirmed harus true, ATAU ada call aktif dari "
+        "mentor trading (itu analisa manusia beneran, bukan hype). JANGAN pilih "
+        "ticker cuma karena ada berita bagus tanpa breakout_confirmed — itu "
+        "persis kesalahan yang mau dihindari (beli di puncak pas berita udah "
+        "nyebar). Kalau ada kandidat yang beritanya udah rame/bullish TAPI "
+        "breakout_confirmed-nya false, JANGAN dipilih, dan boleh disebut di "
+        "alasan_singkat sebagai 'udah telat, breakout belum kekonfirmasi'. "
+        "Berita, mentor call, dan macro cuma jadi KONTEKS TAMBAHAN buat kandidat "
+        "yang udah breakout_confirmed — bukan pengganti breakout itu sendiri. "
+        "Kalau gak ada kandidat yang penuhi syarat wajib, WAJIB balikin pilih: "
+        "null — mending gak ada call daripada call asal-asalan atau telat. "
+        "Jangan mengarang faktor yang gak ada di data. Balikin JSON persis: "
+        '{"pilih": "TICKER" atau null, "faktor_pendukung": ["poin 1", "poin 2"], '
+        '"alasan_singkat": "1 kalimat"}'
     )
     user_prompt = json.dumps(
         {"kandidat": candidates, "event_ekonomi_global": macro_events}, ensure_ascii=False
@@ -92,15 +101,20 @@ def analyze_alert(ticker: str, score_breakdown: dict, levels: dict, context: dic
     ringkasan fundamental — biar alasannya ngerujuk bukti konkret, bukan cuma angka
     score. Return: {"alasan_strong": str, "alasan_risk": str}."""
     system_prompt = (
-        "Kamu analis saham IDX. Dikasih breakdown score teknikal, level "
-        "support/resistance, dan (kalau ada) konteks pendukung — berita, call "
-        "mentor, event ekonomi global, ringkasan fundamental perusahaan. Jelasin "
-        "singkat (maksimal 2-3 kalimat pendek per poin) kenapa sinyalnya kuat — "
-        "SEBUTIN faktor pendukung konkret yang dikasih kalau ada, jangan cuma "
-        "ngomongin angka score — dan kenapa risk-nya segitu. Bahasa Indonesia "
-        "santai, to the point, jangan ngasih rekomendasi eksplisit 'beli sekarang' "
-        "— jelasin data yang ada aja, jangan mengarang yang gak ada di data. "
-        "Balikin JSON persis: {\"alasan_strong\": \"...\", \"alasan_risk\": \"...\"}"
+        "Kamu analis saham IDX yang pegang prinsip 'buy on breakout+volume, sell "
+        "on news'. Dikasih breakdown score teknikal (technical_score = breakout "
+        "resistance 20 hari + volume, INI alasan utamanya), level support/"
+        "resistance, dan (kalau ada) konteks tambahan — berita, call mentor, "
+        "event ekonomi global, ringkasan fundamental perusahaan. Jelasin singkat "
+        "(maksimal 2-3 kalimat pendek per poin) kenapa sinyalnya kuat — UTAMAKAN "
+        "breakout+volume-nya, sebutin konteks tambahan cuma sebagai pelengkap. "
+        "Kalau ada berita bullish yang udah beredar duluan, sebutin itu sebagai "
+        "CATATAN HATI-HATI (kemungkinan udah gak terlalu awal lagi), bukan "
+        "sebagai alasan utama kenapa masuk. Jelasin juga kenapa risk-nya segitu. "
+        "Bahasa Indonesia santai, to the point, jangan ngasih rekomendasi "
+        "eksplisit 'beli sekarang' — jelasin data yang ada aja, jangan mengarang "
+        "yang gak ada di data. Balikin JSON persis: "
+        '{"alasan_strong": "...", "alasan_risk": "..."}'
     )
     payload = {"ticker": ticker, **score_breakdown, **levels}
     if context:

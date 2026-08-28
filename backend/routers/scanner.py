@@ -49,17 +49,6 @@ def _get_history(ticker: str, period: str = "2mo"):
     return hist
 
 
-def _rsi14(closes) -> float:
-    """RSI(14) standar. Butuh minimal ~15 baris data — _get_history pakai period 2mo biar aman."""
-    delta = closes.diff()
-    avg_gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
-    avg_loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
-    if not avg_loss or avg_loss != avg_loss:  # 0 atau NaN (data kurang)
-        return 50.0  # netral kalau gak bisa dihitung
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
 def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> dict:
     price_now = float(hist["Close"].iloc[-1])
     price_5d_ago = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else float(hist["Close"].iloc[0])
@@ -69,11 +58,21 @@ def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> 
     high_20d = float(hist["High"].tail(20).max())
     chg_pct = (price_now - float(hist["Close"].iloc[-2])) / float(hist["Close"].iloc[-2]) * 100 if len(hist) >= 2 else 0.0
 
-    ma20 = float(hist["Close"].tail(20).mean())
-    price_vs_ma20_pct = (price_now - ma20) / ma20 * 100 if ma20 else 0.0
-    rsi14 = _rsi14(hist["Close"])
+    # resistance dari 20 hari SEBELUM hari ini (bukan termasuk hari ini) — kalau
+    # kepake hist["High"].tail(20) yang masih ngikut hari ini, "breakout" jadi
+    # tautologi (resistance-nya ke-update duluan sama harga hari ini sendiri)
+    prior = hist.iloc[:-1].tail(20)
+    resistance_prior = float(prior["High"].max()) if not prior.empty else price_now
 
-    score = compute_score(ticker, volume_today, volume_avg20, price_now, price_5d_ago, low_20d, high_20d, rsi14, price_vs_ma20_pct, accum_lookup)
+    today = hist.iloc[-1]
+    day_range = float(today["High"] - today["Low"])
+    close_position_pct = (float(today["Close"]) - float(today["Low"])) / day_range if day_range > 0 else 0.5
+    value_traded_idr = price_now * volume_today
+
+    score = compute_score(
+        ticker, volume_today, volume_avg20, price_now, price_5d_ago, low_20d, high_20d,
+        resistance_prior, close_position_pct, value_traded_idr, accum_lookup,
+    )
 
     return {
         "ticker": ticker,

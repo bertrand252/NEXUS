@@ -129,18 +129,23 @@ def _macro_sector_set(macro_events: list[dict]) -> set[str]:
     return sectors
 
 
+BREAKOUT_TECHNICAL_THRESHOLD = 12  # technical_score minimal (dari 20) buat dianggap "breakout+volume kekonfirmasi"
+
+
 def _gather_candidates(macro_events: list[dict], pool_limit: int = 20) -> list[dict]:
-    """Pool kandidat alert: scanner_cache Strong/Moderate UNION mentor call
-    aktif, exclude yang udah ke-alert hari ini, di-enrich sama berita + info
-    mentor call. Universe IDX-nya 951 ticker, jadi Strong/Moderate doang bisa
-    ratusan — filter dulu ke yang punya faktor pendukung eksternal (berita/
-    mentor/macro sektor), sisanya bakal ditolak Groq juga (lihat syarat di
-    pick_alert_candidate), jadi gak perlu ikut dikirim & makan token/TPM
-    limit Groq buat sia-sia."""
+    """Pool kandidat alert: filosofi "buy on breakout+volume, bukan buy on news"
+    (berita/hype publik biasanya udah telat, smart money masuk duluan sebelum
+    ramai diberitakan) — jadi syarat UTAMA masuk pool itu Technical Score tinggi
+    (breakout resistance 20 hari + volume gede, lihat scoring.py::technical_score),
+    BUKAN ada berita pendukung. Mentor call aktif tetap ikut union (itu analisa
+    manusia beneran, beda kelas sama hype berita). Berita/macro tetap di-enrich
+    di bawah, tapi cuma jadi konteks tambahan buat Groq — bahkan kalau beritanya
+    udah rame duluan padahal belum breakout, itu jadi WARNING telat, bukan
+    pendukung (lihat pick_alert_candidate)."""
     try:
         scan_res = (
             supabase.table("scanner_cache")
-            .select("ticker,total_score,signal,sector")
+            .select("ticker,total_score,signal,sector,technical_score")
             .in_("signal", ["Strong", "Moderate"])
             .execute()
         )
@@ -152,7 +157,11 @@ def _gather_candidates(macro_events: list[dict], pool_limit: int = 20) -> list[d
     news_by_ticker = _recent_news_by_ticker()
     macro_sectors = _macro_sector_set(macro_events)
 
-    pool = (set(scan_by_ticker) | set(mentor_by_ticker)) - _alerted_today
+    breakout_tickers = {
+        t for t, r in scan_by_ticker.items()
+        if (r.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD
+    }
+    pool = (breakout_tickers | set(mentor_by_ticker)) - _alerted_today
 
     candidates = []
     for ticker in pool:
@@ -161,21 +170,24 @@ def _gather_candidates(macro_events: list[dict], pool_limit: int = 20) -> list[d
         berita = news_by_ticker.get(ticker)
         sector = scan["sector"] if scan else None
         macro_match = bool(sector) and sector in macro_sectors
-        if not (berita or mentor or macro_match):
-            continue  # gak ada faktor pendukung eksternal sama sekali — bakal ditolak Groq juga
         candidates.append({
             "ticker": ticker,
             "total_score": scan["total_score"] if scan else None,
             "signal": scan["signal"] if scan else None,
+            "technical_score": scan["technical_score"] if scan else None,
+            "breakout_confirmed": ticker in breakout_tickers,
             "sector": sector,
+            "macro_sector_match": macro_match,
             "mentor_call": (
                 {"status": mentor["status"], "buy_price": mentor["buy_price"]} if mentor else None
             ),
             "berita": berita,
-            "macro_sector_match": macro_match,
         })
 
-    candidates.sort(key=lambda c: c["total_score"] or 0, reverse=True)
+    # urut dari breakout+volume paling kuat (technical_score), BUKAN total_score —
+    # total_score masih kecampur Accumulation Score yang mock, technical_score
+    # murni breakout+volume yang REAL
+    candidates.sort(key=lambda c: c["technical_score"] or 0, reverse=True)
     return candidates[:pool_limit]
 
 
@@ -215,6 +227,8 @@ def check_and_alert() -> None:
     candidate = next((c for c in candidates if c["ticker"] == ticker), None)
     if candidate is None or candidate.get("signal") not in ("Strong", "Moderate"):
         return  # jaga-jaga kalau Groq halusinasi ticker di luar pool / gak penuhi syarat skor
+    if not candidate.get("breakout_confirmed") and not candidate.get("mentor_call"):
+        return  # jaga-jaga kalau Groq ngelanggar instruksi sendiri (pilih modal berita doang, gak breakout)
 
     try:
         score_res = (
