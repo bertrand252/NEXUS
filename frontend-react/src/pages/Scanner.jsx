@@ -27,7 +27,20 @@ function ScanRow({ s, isMentorCall }) {
           </div>
         </div>
       </td>
-      <td className="px-5 py-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${m.cls}`}>{m.dot} {s.signal === 'None' ? 'No Signal' : s.signal}</span></td>
+      <td className="px-5 py-3">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${m.cls}`}>{m.dot} {s.signal === 'None' ? 'No Signal' : s.signal}</span>
+          {(s.signal === 'Strong' || s.signal === 'Moderate') && (
+            <span title="Cocok gaya Swing" className="text-[9px] font-sans font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/30">Swing</span>
+          )}
+          {s.cocok_bsjp && (
+            <span title="Lolos screener BSJP (Beli Sore Jual Pagi)" className="text-[9px] font-sans font-semibold px-1.5 py-0.5 rounded-full bg-moderate/10 text-moderate border border-moderate/30">BSJP</span>
+          )}
+          {s.cocok_invest && (
+            <span title="Cocok gaya Investasi (big cap + dividen)" className="text-[9px] font-sans font-semibold px-1.5 py-0.5 rounded-full bg-risklow/10 text-risklow border border-risklow/30">Invest</span>
+          )}
+        </div>
+      </td>
       <td className="px-5 py-3 text-right">
         <Link to={`/stock-detail?t=${s.ticker}`} className="text-[11px] font-sans font-semibold px-3 py-1.5 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition">View</Link>
       </td>
@@ -41,6 +54,7 @@ export default function Scanner() {
   const [loadError, setLoadError] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshingFundamentals, setRefreshingFundamentals] = useState(false);
 
   const [search, setSearch] = useState('');
   const [signal, setSignal] = useState('');
@@ -90,6 +104,19 @@ export default function Scanner() {
     }
   }
 
+  async function runRefreshFundamentals() {
+    setRefreshingFundamentals(true);
+    try {
+      const res = await fetch(`${API_BASE}/scanner/refresh-fundamentals`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Refresh fundamentals gagal (${res.status})`);
+      await loadScanner();
+    } catch (err) {
+      alert('Gagal refresh fundamentals: ' + err.message);
+    } finally {
+      setRefreshingFundamentals(false);
+    }
+  }
+
   const sectors = useMemo(() => [...new Set(allData.map((s) => s.sector).filter(Boolean))].sort(), [allData]);
 
   const filtered = useMemo(() => {
@@ -122,6 +149,13 @@ export default function Scanner() {
             className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30 hover:bg-cyan/20 transition disabled:opacity-50"
           >
             {refreshing ? 'Refresh Price... (bisa semenit-an)' : '↻ Refresh Price'}
+          </button>
+          <button
+            onClick={runRefreshFundamentals} disabled={refreshingFundamentals}
+            title="Data fundamental (PER/PBV/dividend/market cap) buat badge Invest — jarang berubah, gak perlu sering-sering"
+            className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-risklow/10 text-risklow border border-risklow/30 hover:bg-risklow/20 transition disabled:opacity-50"
+          >
+            {refreshingFundamentals ? 'Refresh Fundamentals... (bisa lama)' : '↻ Refresh Fundamentals'}
           </button>
           <button className="relative w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center hover:border-accent/50 transition">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8C6 15 3 17 3 17H21S18 15 18 8Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.73 21A2 2 0 0 1 10.27 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>

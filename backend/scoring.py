@@ -116,6 +116,40 @@ def compute_score(ticker: str, volume_today: float, volume_avg20: float,
     }
 
 
+def bsjp_criteria(price_now: float, price_prev: float, volume_today: float,
+                   volume_avg20: float, ma5: float, value_traded_idr: float) -> bool:
+    """BSJP (Beli Sore Jual Pagi) — screener checklist pass/fail, BUKAN score
+    0-100 kayak yang lain (ini emang gaya "lolos syarat atau enggak", bukan
+    dinilai). Kriteria dari komunitas screener saham Indonesia (Stockbit/DSI,
+    formula publik) — harga breakout ≥5% dari kemarin DIKONFIRMASI volume 2x
+    rata-rata, di atas MA5, minat institusi (value >Rp5M), bukan saham gocap."""
+    if not price_prev or not volume_avg20:
+        return False
+    return (
+        price_now >= price_prev * 1.05
+        and volume_today >= volume_avg20 * 2
+        and price_now > ma5
+        and value_traded_idr > 5_000_000_000
+        and price_prev > 50
+    )
+
+
+def invest_criteria(per: float | None, pbv: float | None, dividend_yield: float | None,
+                     market_cap: float | None) -> bool:
+    """Investasi (hold panjang) — big cap + dividen konsisten + harga gak
+    kemahalan. CATATAN: ini bukan angka baku dari 1 sumber tunggal, gue
+    reconcile dari beberapa kriteria screener value-investing + catatan lama
+    project ("big cap + dividend") — kalau ada acuan lebih spesifik (misal
+    dari mentor), tinggal di-tweak angkanya di sini, 1 tempat doang."""
+    if per is None or pbv is None or dividend_yield is None or market_cap is None:
+        return False
+    return (
+        market_cap >= 10_000_000_000_000  # Rp10 triliun ke atas
+        and dividend_yield >= 3
+        and 0 < per <= 25
+    )
+
+
 def signal_label(score: int) -> str:
     if score >= 75:
         return "Strong"

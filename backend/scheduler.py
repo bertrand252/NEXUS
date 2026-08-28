@@ -30,10 +30,23 @@ MORNING_ROUTINE_HOUR = 6  # 06:00 waktu lokal server, sebelum market IDX buka ja
 
 CHECK_INTERVAL_SECONDS = 60 * 60  # 1 jam — dedup per-ticker jadi gak ngaruh ke spam, cuma ke seberapa cepet nyampe
 
+# Swing/Invest/BSJP itu gak urgent (gak butuh real-time siang hari) — alert-nya
+# sengaja dibatesin ke jam market TUTUP, biar gak nge-ganggu pas lagi mantau
+# market beneran (kalau nanti Scalping/BPJS dibangun, itu baru butuh real-time
+# jam market — kebalikannya window ini)
+ALERT_OFFHOURS_START = 17  # jam 17:00
+ALERT_OFFHOURS_END = 8     # jam 08:00 — window nginep lewat tengah malam
+
+
+def _in_offhours_window() -> bool:
+    hour = datetime.now().hour
+    return hour >= ALERT_OFFHOURS_START or hour < ALERT_OFFHOURS_END
+
 _alerted_today: set[str] = set()
 _invalidated_today: set[str] = set()
 _watchlist_alerted_today: set[str] = set()
 _econ_reminded_today: set[str] = set()
+_bsjp_alerted_today = False
 _alerted_date: date | None = None
 
 
@@ -52,7 +65,7 @@ def _load_settings() -> dict:
 
 
 def _reset_if_new_day() -> None:
-    global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today, _econ_reminded_today
+    global _alerted_date, _alerted_today, _invalidated_today, _watchlist_alerted_today, _econ_reminded_today, _bsjp_alerted_today
     today = date.today()
     if _alerted_date != today:
         _alerted_date = today
@@ -60,6 +73,7 @@ def _reset_if_new_day() -> None:
         _invalidated_today = set()
         _watchlist_alerted_today = set()
         _econ_reminded_today = set()
+        _bsjp_alerted_today = False
         # ponytail: dedup in-memory, bukan tabel Supabase — kalau backend restart
         # di hari yang sama, ticker yang udah dialert bisa ke-alert ulang sekali.
         # Upgrade ke tabel log kalau ini beneran ganggu di pemakaian nyata.
@@ -88,7 +102,8 @@ def _check_invalidated() -> None:
 def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
     faktor_line = f"Faktor pendukung: {'; '.join(faktor_pendukung)}\n\n" if faktor_pendukung else ""
     return (
-        f"🔴 STRONG SIGNAL — {ticker} (score {total_score}/100)\n\n"
+        f"🔴 STRONG SIGNAL — {ticker} (score {total_score}/100)\n"
+        f"🎯 Gaya: Swing\n\n"
         f"{faktor_line}"
         f"Kenapa kuat: {reasoning.get('alasan_strong', '-')}\n\n"
         f"Entry: Rp{levels['entry_low']:,.0f} - Rp{levels['entry_high']:,.0f}\n"
@@ -276,6 +291,9 @@ def _check_signal_outcomes() -> None:
 
 def check_and_alert() -> None:
     _reset_if_new_day()
+    if not _in_offhours_window():
+        return  # Swing itu non-urgent, sengaja cuma alert pas market tutup (17:00-08:00)
+
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
         return  # user matiin "Strong signal alerts" di Settings
@@ -487,6 +505,51 @@ async def run_night_recap() -> None:
         await asyncio.sleep((target - now).total_seconds())
         try:
             _send_night_recap()
+        except Exception:
+            pass
+
+
+BSJP_SCREENER_HOUR = 16  # abis market tutup (~15:00-15:50), sebelum Recap Malam jam 20:00
+
+
+def _check_bsjp_screener() -> None:
+    """BSJP itu screener checklist pass/fail (lihat scoring.py::bsjp_criteria),
+    BUKAN 1 "pick terbaik" kayak Swing — jadi kirim SEMUA ticker yang lolos
+    sekaligus, gak lewat Groq/pick_alert_candidate (gak butuh judgment call
+    multi-faktor, syaratnya udah jelas AND semua)."""
+    global _bsjp_alerted_today
+    if _bsjp_alerted_today:
+        return
+    settings = _load_settings()
+    if not settings["notif_strong_signal"]:
+        return
+
+    try:
+        res = supabase.table("scanner_cache").select("ticker,price").eq("cocok_bsjp", True).execute()
+    except Exception:
+        return
+    if not res.data:
+        return
+
+    lines = ["🌆 BSJP — Screener Beli Sore Jual Pagi", "", "Ticker yang lolos syarat hari ini:"]
+    for row in res.data:
+        lines.append(f"- {row['ticker']} (Rp{row['price']:,.0f})")
+    lines.append("")
+    lines.append("Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi. Cek Stock Detail buat detail sebelum entry.")
+
+    if send_alert("\n".join(lines)):
+        _bsjp_alerted_today = True
+
+
+async def run_bsjp_screener() -> None:
+    while True:
+        now = datetime.now()
+        target = now.replace(hour=BSJP_SCREENER_HOUR, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            _check_bsjp_screener()
         except Exception:
             pass
 

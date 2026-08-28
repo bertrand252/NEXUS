@@ -10,6 +10,7 @@ from scheduler import (
     run_morning_routine,
     run_night_recap,
     run_pre_market_briefing,
+    run_bsjp_screener,
     run_telegram_channel_listener,
     run_telegram_scrape_listener,
 )
@@ -17,16 +18,17 @@ from scheduler import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """6 task background (lihat scheduler.py buat detail tiap fungsi):
-    run_scheduler, run_morning_routine, run_pre_market_briefing (08:45, "sarapan
-    pagi" ke Telegram), run_night_recap, run_telegram_channel_listener (channel
-    yang bot-nya admin), run_telegram_scrape_listener (channel yang cuma
-    di-subscribe biasa, di-scrape dari preview publik). Semua skip diem-diem
-    kalau config/setting terkait kosong/off."""
+    """7 task background (lihat scheduler.py buat detail tiap fungsi):
+    run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
+    (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (16:00, screener BSJP),
+    run_night_recap, run_telegram_channel_listener (channel yang bot-nya admin),
+    run_telegram_scrape_listener (channel yang cuma di-subscribe biasa, di-scrape
+    dari preview publik). Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
         asyncio.create_task(run_morning_routine()),
         asyncio.create_task(run_pre_market_briefing()),
+        asyncio.create_task(run_bsjp_screener()),
         asyncio.create_task(run_night_recap()),
         asyncio.create_task(run_telegram_channel_listener()),
         asyncio.create_task(run_telegram_scrape_listener()),

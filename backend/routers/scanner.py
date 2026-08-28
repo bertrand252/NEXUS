@@ -1,10 +1,10 @@
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import yfinance as yf
-from scoring import compute_score
+from scoring import compute_score, bsjp_criteria, invest_criteria
 from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
 from config import supabase
 from levels import support_resistance
@@ -74,11 +74,16 @@ def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> 
         resistance_prior, close_position_pct, value_traded_idr, accum_lookup,
     )
 
+    price_prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else price_now
+    ma5 = float(hist["Close"].tail(5).mean())
+    cocok_bsjp = bsjp_criteria(price_now, price_prev, volume_today, volume_avg20, ma5, value_traded_idr)
+
     return {
         "ticker": ticker,
         "price": round(price_now, 2),
         "change_pct": round(chg_pct, 2),
         "volume_ratio": round(volume_today / volume_avg20, 2) if volume_avg20 else 0,
+        "cocok_bsjp": cocok_bsjp,
         **score,
     }
 
@@ -166,6 +171,46 @@ def refresh_scanner():
         retry_results, retry_errors = _fetch_batch(rate_limited, max_workers=3)
         results.extend(retry_results)
         errors.extend(retry_errors)
+
+    for i in range(0, len(results), 500):
+        chunk = results[i:i + 500]
+        supabase.table("scanner_cache").upsert(chunk, on_conflict="ticker").execute()
+
+    return {"refreshed": len(results), "failed": len(errors), "errors": errors[:30]}
+
+
+@router.post("/refresh-fundamentals")
+def refresh_fundamentals():
+    """Data fundamental (PER/PBV/dividend yield/market cap) buat Invest
+    criteria — TERPISAH dari POST /refresh (harga/volume) karena beda cadence
+    (fundamental jarang berubah harian, gak perlu di-refresh tiap kali harga
+    di-refresh) dan `.info` lebih berat ke yfinance dibanding `.history()`.
+    Manual trigger doang, belum ada scheduler otomatis (gak ada urgensi)."""
+    def _fetch_one(ticker: str) -> dict:
+        info = yf.Ticker(f"{ticker}.JK").info
+        per = info.get("trailingPE")
+        pbv = info.get("priceToBook")
+        dividend_yield = info.get("dividendYield")
+        market_cap = info.get("marketCap")
+        return {
+            "ticker": ticker,
+            "per": per,
+            "pbv": pbv,
+            "dividend_yield": dividend_yield,
+            "market_cap": market_cap,
+            "cocok_invest": invest_criteria(per, pbv, dividend_yield, market_cap),
+            "fundamentals_updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    results, errors = [], []
+    with ThreadPoolExecutor(max_workers=5) as pool:  # sama kayak POST /refresh — .info lebih berat, jangan naikin
+        futures = {pool.submit(_fetch_one, t): t for t in TICKERS}
+        for future in as_completed(futures):
+            t = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as e:
+                errors.append({"ticker": t, "error": str(e)})
 
     for i in range(0, len(results), 500):
         chunk = results[i:i + 500]
