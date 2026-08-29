@@ -13,7 +13,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance
+from levels import support_resistance, detect_trend_channel
 from chart_render import render_chart
 from groq_client import analyze_alert, pick_alert_candidate, assess_running_positions
 from forex_factory import get_forex_events
@@ -402,7 +402,8 @@ def check_and_alert() -> None:
     try:
         hist = _get_history(ticker)
         levels = support_resistance(hist)
-        chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"])
+        channel = detect_trend_channel(hist)
+        chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"], channel)
         score_breakdown = {
             "volume_score": score_row["volume_score"],
             "price_score": score_row["price_score"],

@@ -16,7 +16,7 @@ RED = "#EF4444"
 CYAN = "#06B6D4"
 
 
-def render_chart(ticker: str, hist, support: float, resistance: float) -> bytes:
+def render_chart(ticker: str, hist, support: float, resistance: float, channel: dict | None = None) -> bytes:
     df = hist.rename(columns={"Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"})
 
     style = mpf.make_mpf_style(
@@ -33,16 +33,28 @@ def render_chart(ticker: str, hist, support: float, resistance: float) -> bytes:
         linewidths=1.2,
     )
 
-    buf = io.BytesIO()
-    mpf.plot(
-        df,
+    plot_kwargs = dict(
         type="candle",
         style=style,
         volume=True,
         hlines=hlines,
         title=f"\n{ticker} — 2 Bulan Terakhir",
         figsize=(8, 5.5),
-        savefig=dict(fname=buf, format="png", dpi=130, facecolor=BG),
     )
+
+    # trend channel (levels.py::detect_trend_channel) — 2 garis diagonal
+    # nyambungin swing high/low terbaru, kayak yang biasa digambar manual di
+    # TradingView. Optional (None kalau swing point-nya kurang buat nentuin
+    # garis yang masuk akal, JANGAN maksa gambar garis ngasal).
+    if channel:
+        plot_kwargs["alines"] = dict(
+            alines=[channel["upper"], channel["lower"]],
+            colors=[CYAN, CYAN],
+            linestyle="-.",
+            linewidths=1.0,
+        )
+
+    buf = io.BytesIO()
+    mpf.plot(df, savefig=dict(fname=buf, format="png", dpi=130, facecolor=BG), **plot_kwargs)
     buf.seek(0)
     return buf.getvalue()

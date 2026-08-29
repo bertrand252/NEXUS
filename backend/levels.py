@@ -76,3 +76,41 @@ def detect_pivot_zones(hist, lookback: int = 60, swing_window: int = 3,
         + [{**z, "type": "support"} for z in support_zones]
     )
     return sorted(zones, key=lambda z: z["price"], reverse=True)
+
+
+def detect_trend_channel(hist, lookback: int = 60, swing_window: int = 3) -> dict | None:
+    """Trend channel — 2 garis diagonal (kayak yang biasa digambar manual di
+    TradingView) — connect 2 swing low PALING BARU jadi batas bawah, 2 swing
+    high PALING BARU jadi batas atas, diproyeksiin lurus sampe bar terakhir.
+    None kalau swing point kurang dari 2 di salah satu sisi — JANGAN maksa
+    gambar channel dari titik yang gak cukup buat nentuin garis."""
+    recent = hist.tail(lookback)
+    highs, lows = recent["High"].to_numpy(), recent["Low"].to_numpy()
+    dates = recent.index
+    n = len(recent)
+
+    swing_high_pts, swing_low_pts = [], []
+    for i in range(swing_window, n - swing_window):
+        window = slice(i - swing_window, i + swing_window + 1)
+        if highs[i] == highs[window].max():
+            swing_high_pts.append((dates[i], float(highs[i])))
+        if lows[i] == lows[window].min():
+            swing_low_pts.append((dates[i], float(lows[i])))
+
+    if len(swing_low_pts) < 2 or len(swing_high_pts) < 2:
+        return None
+
+    last_date = dates[-1]
+
+    def _project(p1, p2, to_date):
+        (d1, v1), (d2, v2) = p1, p2
+        if d2 == d1:
+            return v2
+        slope = (v2 - v1) / (d2.value - d1.value)
+        return v1 + slope * (to_date.value - d1.value)
+
+    lower2, upper2 = swing_low_pts[-2:], swing_high_pts[-2:]
+    return {
+        "lower": [lower2[0], (last_date, _project(*lower2, last_date))],
+        "upper": [upper2[0], (last_date, _project(*upper2, last_date))],
+    }
