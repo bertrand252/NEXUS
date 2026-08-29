@@ -13,7 +13,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, detect_trend_channel
+from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label
 from chart_render import render_chart
 from groq_client import analyze_alert, pick_alert_candidate, assess_running_positions
 from forex_factory import get_forex_events
@@ -147,17 +147,47 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
     bukan niru persis, cuma referensi visual biar gak "jadul". Semua teks dinamis
     (Groq/faktor pendukung) di-escape (_esc) — biar gak accidentally ngerusak
     parsing HTML Telegram kalau isinya kebetulan ada karakter < > &."""
+SOURCE_LABEL = {
+    "gap": "gap belum keisi", "fibonacci": "Fibonacci retracement",
+    "fibonacci_extension": "Fibonacci extension", "swing": "swing high/low",
+}
+
+
+def _source_note(sources: list[str] | None, timeframes: list[str] | None = None) -> str:
+    if not sources:
+        return ""
+    labels = ", ".join(SOURCE_LABEL.get(s, s) for s in sources)
+    tf_note = f", konfirmasi {'+'.join(timeframes)}" if timeframes and len(timeframes) > 1 else ""
+    return f" [{labels}{tf_note}]"
+
+
+def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
+    """Format HTML (parse_mode diaktifin di telegram_bot.py) — desain terinspirasi
+    channel signal yang biasa dipake user (bold header + emoji per section), TAPI
+    bukan niru persis, cuma referensi visual biar gak "jadul". Semua teks dinamis
+    (Groq/faktor pendukung) di-escape (_esc) — biar gak accidentally ngerusak
+    parsing HTML Telegram kalau isinya kebetulan ada karakter < > &."""
     faktor_line = (
         f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor_pendukung))}\n\n"
         if faktor_pendukung else ""
     )
+    tp1_note = _source_note(levels.get("tp1_sources"), levels.get("tp1_timeframes"))
+    sl_note = _source_note(levels.get("sl_sources"))
+    tp2_line = ""
+    if levels.get("tp2"):
+        tp2_note = _source_note(levels.get("tp2_sources"))
+        tp2_line = (
+            f"🎯 <b>TARGET 2 (TP2)</b> Rp{levels['tp2']:,.0f} (+{levels.get('reward_pct_tp2', 0)}%) "
+            f"· RR 1:{levels.get('rr_ratio_tp2', 0)}{tp2_note}\n"
+        )
     return (
         f"🔥 <b>SWING SIGNAL — {_esc(ticker)}</b>\n"
         f"Score {total_score}/100 · 🎯 Gaya: Swing\n\n"
         f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
-        f"🎯 <b>TARGET (TP)</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%)\n"
-        f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
-        f"⚖️ <b>Risk:Reward</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
+        f"🎯 <b>TARGET 1 (TP1)</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%){_esc(tp1_note)}\n"
+        f"{tp2_line}"
+        f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%){_esc(sl_note)}\n"
+        f"⚖️ <b>Risk:Reward (TP1)</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
         f"{faktor_line}"
         f"📊 <b>Kenapa kuat:</b>\n{_esc(reasoning.get('alasan_strong', '-'))}\n\n"
         f"⚠️ <b>Alasan Risk/TP:</b>\n{_esc(reasoning.get('alasan_risk', '-'))}"
@@ -427,6 +457,52 @@ MAX_ALERTS_PER_WEEK = 2  # Swing itu 1-2 saham TERBAIK per MINGGU, bukan harian 
                            # ini — awalnya sempet dibatesin 2/hari doang, masih kebanyakan)
 
 
+def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
+    """Override resistance/stop_loss di `levels` (dari support_resistance(),
+    20 hari doang) pake TP1/TP2/SL multi-timeframe (find_smart_tp — gap+
+    fibonacci+swing, daily+weekly+monthly). Modif `levels` in-place, fallback
+    diem-diem ke nilai 20-hari lama kalau fetch weekly/monthly gagal — jangan
+    gagalin alert-nya cuma gara-gara timeframe tambahan gak kebuka."""
+    price_now = float(hist_daily["Close"].iloc[-1])
+    try:
+        weekly = yf.Ticker(f"{ticker}.JK").history(period="5y", interval="1wk").dropna(subset=["Close"])
+        monthly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1mo").dropna(subset=["Close"])
+        smart = find_smart_tp({"daily": hist_daily, "weekly": weekly, "monthly": monthly}, price_now)
+    except Exception:
+        return  # gagal fetch timeframe tambahan — biarin levels tetep pake fallback 20-hari
+
+    tp1, tp2, sl_anchor = smart["tp1"], smart["tp2"], smart["sl_anchor"]
+    if tp1:
+        levels["resistance"] = tp1["price"]
+        levels["tp1_sources"] = tp1["sources"]
+        levels["tp1_timeframes"] = tp1["timeframes"]
+    if tp2:
+        levels["tp2"] = tp2["price"]
+        levels["tp2_sources"] = tp2["sources"]
+
+    # SL cuma dipake kalau jaraknya MASUK AKAL (<=15% dari harga sekarang) —
+    # multi-timeframe (apalagi monthly) bisa nemu support "struktural" yang
+    # jauh banget (kejadian beneran: MPIX ketemu support Rp50 dari histori
+    # 1 tahun padahal harga Rp118, itu bukan stop-loss, itu psikologi
+    # investor jangka panjang). Kalau kejauhan, tetep pake fallback 20-hari
+    # dari support_resistance() yang emang didesain buat SL ketat.
+    if sl_anchor and (price_now - sl_anchor["price"]) / price_now <= 0.15:
+        levels["stop_loss"] = round(sl_anchor["price"] * 0.98, 2)  # 2% buffer di bawah level
+        levels["sl_sources"] = sl_anchor["sources"]
+
+    # recompute risk/reward/RR pake angka yang baru (bisa berubah dari yang
+    # dihasilin support_resistance() tadi)
+    risk_pct = round((price_now - levels["stop_loss"]) / price_now * 100, 2)
+    reward_pct = round((levels["resistance"] - price_now) / price_now * 100, 2)
+    rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+    levels["risk_pct"], levels["reward_pct"], levels["rr_ratio"] = risk_pct, reward_pct, rr_ratio
+    levels["rr_label"] = rr_label(rr_ratio)
+    if tp2:
+        reward_pct_tp2 = round((tp2["price"] - price_now) / price_now * 100, 2)
+        levels["reward_pct_tp2"] = reward_pct_tp2
+        levels["rr_ratio_tp2"] = round(reward_pct_tp2 / risk_pct, 2) if risk_pct > 0 else 0.0
+
+
 def check_and_alert() -> None:
     if not _in_offhours_window():
         return  # Swing itu non-urgent, sengaja cuma alert pas market tutup (17:00-08:00)
@@ -475,6 +551,7 @@ def check_and_alert() -> None:
     try:
         hist = _get_history(ticker)
         levels = support_resistance(hist)
+        _apply_smart_tp(levels, ticker, hist)
         channel = detect_trend_channel(hist)
         chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"], channel)
         score_breakdown = {
