@@ -51,7 +51,7 @@ def support_resistance(hist) -> dict:
 
 
 def detect_pivot_zones(hist, lookback: int = 60, swing_window: int = 3,
-                        cluster_pct: float = 0.015, top_n: int = 3) -> list[dict]:
+                        cluster_pct: float = 0.015, top_n: int = 1, min_touches: int = 2) -> list[dict]:
     """Level support/resistance TAMBAHAN ("AI Zones" di chart) — BEDA dari
     `support_resistance()` di atas (yang resmi, dipake buat SL/TP/breakout
     scoring/alert, JANGAN diubah). Ini sinyal pelengkap, dihitung ALGORITMIK
@@ -60,8 +60,11 @@ def detect_pivot_zones(hist, lookback: int = 60, swing_window: int = 3,
        `swing_window` bar di kanan-kirinya (titik balik harga asli).
     2. Cluster swing point yang berdekatan (dalam `cluster_pct`) — makin
        sering harga "nyentuh" & mantul di sekitar situ, makin kuat zona-nya.
-    3. Balikin top-N cluster per tipe, diurut dari yang paling sering
-       disentuh."""
+    3. Buang cluster yang sentuhannya kurang dari `min_touches` (1 sentuhan
+       doang gak cukup buat dianggep valid), balikin top-N (default 1) per
+       tipe — biar chart gak numpuk garis (user komplain chart-nya berantakan
+       pas top_n masih 3, sampe 6 garis "Zona AI" numpuk sama Support/
+       Resistance/SMA)."""
     recent = hist.tail(lookback)
     highs = recent["High"].to_numpy()
     lows = recent["Low"].to_numpy()
@@ -87,8 +90,10 @@ def detect_pivot_zones(hist, lookback: int = 60, swing_window: int = 3,
                 clusters.append([p])
         return [{"price": round(sum(c) / len(c), 2), "touches": len(c)} for c in clusters]
 
-    resistance_zones = sorted(_cluster(swing_highs), key=lambda z: z["touches"], reverse=True)[:top_n]
-    support_zones = sorted(_cluster(swing_lows), key=lambda z: z["touches"], reverse=True)[:top_n]
+    resistance_zones = [z for z in _cluster(swing_highs) if z["touches"] >= min_touches]
+    support_zones = [z for z in _cluster(swing_lows) if z["touches"] >= min_touches]
+    resistance_zones = sorted(resistance_zones, key=lambda z: z["touches"], reverse=True)[:top_n]
+    support_zones = sorted(support_zones, key=lambda z: z["touches"], reverse=True)[:top_n]
 
     zones = (
         [{**z, "type": "resistance"} for z in resistance_zones]
