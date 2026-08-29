@@ -61,7 +61,11 @@ def save_chat_id(chat_id: str) -> None:
 
 
 def send_message(chat_id: str, text: str) -> bool:
-    res = requests.post(f"{API_BASE}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=8)
+    res = requests.post(
+        f"{API_BASE}/sendMessage",
+        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        timeout=8,
+    )
     return res.ok
 
 
@@ -78,7 +82,7 @@ def send_alert(text: str) -> bool:
 def send_photo(chat_id: str, photo_bytes: bytes, caption: str) -> bool:
     res = requests.post(
         f"{API_BASE}/sendPhoto",
-        data={"chat_id": chat_id, "caption": caption[:1024]},  # limit caption Telegram
+        data={"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "HTML"},  # limit caption Telegram
         files={"photo": ("chart.png", photo_bytes, "image/png")},
         timeout=15,
     )

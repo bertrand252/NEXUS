@@ -6,7 +6,8 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 — gak butuh cron/Celery/proses terpisah, paling sederhana buat single-user tool.
 """
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from html import escape as _esc
 import yfinance as yf
 from config import supabase, WIB, today_wib
 from routers.scanner import _get_history
@@ -14,7 +15,7 @@ from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance
 from chart_render import render_chart
-from groq_client import analyze_alert, pick_alert_candidate
+from groq_client import analyze_alert, pick_alert_candidate, assess_running_positions
 from forex_factory import get_forex_events
 from telegram_bot import send_alert_photo, send_alert, get_channel_updates
 from telegram_scrape import fetch_channel_posts
@@ -141,16 +142,25 @@ def _check_invalidated() -> None:
 
 
 def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
-    faktor_line = f"Faktor pendukung: {'; '.join(faktor_pendukung)}\n\n" if faktor_pendukung else ""
+    """Format HTML (parse_mode diaktifin di telegram_bot.py) — desain terinspirasi
+    channel signal yang biasa dipake user (bold header + emoji per section), TAPI
+    bukan niru persis, cuma referensi visual biar gak "jadul". Semua teks dinamis
+    (Groq/faktor pendukung) di-escape (_esc) — biar gak accidentally ngerusak
+    parsing HTML Telegram kalau isinya kebetulan ada karakter < > &."""
+    faktor_line = (
+        f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor_pendukung))}\n\n"
+        if faktor_pendukung else ""
+    )
     return (
-        f"🔴 STRONG SIGNAL — {ticker} (score {total_score}/100)\n"
-        f"🎯 Gaya: Swing\n\n"
+        f"🔥 <b>SWING SIGNAL — {_esc(ticker)}</b>\n"
+        f"Score {total_score}/100 · 🎯 Gaya: Swing\n\n"
+        f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
+        f"🎯 <b>TARGET (TP)</b> Rp{levels['resistance']:,.0f}\n"
+        f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f}\n"
+        f"📉 Risk: {levels['risk_pct']}%\n\n"
         f"{faktor_line}"
-        f"Kenapa kuat: {reasoning.get('alasan_strong', '-')}\n\n"
-        f"Entry: Rp{levels['entry_low']:,.0f} - Rp{levels['entry_high']:,.0f}\n"
-        f"Stop loss: Rp{levels['stop_loss']:,.0f}\n"
-        f"Risk: {levels['risk_pct']}%\n"
-        f"Alasan risk: {reasoning.get('alasan_risk', '-')}"
+        f"📊 <b>Kenapa kuat:</b>\n{_esc(reasoning.get('alasan_strong', '-'))}\n\n"
+        f"⚠️ <b>Alasan Risk/TP:</b>\n{_esc(reasoning.get('alasan_risk', '-'))}"
     )
 
 
@@ -538,6 +548,64 @@ def _send_night_recap() -> None:
     send_alert("\n".join(lines))
 
 
+def _send_running_positions_update() -> None:
+    """Digest posisi 'running' (signal_alerts status='open') — dikirim tiap
+    malam bareng Recap Malam. Beda dari _check_signal_outcomes() (yang OTOMATIS
+    nutup posisi kalau harga literal nyentuh TP/SL) — ini progress report buat
+    yang MASIH open: masih layak dipegang (dari berita/konteks terbaru, bukan
+    cuma angka harga doang), atau ada red flag baru yang lebih urgent dari
+    stop-loss teknikal."""
+    settings = _load_settings()
+    if not settings["notif_strong_signal"]:
+        return
+    try:
+        res = supabase.table("signal_alerts").select("*").eq("status", "open").execute()
+    except Exception:
+        return
+    if not res.data:
+        return
+
+    news_by_ticker = _recent_news_by_ticker(days=2)
+    positions = []
+    for row in res.data:
+        try:
+            hist = _get_history(row["ticker"])
+            price_now = float(hist["Close"].iloc[-1])
+        except Exception:
+            continue
+        pnl_pct = round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2)
+        positions.append({
+            "ticker": row["ticker"], "entry_price": row["entry_price"], "price_now": price_now,
+            "pnl_pct": pnl_pct, "target": row["target"], "stop_loss": row["stop_loss"],
+            "berita": news_by_ticker.get(row["ticker"]),
+        })
+    if not positions:
+        return
+
+    try:
+        verdicts = {v["ticker"]: v for v in assess_running_positions(positions).get("verdicts", [])}
+    except Exception:
+        verdicts = {}
+
+    lines = ["📋 <b>Update Posisi Running</b>\n"]
+    for p in positions:
+        v = verdicts.get(p["ticker"], {})
+        verdict = v.get("verdict", "lanjut")
+        alasan = _esc(v.get("alasan") or "-")
+        sign = "+" if p["pnl_pct"] >= 0 else ""
+        if verdict == "urgent_cl":
+            lines.append(
+                f"🚨 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
+                f"<b>PERTIMBANGKAN CUT LOSS</b>\n{alasan}\n"
+            )
+        else:
+            lines.append(
+                f"🟢 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
+                f"lanjut, target TP Rp{p['target']:,.0f}\n{alasan}\n"
+            )
+    send_alert("\n".join(lines))
+
+
 async def run_scheduler() -> None:
     while True:
         check_and_alert()
@@ -555,6 +623,10 @@ async def run_night_recap() -> None:
         await asyncio.sleep((target - now).total_seconds())
         try:
             _send_night_recap()
+        except Exception:
+            pass
+        try:
+            _send_running_positions_update()
         except Exception:
             pass
 

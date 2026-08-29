@@ -15,10 +15,20 @@ info buat rekomendasi solid, bilang jujur di ringkasan dan biarin rekomendasi
 kosong — jangan maksa. Tiap rekomendasi HARUS nyebutin alasan spesifik yang
 merujuk ke data yang diberikan, bukan opini baru.
 
+FORMAT BERITA: JANGAN digabung jadi paragraf panjang (males dibaca) — PECAH per
+poin berita jadi 1 kalimat pendek per item, dikelompokin ke 3 kategori sentiment
+(positive/negative/netral), tiap item nyebutin saham yang kena dampak (kalau
+gak spesifik 1 saham, boleh nama sektor/"Market" umum).
+
 Output HARUS JSON valid, format:
 {
   "market_sentiment": "bullish" | "bearish" | "neutral" | "mixed",
-  "ringkasan": "1-2 paragraf ringkasan kondisi market hari ini berdasarkan berita yang masuk",
+  "ringkasan": "1 kalimat pendek doang, overview umum kondisi market hari ini",
+  "berita": {
+    "positive": [{"saham": "BBCA", "berita": "1 kalimat pendek"}],
+    "negative": [{"saham": "BBCA", "berita": "1 kalimat pendek"}],
+    "netral": [{"saham": "BBCA", "berita": "1 kalimat pendek"}]
+  },
   "tanggal_penting": [{"saham": "BBCA", "jenis": "RUPS", "tanggal": "2026-09-05", "detail": "ringkasan singkat"}],
   "rekomendasi": [{"saham": "BBCA", "alasan": "kenapa direkomendasiin, berdasarkan data mana"}]
 }"""

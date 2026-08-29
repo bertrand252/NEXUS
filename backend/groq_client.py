@@ -56,6 +56,38 @@ def translate_to_indonesian(text: str) -> str:
     return result.get("translated", text)
 
 
+def assess_running_positions(positions: list[dict]) -> dict:
+    """Digest harian buat semua signal_alerts yang masih 'open' — 1 call Groq
+    buat SEMUA posisi sekaligus (bukan per-ticker, hemat TPM — pernah kena
+    limit gara-gara kebanyakan call kecil-kecil). Tiap posisi dikasih:
+    ticker, entry_price, price_now, pnl_pct, target, stop_loss, berita
+    terkini (kalau ada). Groq nilai tiap posisi: masih layak dipegang, atau
+    ada alasan konkret buat cut loss SEKARANG (bukan modal harga nyentuh SL
+    doang — itu udah otomatis kedeteksi Python, ini soal ADA GAK alasan
+    fundamental/berita yang bikin lebih urgent dari technical stop-loss).
+    Return: {"verdicts": [{"ticker": str, "verdict": "lanjut"|"urgent_cl",
+    "alasan": str}]}."""
+    system_prompt = (
+        "Kamu analis saham IDX yang mantau posisi trading yang lagi 'running' "
+        "(udah di-alert sebelumnya, belum ditutup). Dikasih daftar posisi: "
+        "ticker, harga beli (entry_price), harga sekarang (price_now), PnL saat "
+        "ini (pnl_pct), target TP, stop loss, dan berita terkini kalau ada. "
+        "Tugas kamu: nilai tiap posisi — 'lanjut' (masih layak dipegang sampai "
+        "TP) atau 'urgent_cl' (ada alasan KONKRET buat cut loss lebih awal dari "
+        "stop-loss teknikal — misal berita buruk spesifik, sentimen sektor "
+        "berbalik, dll). JANGAN kasih 'urgent_cl' cuma karena harga lagi turun "
+        "dikit — itu udah dihandle otomatis kalau nyentuh angka stop_loss. "
+        "'urgent_cl' cuma buat kondisi yang BENERAN butuh perhatian sebelum "
+        "nyentuh stop-loss teknikal. Kalau gak ada berita/konteks yang berubah, "
+        "default 'lanjut' dengan alasan singkat berdasarkan PnL & jarak ke "
+        "TP/SL. Jangan mengarang berita yang gak ada di data. Balikin JSON "
+        'persis: {"verdicts": [{"ticker": "TICKER", "verdict": "lanjut" atau '
+        '"urgent_cl", "alasan": "1-2 kalimat"}]}'
+    )
+    user_prompt = json.dumps({"posisi": positions}, ensure_ascii=False)
+    return ask_json(system_prompt, user_prompt)
+
+
 def pick_alert_candidate(candidates: list[dict], macro_events: list[dict]) -> dict:
     """Fase 1 seleksi alert Telegram — dikasih pool kandidat (technical_score/
     breakout_confirmed dari NEXUS, berita terkait kalau ada, status call mentor
