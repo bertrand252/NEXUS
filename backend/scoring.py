@@ -134,6 +134,33 @@ def bsjp_criteria(price_now: float, price_prev: float, volume_today: float,
     )
 
 
+MIN_COMPRESSION_RR = 1.5  # sama standar kayak MIN_RR_RATIO di scheduler.py
+
+
+def compression_setup(ma5: float, ma10: float, ma20: float, price_now: float,
+                       sideways_days: int, rr_ratio: float) -> bool:
+    """Setup Swing versi mentor user — BEDA ARAH dari breakout+volume
+    (`technical_score`) yang nangkep momen "harga LAGI gerak". Ini nangkep
+    momen SEBELUMNYA: saham yang MASIH SEPI/belum gerak, MA5/10/20 ngumpul
+    rapat (compression), RR bagus, harga aman (>Rp100, dicek caller lewat
+    scanner_universe). Prinsip mentor: "makin lama sideways makin kenceng
+    lompatannya" — jadi durasi sideways ikut jadi syarat, bukan bonus doang.
+    Dipake sebagai KONTEKS TAMBAHAN buat Groq milih breakout mana yang paling
+    meyakinkan (breakout dari saham yang emang lama "ngumpul tenaga" lebih
+    kuat daripada breakout dari saham yang udah lincah dari awal) — BUKAN
+    gantiin breakout+volume sebagai trigger alert (lihat scheduler.py)."""
+    ma_values = [ma5, ma10, ma20]
+    if not price_now or min(ma_values) <= 0:
+        return False
+    ma_spread_pct = (max(ma_values) - min(ma_values)) / price_now * 100
+    return (
+        ma_spread_pct <= 3.0  # MA5/10/20 dalam 3% satu sama lain
+        and sideways_days >= 10  # minimal ~2 minggu sideways sebelum breakout
+        and rr_ratio >= MIN_COMPRESSION_RR
+        and price_now > 100
+    )
+
+
 def invest_criteria(per: float | None, pbv: float | None, dividend_yield: float | None,
                      market_cap: float | None) -> bool:
     """Investasi (hold panjang) — big cap + dividen konsisten + harga gak

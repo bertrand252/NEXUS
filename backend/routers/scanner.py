@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import yfinance as yf
-from scoring import compute_score, bsjp_criteria, invest_criteria
+from scoring import compute_score, bsjp_criteria, invest_criteria, compression_setup
 from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
 from config import supabase, today_wib
 from levels import support_resistance, detect_pivot_zones
@@ -79,14 +79,43 @@ def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> 
     ma5 = float(hist["Close"].tail(5).mean())
     cocok_bsjp = bsjp_criteria(price_now, price_prev, volume_today, volume_avg20, ma5, value_traded_idr)
 
+    ma10 = float(hist["Close"].tail(10).mean())
+    ma20 = float(hist["Close"].tail(20).mean())
+    sideways_days = _sideways_days(hist)
+    rr_ratio = support_resistance(hist)["rr_ratio"]
+    cocok_compression = compression_setup(ma5, ma10, ma20, price_now, sideways_days, rr_ratio)
+
     return {
         "ticker": ticker,
         "price": round(price_now, 2),
         "change_pct": round(chg_pct, 2),
         "volume_ratio": round(volume_today / volume_avg20, 2) if volume_avg20 else 0,
         "cocok_bsjp": cocok_bsjp,
+        "cocok_compression": cocok_compression,
+        "sideways_days": sideways_days,
         **score,
     }
+
+
+def _sideways_days(hist, band_pct: float = 3.0) -> int:
+    """Berapa hari BERTURUT-TURUT SEBELUM hari ini harga stay dalem band_pct
+    dari MA20 — proxy "udah berapa lama sepi/sideways". Mulai dari KEMARIN
+    (bukan hari ini), soalnya hari ini bisa aja lagi breakout (itu justru
+    yang mau dideteksi, bukan bagian dari fase sideways-nya)."""
+    ma20 = hist["Close"].rolling(20).mean()
+    closes = hist["Close"]
+    count = 0
+    start = len(hist) - 2
+    floor = max(len(hist) - 41, 19)
+    for i in range(start, floor, -1):
+        m = ma20.iloc[i]
+        if m != m or m <= 0:  # NaN check
+            break
+        deviation = abs(closes.iloc[i] - m) / m * 100
+        if deviation > band_pct:
+            break
+        count += 1
+    return count
 
 
 @router.get("")

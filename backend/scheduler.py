@@ -234,7 +234,7 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     try:
         scan_res = (
             supabase.table("scanner_cache")
-            .select("ticker,total_score,signal,sector,technical_score")
+            .select("ticker,total_score,signal,sector,technical_score,cocok_compression,sideways_days")
             .gte("total_score", settings["alert_threshold"])
             .execute()
         )
@@ -265,6 +265,10 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             "signal": scan["signal"] if scan else None,
             "technical_score": scan["technical_score"] if scan else None,
             "breakout_confirmed": ticker in breakout_tickers,
+            # setup mentor user — breakout dari saham yang SEBELUMNYA compression+
+            # sideways lama itu sinyal lebih kuat (lihat scoring.py::compression_setup)
+            "compression_setup": bool(scan and scan.get("cocok_compression")),
+            "sideways_days_before": scan.get("sideways_days") if scan else None,
             "sector": sector,
             "macro_sector_match": macro_match,
             "mentor_call": (
