@@ -250,6 +250,9 @@ MIN_RR_RATIO = 1.5  # riset: 1:1.5-1:2 standar minimum umum, Swing spesifik idea
                      # dari 1.5 (gak terlalu ketat dulu), bisa dinaikin kalau kandidat kebanyakan lolos
 
 
+_levels_cache: dict[str, dict] = {}  # {ticker: levels lengkap} dari _gather_candidates, dibaca check_and_alert()
+
+
 def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int = 20) -> list[dict]:
     """Pool kandidat alert: filosofi "buy on breakout+volume, bukan buy on news"
     (berita/hype publik biasanya udah telat, smart money masuk duluan sebelum
@@ -314,20 +317,32 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     candidates.sort(key=lambda c: c["technical_score"] or 0, reverse=True)
     candidates = candidates[:pool_limit]
 
-    # syarat RR minimal — breakout+volume doang gak cukup kalau harga udah
-    # deket resistance (upside dikit) sementara SL masih jauh (downside gede).
-    # Dicek di sini (bukan pas gathering) biar yfinance call-nya cuma buat
-    # kandidat yang UDAH lolos pool_limit, bukan semua ticker breakout.
+    # syarat RR minimal — DIHITUNG PAKE ANALISA LENGKAP (multi-timeframe: gap+
+    # fibonacci+swing, daily/weekly/monthly), BUKAN cuma window 20 hari kasar
+    # kayak sebelumnya. User eksplisit minta ini biar gak ada mismatch antara
+    # yang lolos filter vs yang keliatan di caption final (kejadian nyata:
+    # MPIX lolos gate RR 20-hari, tapi RR versi lengkapnya "Buruk"). Konsekuensi
+    # sadar: 2 yfinance call ekstra (weekly+monthly) PER kandidat di pool
+    # (~20 ticker) — lebih lambat & lebih rawan rate-limit Yahoo, tapi user
+    # rencana pindah ke Invezgo dalam waktu dekat jadi ini gak jadi masalah
+    # jangka panjang. Levels yang udah dihitung lengkap disimpen di
+    # _levels_cache (BUKAN di dalem candidate dict — candidates itu dikirim
+    # mentah ke json.dumps() di pick_alert_candidate, levels yang gede bakal
+    # ikut bengkakin token prompt Groq kalau nempel di situ) biar
+    # check_and_alert() gak perlu hitung ulang buat pemenang.
+    _levels_cache.clear()
     filtered = []
     for c in candidates:
         try:
             hist = _get_history(c["ticker"])
             lv = support_resistance(hist)
+            _apply_smart_tp(lv, c["ticker"], hist)
         except Exception:
             continue  # gagal fetch, skip — jangan asumsiin RR-nya oke
         if lv["rr_ratio"] < MIN_RR_RATIO:
             continue
         c["rr_ratio"] = lv["rr_ratio"]
+        _levels_cache[c["ticker"]] = lv
         filtered.append(c)
     return filtered
 
@@ -556,8 +571,12 @@ def check_and_alert() -> None:
 
     try:
         hist = _get_history(ticker)
-        levels = support_resistance(hist)
-        _apply_smart_tp(levels, ticker, hist)
+        # levels udah lengkap dihitung pas _gather_candidates (RR gate sekarang
+        # pake analisa lengkap juga) — reuse dari cache, jangan hitung ulang 2x
+        levels = _levels_cache.get(ticker)
+        if levels is None:
+            levels = support_resistance(hist)
+            _apply_smart_tp(levels, ticker, hist)
         channel = detect_trend_channel(hist)
         chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"], channel)
         score_breakdown = {
