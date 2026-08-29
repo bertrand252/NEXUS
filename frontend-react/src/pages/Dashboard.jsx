@@ -197,7 +197,32 @@ export default function Dashboard() {
 
           {briefing && (
             <div className="grid grid-cols-3 gap-6 mt-2">
-              <p className="text-sm text-slate-300 leading-relaxed text-justify">{briefing.ringkasan}</p>
+              <div>
+                <p className="text-sm text-slate-300 leading-relaxed mb-3">{briefing.ringkasan}</p>
+                {['positive', 'negative', 'netral'].map((key) => {
+                  const items = briefing.berita?.[key];
+                  if (!items || items.length === 0) return null;
+                  const cfg = {
+                    positive: { label: '🟢 Positive', cls: 'text-emerald-400' },
+                    negative: { label: '🔴 Negative', cls: 'text-strong' },
+                    netral: { label: '⚪ Netral', cls: 'text-slate-400' },
+                  }[key];
+                  return (
+                    <div key={key} className="mb-3">
+                      <p className={`text-[11px] uppercase tracking-wider font-semibold mb-1.5 ${cfg.cls}`}>{cfg.label}</p>
+                      <div className="space-y-1">
+                        {items.map((it, i) => (
+                          <p key={i} className="text-xs text-slate-400">
+                            <span className="font-mono font-semibold text-white">{it.saham}</span>
+                            {': '}{it.berita}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {!briefing.berita && <p className="text-xs text-slate-500">Belum ada rincian berita per saham.</p>}
+              </div>
 
               <div>
                 <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Tanggal Penting</p>
