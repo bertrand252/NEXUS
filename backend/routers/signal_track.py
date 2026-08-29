@@ -17,19 +17,25 @@ def get_signal_track_stats():
 
     rows = res.data
     total = len(rows)
+    waiting_entry = sum(1 for r in rows if r["status"] == "waiting_entry")
     open_count = sum(1 for r in rows if r["status"] == "open")
+    missed = sum(1 for r in rows if r["status"] == "missed")
     tp_hit = sum(1 for r in rows if r["status"] == "tp_hit")
     sl_hit = sum(1 for r in rows if r["status"] == "sl_hit")
     timeout_win = sum(1 for r in rows if r["status"] == "timeout" and (r.get("outcome_pct") or 0) > 0)
     timeout_loss = sum(1 for r in rows if r["status"] == "timeout" and (r.get("outcome_pct") or 0) <= 0)
     timeout = timeout_win + timeout_loss
 
+    # win rate cuma dari posisi yang BENERAN kejalanin (tp/sl/timeout) —
+    # waiting_entry & missed sengaja gak keitung menang/kalah, itu bukan
+    # soal panggilannya bener/salah, cuma belum/gak sempet ke-entry
     wins = tp_hit + timeout_win
     losses = sl_hit + timeout_loss
     closed = wins + losses
     win_rate_pct = round(wins / closed * 100, 1) if closed else None
 
     return {
-        "total": total, "open": open_count, "tp_hit": tp_hit, "sl_hit": sl_hit,
-        "timeout": timeout, "win_rate_pct": win_rate_pct, "warning": None,
+        "total": total, "waiting_entry": waiting_entry, "open": open_count, "missed": missed,
+        "tp_hit": tp_hit, "sl_hit": sl_hit, "timeout": timeout,
+        "win_rate_pct": win_rate_pct, "warning": None,
     }

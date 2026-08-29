@@ -313,6 +313,56 @@ def _fetch_fundamental_summary(ticker: str) -> dict | None:
 
 
 SIGNAL_TIMEOUT_DAYS = 14  # kalau 14 hari gak kena TP/SL, tutup posisi & itung menang/kalah dari tanda outcome_pct
+ENTRY_WAIT_TIMEOUT_DAYS = 5  # kalau 5 hari harga gak pernah masuk zona entry, anggep "missed" (bukan "invalid" —
+                              # bukan salah call, cuma harganya keburu lari sebelum sempet ke-entry)
+
+
+def _check_entry_zone_touches() -> None:
+    """signal_alerts baru masuk status 'waiting_entry' (belum 'open' beneran)
+    — cek range harian (Low-High) tiap ticker overlap sama zona entry_low-
+    entry_high gak. Kalau overlap: naikin status ke 'open' (baru mulai
+    ditrack TP/SL/timeout dari sini) + notif excited "ENTRY ZONE!" biar user
+    tau sekarang saatnya masuk. Kalau udah >5 hari gak pernah overlap:
+    status 'missed' (bukan 'invalid' — panggilannya belum tentu salah, cuma
+    harganya udah lari duluan sebelum sempet dikoreksi)."""
+    try:
+        res = supabase.table("signal_alerts").select("*").eq("status", "waiting_entry").execute()
+    except Exception:
+        return
+    now = datetime.now(timezone.utc)
+    for row in res.data:
+        try:
+            hist = _get_history(row["ticker"])
+            day_low = float(hist["Low"].iloc[-1])
+            day_high = float(hist["High"].iloc[-1])
+        except Exception:
+            continue
+
+        touched = day_low <= row["entry_high"] and day_high >= row["entry_low"]
+        if touched:
+            try:
+                supabase.table("signal_alerts").update({"status": "open"}).eq("id", row["id"]).execute()
+            except Exception:
+                continue
+            send_alert(
+                f"🎯 <b>ENTRY ZONE! — {_esc(row['ticker'])}</b>\n\n"
+                f"Harga masuk zona entry Rp{row['entry_low']:,.0f} – Rp{row['entry_high']:,.0f}. "
+                f"Saatnya masuk kalau masih sesuai rencana lu 🚀\n\n"
+                f"🎯 TP: Rp{row['target']:,.0f}\n⛔ SL: Rp{row['stop_loss']:,.0f}"
+            )
+            continue
+
+        alerted_at = datetime.fromisoformat(row["alerted_at"])
+        if (now - alerted_at).days > ENTRY_WAIT_TIMEOUT_DAYS:
+            try:
+                supabase.table("signal_alerts").update({"status": "missed", "closed_at": now.isoformat()}).eq("id", row["id"]).execute()
+            except Exception:
+                continue
+            send_alert(
+                f"💨 <b>MISSED — {_esc(row['ticker'])}</b>\n\n"
+                f"Harga gak pernah masuk zona entry Rp{row['entry_low']:,.0f} – Rp{row['entry_high']:,.0f} "
+                f"dalam {ENTRY_WAIT_TIMEOUT_DAYS} hari — keburu lari duluan, bukan berarti panggilannya salah."
+            )
 
 
 def _check_signal_outcomes() -> None:
@@ -450,8 +500,11 @@ def check_and_alert() -> None:
         supabase.table("signal_alerts").insert({
             "ticker": ticker,
             "entry_price": float(hist["Close"].iloc[-1]),
+            "entry_low": levels["entry_low"],
+            "entry_high": levels["entry_high"],
             "target": levels["resistance"],
             "stop_loss": levels["stop_loss"],
+            "status": "waiting_entry",  # belum "open" beneran — nunggu harga kesentuh zona entry dulu
         }).execute()
     except Exception:
         pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
@@ -850,6 +903,10 @@ async def run_morning_routine() -> None:
             pass  # gagal hari ini, coba lagi besok — jangan crash scheduler
         try:
             _generate_briefing()
+        except Exception:
+            pass
+        try:
+            _check_entry_zone_touches()
         except Exception:
             pass
         try:
