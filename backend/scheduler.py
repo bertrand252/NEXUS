@@ -105,6 +105,21 @@ def _dedup_mark(category: str, key: str) -> None:
         pass  # tabel belum ada, atau race/duplicate — gak fatal, worst case kirim dobel sesekali
 
 
+def _dedup_count_since(category: str, since: date) -> int:
+    """Jumlah alert kategori X dalam N hari terakhir — dipake buat cap
+    MINGGUAN (Swing itu 1-2x/minggu, bukan harian — gerakannya gak secepat
+    itu, kalau ngirim tiap hari itu lebih ke perilaku Scalping)."""
+    try:
+        res = (
+            supabase.table("alert_dedup").select("id", count="exact")
+            .eq("category", category).gte("dedup_date", since.isoformat())
+            .execute()
+        )
+        return res.count or 0
+    except Exception:
+        return 0
+
+
 def _check_invalidated() -> None:
     """Ticker yang tadinya di-alert Strong hari ini, cek ulang statusnya —
     kalau udah gak Strong lagi, kirim 1 notif teks (bukan foto), sekali aja
@@ -315,6 +330,12 @@ def _check_signal_outcomes() -> None:
             pass
 
 
+MAX_ALERTS_PER_WEEK = 2  # Swing itu 1-2 saham TERBAIK per MINGGU, bukan harian —
+                           # gerakannya gak secepat itu. Ngirim tiap hari/tiap jam
+                           # itu perilaku Scalping, bukan Swing (user eksplisit koreksi
+                           # ini — awalnya sempet dibatesin 2/hari doang, masih kebanyakan)
+
+
 def check_and_alert() -> None:
     if not _in_offhours_window():
         return  # Swing itu non-urgent, sengaja cuma alert pas market tutup (17:00-08:00)
@@ -322,6 +343,9 @@ def check_and_alert() -> None:
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
         return  # user matiin "Strong signal alerts" di Settings
+
+    if _dedup_count_since("alerted", today_wib() - timedelta(days=7)) >= MAX_ALERTS_PER_WEEK:
+        return  # udah kena limit 2 alert minggu ini
 
     _check_invalidated()
 
