@@ -13,7 +13,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label
+from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
 from chart_render import render_chart
 from groq_client import analyze_alert, pick_alert_candidate, assess_running_positions
 from forex_factory import get_forex_events
@@ -141,24 +141,22 @@ def _check_invalidated() -> None:
             _dedup_mark("invalidated", row["ticker"])
 
 
-def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
-    """Format HTML (parse_mode diaktifin di telegram_bot.py) — desain terinspirasi
-    channel signal yang biasa dipake user (bold header + emoji per section), TAPI
-    bukan niru persis, cuma referensi visual biar gak "jadul". Semua teks dinamis
-    (Groq/faktor pendukung) di-escape (_esc) — biar gak accidentally ngerusak
-    parsing HTML Telegram kalau isinya kebetulan ada karakter < > &."""
 SOURCE_LABEL = {
     "gap": "gap belum keisi", "fibonacci": "Fibonacci retracement",
     "fibonacci_extension": "Fibonacci extension", "swing": "swing high/low",
 }
 
 
-def _source_note(sources: list[str] | None, timeframes: list[str] | None = None) -> str:
+TREND_LABEL = {"bullish": "🟢 Bullish", "bearish": "🔴 Bearish", "sideways": "⚪ Sideways"}
+
+
+def _source_note(sources: list[str] | None, timeframes: list[str] | None = None, role_reversal: bool = False) -> str:
     if not sources:
         return ""
     labels = ", ".join(SOURCE_LABEL.get(s, s) for s in sources)
     tf_note = f", konfirmasi {'+'.join(timeframes)}" if timeframes and len(timeframes) > 1 else ""
-    return f" [{labels}{tf_note}]"
+    rr_note = ", pernah jadi S+R (role reversal)" if role_reversal else ""
+    return f" [{labels}{tf_note}{rr_note}]"
 
 
 def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
@@ -171,8 +169,8 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
         f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor_pendukung))}\n\n"
         if faktor_pendukung else ""
     )
-    tp1_note = _source_note(levels.get("tp1_sources"), levels.get("tp1_timeframes"))
-    sl_note = _source_note(levels.get("sl_sources"))
+    tp1_note = _source_note(levels.get("tp1_sources"), levels.get("tp1_timeframes"), levels.get("tp1_role_reversal", False))
+    sl_note = _source_note(levels.get("sl_sources"), role_reversal=levels.get("sl_role_reversal", False))
     tp2_line = ""
     if levels.get("tp2"):
         tp2_note = _source_note(levels.get("tp2_sources"))
@@ -180,9 +178,12 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
             f"🎯 <b>TARGET 2 (TP2)</b> Rp{levels['tp2']:,.0f} (+{levels.get('reward_pct_tp2', 0)}%) "
             f"· RR 1:{levels.get('rr_ratio_tp2', 0)}{tp2_note}\n"
         )
+    trend = TREND_LABEL.get(levels.get("trend"), "")
+    trend_line = f"📈 <b>Trend</b> (weekly): {trend}\n\n" if trend else "\n"
     return (
         f"🔥 <b>SWING SIGNAL — {_esc(ticker)}</b>\n"
-        f"Score {total_score}/100 · 🎯 Gaya: Swing\n\n"
+        f"Score {total_score}/100 · 🎯 Gaya: Swing\n"
+        f"{trend_line}"
         f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
         f"🎯 <b>TARGET 1 (TP1)</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%){_esc(tp1_note)}\n"
         f"{tp2_line}"
@@ -465,9 +466,12 @@ def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
     gagalin alert-nya cuma gara-gara timeframe tambahan gak kebuka."""
     price_now = float(hist_daily["Close"].iloc[-1])
     try:
-        weekly = yf.Ticker(f"{ticker}.JK").history(period="5y", interval="1wk").dropna(subset=["Close"])
+        # weekly & monthly "max" — dari AWAL saham listing, bukan cuma
+        # beberapa tahun (user eksplisit minta ini, bukan 20 hari/2 bulan doang)
+        weekly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1wk").dropna(subset=["Close"])
         monthly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1mo").dropna(subset=["Close"])
         smart = find_smart_tp({"daily": hist_daily, "weekly": weekly, "monthly": monthly}, price_now)
+        levels["trend"] = determine_trend(weekly if len(weekly) >= 50 else hist_daily)
     except Exception:
         return  # gagal fetch timeframe tambahan — biarin levels tetep pake fallback 20-hari
 
@@ -476,6 +480,7 @@ def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
         levels["resistance"] = tp1["price"]
         levels["tp1_sources"] = tp1["sources"]
         levels["tp1_timeframes"] = tp1["timeframes"]
+        levels["tp1_role_reversal"] = tp1.get("role_reversal", False)
     if tp2:
         levels["tp2"] = tp2["price"]
         levels["tp2_sources"] = tp2["sources"]
@@ -489,6 +494,7 @@ def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
     if sl_anchor and (price_now - sl_anchor["price"]) / price_now <= 0.15:
         levels["stop_loss"] = round(sl_anchor["price"] * 0.98, 2)  # 2% buffer di bawah level
         levels["sl_sources"] = sl_anchor["sources"]
+        levels["sl_role_reversal"] = sl_anchor.get("role_reversal", False)
 
     # recompute risk/reward/RR pake angka yang baru (bisa berubah dari yang
     # dihasilin support_resistance() tadi)

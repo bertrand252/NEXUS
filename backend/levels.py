@@ -153,26 +153,113 @@ def _fibonacci_extensions(hist) -> list[dict]:
     ]
 
 
-def _level_candidates(hist) -> list[dict]:
-    """Gabungan unfilled gap + Fibonacci retracement + swing pivot dari 1
-    timeframe/hist tertentu — dipake bareng-bareng lintas timeframe di
-    find_smart_tp()."""
+def _swing_clusters_with_roles(hist, swing_window: int = 3, cluster_pct: float = 0.02) -> list[dict]:
+    """Kayak detect_pivot_zones, TAPI type-nya BUKAN ditentuin dari asal (peak
+    vs trough) — soalnya 1 level harga bisa PERNAH jadi resistance (ditolak
+    dari atas) DAN PERNAH jadi support (mantul dari bawah) di waktu beda
+    (role reversal — "support jadi resistance" pas ditembus, atau
+    sebaliknya). Balikin is_peak/is_trough/touches_as_peak/touches_as_trough
+    per cluster — caller yang nentuin type-nya relatif ke harga SEKARANG."""
+    highs, lows = hist["High"].to_numpy(), hist["Low"].to_numpy()
+    n = len(hist)
+    swing_highs, swing_lows = [], []
+    for i in range(swing_window, n - swing_window):
+        window = slice(i - swing_window, i + swing_window + 1)
+        if highs[i] == highs[window].max():
+            swing_highs.append(float(highs[i]))
+        if lows[i] == lows[window].min():
+            swing_lows.append(float(lows[i]))
+
+    def _cluster(points: list[float]) -> list[dict]:
+        if not points:
+            return []
+        points = sorted(points)
+        clusters = [[points[0]]]
+        for p in points[1:]:
+            if abs(p - clusters[-1][-1]) / clusters[-1][-1] <= cluster_pct:
+                clusters[-1].append(p)
+            else:
+                clusters.append([p])
+        return [{"price": round(sum(c) / len(c), 2), "touches": len(c)} for c in clusters]
+
+    peak_clusters = _cluster(swing_highs)
+    trough_clusters = _cluster(swing_lows)
+
+    merged, used_troughs = [], set()
+    for pc in peak_clusters:
+        entry = {"price": pc["price"], "touches_as_peak": pc["touches"], "touches_as_trough": 0}
+        for j, tc in enumerate(trough_clusters):
+            if j in used_troughs:
+                continue
+            if abs(pc["price"] - tc["price"]) / pc["price"] <= cluster_pct:
+                entry["price"] = round((pc["price"] + tc["price"]) / 2, 2)
+                entry["touches_as_trough"] = tc["touches"]
+                used_troughs.add(j)
+                break
+        merged.append(entry)
+    for j, tc in enumerate(trough_clusters):
+        if j not in used_troughs:
+            merged.append({"price": tc["price"], "touches_as_peak": 0, "touches_as_trough": tc["touches"]})
+
+    for e in merged:
+        e["touches"] = e["touches_as_peak"] + e["touches_as_trough"]
+        e["role_reversal"] = e["touches_as_peak"] > 0 and e["touches_as_trough"] > 0
+    return merged
+
+
+def _level_candidates(hist, price_now: float, min_touches: int = 2) -> list[dict]:
+    """Gabungan unfilled gap + Fibonacci retracement + swing pivot (dengan
+    role reversal) dari 1 timeframe/hist tertentu — dipake bareng-bareng
+    lintas timeframe di find_smart_tp(). Swing pivot WAJIB minimal
+    `min_touches` candle confirm (1 sentuhan doang gak cukup buat dianggep
+    level valid) — gap & fibonacci gak difilter touches, itu emang validitasnya
+    dari konsep lain (bukan dari jumlah sentuhan berulang)."""
     gaps = _detect_gaps(hist)
     fibs = _fibonacci_levels(hist)
-    zones = detect_pivot_zones(hist, lookback=len(hist))
-    zones = [{"price": z["price"], "type": z["type"], "source": "swing", "touches": z["touches"]} for z in zones]
-    return gaps + fibs + zones
+    swings = _swing_clusters_with_roles(hist)
+    swing_candidates = [
+        {"price": s["price"], "source": "swing", "touches": s["touches"], "role_reversal": s["role_reversal"]}
+        for s in swings if s["touches"] >= min_touches
+    ]
+    candidates = gaps + fibs + swing_candidates
+    for c in candidates:
+        # type SELALU relatif ke harga SEKARANG, BUKAN dari asal peak/trough —
+        # biar level yang dulu resistance terus ditembus (jadi support) atau
+        # sebaliknya gak ke-drop diem-diem
+        c["type"] = "resistance" if c["price"] > price_now else "support"
+    return candidates
+
+
+def determine_trend(hist) -> str:
+    """Bullish/bearish/sideways dari posisi harga vs MA50 & MA200 (golden/
+    death cross klasik) — dipake buat kasih konteks ke TP/SL, JANGAN
+    diinterpretasi sendirian tanpa liat level lain."""
+    close = hist["Close"]
+    price_now = float(close.iloc[-1])
+    if len(close) < 200:
+        ma = close.rolling(min(len(close), 50)).mean().iloc[-1]
+        if ma != ma:
+            return "sideways"
+        return "bullish" if price_now > ma else "bearish"
+    ma50 = float(close.rolling(50).mean().iloc[-1])
+    ma200 = float(close.rolling(200).mean().iloc[-1])
+    if price_now > ma50 > ma200:
+        return "bullish"
+    if price_now < ma50 < ma200:
+        return "bearish"
+    return "sideways"
 
 
 def find_smart_tp(hist_by_timeframe: dict, price_now: float) -> dict:
     """TP/SL multi-timeframe — jauh lebih robust dari `support_resistance()`
     (yang cuma window 20 hari 1 timeframe doang). `hist_by_timeframe`:
     {"daily": hist, "weekly": hist, "monthly": hist} (caller nentuin period/
-    interval tiap timeframe). Level yang muncul di BEBERAPA timeframe
-    sekaligus (misal keliatan di daily DAN weekly) itu konfirmasi lebih kuat
-    daripada yang cuma nongol di 1 timeframe — analisa multi-timeframe
-    beneran, bukan 1 sudut pandang doang. TP1 = resistance dengan konfirmasi
-    timeframe TERBANYAK (baru jarak terdekat jadi tie-breaker).
+    interval tiap timeframe — weekly/monthly idealnya "max" biar dari awal
+    saham listing, bukan cuma beberapa tahun). Level yang muncul di BEBERAPA
+    timeframe sekaligus itu konfirmasi lebih kuat, level yang PERNAH jadi
+    resistance DAN support (role reversal) juga ditandain sebagai konfirmasi
+    ekstra kuat. TP1 = resistance paling terkonfirmasi (jumlah timeframe,
+    baru jarak terdekat jadi tie-breaker).
 
     CATATAN: timeframe menit/jam/detik SENGAJA gak dimasukin — itu butuh
     data intraday yang NEXUS belum punya arsitekturnya (sama kelas masalah
@@ -181,9 +268,7 @@ def find_smart_tp(hist_by_timeframe: dict, price_now: float) -> dict:
     for tf_name, hist in hist_by_timeframe.items():
         if hist is None or hist.empty:
             continue
-        for c in _level_candidates(hist):
-            if "type" not in c:  # fibonacci retracement belum ditag type-nya
-                c["type"] = "resistance" if c["price"] > price_now else "support"
+        for c in _level_candidates(hist, price_now):
             c["timeframe"] = tf_name
             all_candidates.append(c)
 
@@ -194,9 +279,13 @@ def find_smart_tp(hist_by_timeframe: dict, price_now: float) -> dict:
             if merged and abs(c["price"] - merged[-1]["price"]) / merged[-1]["price"] <= cluster_pct:
                 merged[-1]["timeframes"].add(c["timeframe"])
                 merged[-1]["sources"].add(c["source"])
+                merged[-1]["role_reversal"] = merged[-1].get("role_reversal") or c.get("role_reversal", False)
                 merged[-1]["price"] = round((merged[-1]["price"] + c["price"]) / 2, 2)
             else:
-                merged.append({"price": c["price"], "timeframes": {c["timeframe"]}, "sources": {c["source"]}})
+                merged.append({
+                    "price": c["price"], "timeframes": {c["timeframe"]}, "sources": {c["source"]},
+                    "role_reversal": c.get("role_reversal", False),
+                })
         return merged
 
     resistances = _merge([c for c in all_candidates if c["type"] == "resistance" and c["price"] > price_now])
@@ -208,15 +297,22 @@ def find_smart_tp(hist_by_timeframe: dict, price_now: float) -> dict:
         daily = hist_by_timeframe.get("daily")
         if daily is not None and not daily.empty:
             resistances = [
-                {"price": c["price"], "timeframes": {"daily"}, "sources": {c["source"]}}
+                {"price": c["price"], "timeframes": {"daily"}, "sources": {c["source"]}, "role_reversal": False}
                 for c in _fibonacci_extensions(daily)
             ]
 
-    resistances.sort(key=lambda c: (-len(c["timeframes"]), c["price"]))
-    supports.sort(key=lambda c: (-len(c["timeframes"]), -c["price"]))
+    # prioritas: role reversal (pernah jadi resistance DAN support) > jumlah
+    # timeframe konfirmasi > jarak terdekat
+    resistances.sort(key=lambda c: (not c.get("role_reversal"), -len(c["timeframes"]), c["price"]))
+    supports.sort(key=lambda c: (not c.get("role_reversal"), -len(c["timeframes"]), -c["price"]))
 
     def _fmt(c):
-        return None if c is None else {"price": c["price"], "sources": sorted(c["sources"]), "timeframes": sorted(c["timeframes"])}
+        if c is None:
+            return None
+        return {
+            "price": c["price"], "sources": sorted(c["sources"]), "timeframes": sorted(c["timeframes"]),
+            "role_reversal": c.get("role_reversal", False),
+        }
 
     return {
         "tp1": _fmt(resistances[0]) if resistances else None,
