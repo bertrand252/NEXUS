@@ -17,7 +17,7 @@ from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_l
 from chart_render import render_chart
 from groq_client import analyze_alert, pick_alert_candidate, assess_running_positions
 from forex_factory import get_forex_events
-from telegram_bot import send_alert_photo, send_alert, get_channel_updates
+from telegram_bot import send_alert_photo, send_alert, get_channel_updates, delete_message
 from telegram_scrape import fetch_channel_posts
 from routers.intel import submit_intel, IntelInput
 from routers.settings import DEFAULTS as SETTINGS_DEFAULTS
@@ -134,6 +134,16 @@ def _check_invalidated() -> None:
         return
     for row in res.data:
         if row["signal"] != "Strong":
+            try:
+                sig_res = (
+                    supabase.table("signal_alerts").select("telegram_message_id")
+                    .eq("ticker", row["ticker"]).in_("status", ["waiting_entry", "open"])
+                    .order("alerted_at", desc=True).limit(1).execute()
+                )
+                if sig_res.data and sig_res.data[0].get("telegram_message_id"):
+                    delete_message(sig_res.data[0]["telegram_message_id"])  # unsend — udah gak valid lagi
+            except Exception:
+                pass
             send_alert(
                 f"⚪ <b>Update — {_esc(row['ticker'])}</b>\n\n"
                 f"Udah gak Strong lagi (sekarang {_esc(row['signal'])}, score {row['total_score']}/100)."
@@ -408,6 +418,8 @@ def _check_entry_zone_touches() -> None:
                 supabase.table("signal_alerts").update({"status": "missed", "closed_at": now.isoformat()}).eq("id", row["id"]).execute()
             except Exception:
                 continue
+            if row.get("telegram_message_id"):
+                delete_message(row["telegram_message_id"])  # unsend — udah gak relevan, kepentok harga lari duluan
             send_alert(
                 f"💨 <b>MISSED — {_esc(row['ticker'])}</b>\n\n"
                 f"Harga gak pernah masuk zona entry Rp{row['entry_low']:,.0f} – Rp{row['entry_high']:,.0f} "
@@ -457,6 +469,9 @@ def _check_signal_outcomes() -> None:
             }).eq("id", row["id"]).execute()
         except Exception:
             pass
+
+        if row.get("telegram_message_id"):
+            delete_message(row["telegram_message_id"])  # unsend alert asli — posisi udah ditutup, biar chat gak numpuk
 
         sign = "+" if outcome_pct >= 0 else ""
         if status == "tp_hit":
@@ -597,7 +612,8 @@ def check_and_alert() -> None:
         return  # gagal di yfinance/Groq/render — coba lagi interval berikutnya, jangan tandain alerted
 
     caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []))
-    if not send_alert_photo(chart_png, caption):
+    message_id = send_alert_photo(chart_png, caption)
+    if not message_id:
         return  # Telegram belum di-connect di Settings, atau gagal kirim
 
     _dedup_mark("alerted", ticker)
@@ -611,6 +627,7 @@ def check_and_alert() -> None:
             "target": levels["resistance"],
             "stop_loss": levels["stop_loss"],
             "status": "waiting_entry",  # belum "open" beneran — nunggu harga kesentuh zona entry dulu
+            "telegram_message_id": message_id,  # dipake buat unsend pas posisi ditutup
         }).execute()
     except Exception:
         pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
