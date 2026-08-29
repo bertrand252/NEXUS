@@ -135,8 +135,8 @@ def _check_invalidated() -> None:
     for row in res.data:
         if row["signal"] != "Strong":
             send_alert(
-                f"⚪ Update: {row['ticker']} udah gak Strong lagi "
-                f"(sekarang {row['signal']}, score {row['total_score']}/100)."
+                f"⚪ <b>Update — {_esc(row['ticker'])}</b>\n\n"
+                f"Udah gak Strong lagi (sekarang {_esc(row['signal'])}, score {row['total_score']}/100)."
             )
             _dedup_mark("invalidated", row["ticker"])
 
@@ -339,6 +339,14 @@ def _check_signal_outcomes() -> None:
         except Exception:
             pass
 
+        sign = "+" if outcome_pct >= 0 else ""
+        if status == "tp_hit":
+            send_alert(f"🎯 <b>TP TERCAPAI — {_esc(row['ticker'])}</b>\n\nProfit {sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}).")
+        elif status == "sl_hit":
+            send_alert(f"⛔ <b>STOP LOSS KENA — {_esc(row['ticker'])}</b>\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}).")
+        elif status == "timeout":
+            send_alert(f"⏱ <b>TIMEOUT — {_esc(row['ticker'])}</b> ({SIGNAL_TIMEOUT_DAYS} hari)\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}), gak kena TP/SL.")
+
 
 MAX_ALERTS_PER_WEEK = 2  # Swing itu 1-2 saham TERBAIK per MINGGU, bukan harian —
                            # gerakannya gak secepat itu. Ngirim tiap hari/tiap jam
@@ -457,7 +465,11 @@ def _check_watchlist_alerts() -> None:
         if _dedup_seen("watchlist", ticker):
             continue
         if (row.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD:
-            if send_alert(f"⭐ Watchlist: {ticker} breakout+volume kekonfirmasi (technical {row['technical_score']}/20)."):
+            text = (
+                f"⭐ <b>WATCHLIST — {_esc(ticker)}</b>\n\n"
+                f"Breakout + volume kekonfirmasi (technical {row['technical_score']}/20)."
+            )
+            if send_alert(text):
                 _dedup_mark("watchlist", ticker)
 
 
@@ -479,9 +491,9 @@ def _check_economic_reminders() -> None:
     if not new_events:
         return
 
-    lines = ["📅 Event Ekonomi High Impact Hari Ini:"]
+    lines = ["📅 <b>Event Ekonomi High Impact Hari Ini</b>\n"]
     for e in new_events:
-        lines.append(f"{e['flag']} {e['time_wib']} WIB — {e['event']} ({e['currency']})")
+        lines.append(f"{e['flag']} <b>{e['time_wib']} WIB</b> — {_esc(e['event'])} ({_esc(e['currency'])})")
     if send_alert("\n".join(lines)):
         for e in new_events:
             _dedup_mark("econ", e["event"])
@@ -510,7 +522,7 @@ def _check_portfolio_risk() -> None:
         return
 
     if result.get("overall_risk") == "high":
-        send_alert(f"⚠️ Portfolio Risk HIGH\n\n{result.get('portfolio_impact_summary', '-')}")
+        send_alert(f"🚨 <b>PORTFOLIO RISK: HIGH</b>\n\n{_esc(result.get('portfolio_impact_summary', '-'))}")
 
 
 NIGHT_RECAP_HOUR = 20  # 20:00 waktu lokal server, abis market tutup
@@ -539,12 +551,13 @@ def _send_night_recap() -> None:
 
     stats = get_signal_track_stats()
 
-    lines = ["🌙 Recap Malam Ini"]
+    lines = ["🌙 <b>Recap Malam Ini</b>\n"]
     if ihsg:
-        lines.append(f"IHSG: {ihsg['price']:,.0f} ({ihsg['change_pct']:+.2f}%)")
-    lines.append(f"Strong signal hari ini: {strong_count} ticker")
+        arrow = "🟢" if ihsg["change_pct"] >= 0 else "🔴"
+        lines.append(f"{arrow} IHSG: <b>{ihsg['price']:,.0f}</b> ({ihsg['change_pct']:+.2f}%)")
+    lines.append(f"📈 Strong signal hari ini: <b>{strong_count}</b> ticker")
     if stats.get("win_rate_pct") is not None:
-        lines.append(f"Win rate NEXUS: {stats['win_rate_pct']}% ({stats['tp_hit']} TP / {stats['sl_hit']} SL)")
+        lines.append(f"🎯 Win rate NEXUS: <b>{stats['win_rate_pct']}%</b> ({stats['tp_hit']} TP / {stats['sl_hit']} SL)")
     send_alert("\n".join(lines))
 
 
@@ -655,12 +668,11 @@ def _check_bsjp_screener() -> None:
     if not res.data:
         return
 
-    lines = ["🌆 BSJP — Screener Beli Sore Jual Pagi", "", "Ticker yang lolos syarat hari ini:"]
+    lines = ["🌆 <b>BSJP — Screener Beli Sore Jual Pagi</b>\n", "Ticker yang lolos syarat hari ini:"]
     for row in res.data:
-        lines.append(f"- {row['ticker']} (Rp{row['price']:,.0f})")
-    lines.append("")
-    lines.append("Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi.")
-    lines.append("⏰ Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.")
+        lines.append(f"✅ <b>{_esc(row['ticker'])}</b> — Rp{row['price']:,.0f}")
+    lines.append("\n📌 Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi.")
+    lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.</b>")
 
     if send_alert("\n".join(lines)):
         _dedup_mark("bsjp", "screener")
@@ -695,23 +707,31 @@ def _send_morning_briefing() -> None:
     except Exception:
         return
 
-    lines = [f"☀️ Sarapan Pagi {SENTIMENT_EMOJI.get(briefing.get('market_sentiment'), '')} {briefing.get('market_sentiment', '')}".strip()]
-    lines.append("")
-    lines.append(briefing.get("ringkasan", "-"))
+    sentiment = briefing.get("market_sentiment", "")
+    lines = [f"☀️ <b>Sarapan Pagi</b> {SENTIMENT_EMOJI.get(sentiment, '')} {_esc(sentiment)}".strip()]
+    lines.append(_esc(briefing.get("ringkasan", "-")))
+
+    berita = briefing.get("berita") or {}
+    BERITA_SECTIONS = [("positive", "🟢 Positive"), ("negative", "🔴 Negative"), ("netral", "⚪ Netral")]
+    for key, label in BERITA_SECTIONS:
+        items = berita.get(key) or []
+        if not items:
+            continue
+        lines.append(f"\n<b>{label}</b>")
+        for it in items:
+            lines.append(f"• <b>{_esc(it.get('saham', '-'))}</b>: {_esc(it.get('berita', '-'))}")
 
     tanggal_penting = briefing.get("tanggal_penting") or []
     if tanggal_penting:
-        lines.append("")
-        lines.append("📅 Tanggal Penting:")
+        lines.append("\n📅 <b>Tanggal Penting</b>")
         for e in tanggal_penting:
-            lines.append(f"- {e.get('saham')} — {e.get('jenis')} · {e.get('tanggal')}")
+            lines.append(f"• {_esc(e.get('saham'))} — {_esc(e.get('jenis'))} · {_esc(e.get('tanggal'))}")
 
     rekomendasi = briefing.get("rekomendasi") or []
     if rekomendasi:
-        lines.append("")
-        lines.append("⭐ Watchlist Hari Ini:")
+        lines.append("\n⭐ <b>Watchlist Hari Ini</b>")
         for r in rekomendasi:
-            lines.append(f"- {r.get('saham')}: {r.get('alasan')}")
+            lines.append(f"• <b>{_esc(r.get('saham'))}</b>: {_esc(r.get('alasan'))}")
 
     send_alert("\n".join(lines))
 
