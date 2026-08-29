@@ -155,9 +155,9 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
         f"🔥 <b>SWING SIGNAL — {_esc(ticker)}</b>\n"
         f"Score {total_score}/100 · 🎯 Gaya: Swing\n\n"
         f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
-        f"🎯 <b>TARGET (TP)</b> Rp{levels['resistance']:,.0f}\n"
-        f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f}\n"
-        f"📉 Risk: {levels['risk_pct']}%\n\n"
+        f"🎯 <b>TARGET (TP)</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%)\n"
+        f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
+        f"⚖️ <b>Risk:Reward</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
         f"{faktor_line}"
         f"📊 <b>Kenapa kuat:</b>\n{_esc(reasoning.get('alasan_strong', '-'))}\n\n"
         f"⚠️ <b>Alasan Risk/TP:</b>\n{_esc(reasoning.get('alasan_risk', '-'))}"
@@ -215,6 +215,8 @@ def _macro_sector_set(macro_events: list[dict]) -> set[str]:
 
 
 BREAKOUT_TECHNICAL_THRESHOLD = 12  # technical_score minimal (dari 20) buat dianggap "breakout+volume kekonfirmasi"
+MIN_RR_RATIO = 1.5  # riset: 1:1.5-1:2 standar minimum umum, Swing spesifik idealnya 1:3+ — mulai
+                     # dari 1.5 (gak terlalu ketat dulu), bisa dinaikin kalau kandidat kebanyakan lolos
 
 
 def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int = 20) -> list[dict]:
@@ -275,7 +277,24 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     # total_score masih kecampur Accumulation Score yang mock, technical_score
     # murni breakout+volume yang REAL
     candidates.sort(key=lambda c: c["technical_score"] or 0, reverse=True)
-    return candidates[:pool_limit]
+    candidates = candidates[:pool_limit]
+
+    # syarat RR minimal — breakout+volume doang gak cukup kalau harga udah
+    # deket resistance (upside dikit) sementara SL masih jauh (downside gede).
+    # Dicek di sini (bukan pas gathering) biar yfinance call-nya cuma buat
+    # kandidat yang UDAH lolos pool_limit, bukan semua ticker breakout.
+    filtered = []
+    for c in candidates:
+        try:
+            hist = _get_history(c["ticker"])
+            lv = support_resistance(hist)
+        except Exception:
+            continue  # gagal fetch, skip — jangan asumsiin RR-nya oke
+        if lv["rr_ratio"] < MIN_RR_RATIO:
+            continue
+        c["rr_ratio"] = lv["rr_ratio"]
+        filtered.append(c)
+    return filtered
 
 
 def _fetch_fundamental_summary(ticker: str) -> dict | None:
