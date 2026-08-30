@@ -11,6 +11,7 @@ from levels import support_resistance, detect_pivot_zones
 from prediction import predict_direction
 from groq_client import translate_to_indonesian, explain_levels
 from rate_limit import limiter
+from forex_factory import get_forex_events
 import invezgo_client
 
 router = APIRouter()
@@ -107,6 +108,57 @@ def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> 
         "sideways_days": sideways_days,
         **score,
     }
+
+
+def _compute_conviction(ticker: str, technical_score: int, cocok_compression: bool) -> dict:
+    """Confluence/Conviction Score — gabungin SEMUA sinyal independen yang NEXUS
+    udah punya jadi 1 angka: makin banyak yang SEPAKAT, makin tinggi conviction.
+    SENGAJA cuma ngitung berapa faktor yang NYALA (0-5), BUKAN skor berbobot
+    (misal breakout=40poin, mentor=30poin dst) — bobot presisi kayak gitu butuh
+    kalibrasi/backtest dulu biar gak ngarang angka yang keliatan presisi padahal
+    tebakan (lihat CLAUDE.md prinsip anti-fabrikasi). "Berapa sinyal independen
+    yang sepakat" itu sendiri udah informatif tanpa perlu pura-pura tau bobot
+    pastinya."""
+    factors = []
+
+    if (technical_score or 0) >= 12:
+        factors.append("Breakout + volume terkonfirmasi")
+    if cocok_compression:
+        factors.append("Compression setup (sideways lama sebelum breakout)")
+
+    try:
+        mentor_res = supabase.table("mentor_calls").select("status").eq("ticker", ticker).limit(1).execute()
+        if mentor_res.data and "run" in (mentor_res.data[0].get("status") or "").lower():
+            factors.append("Ada call aktif mentor trading")
+    except Exception:
+        pass
+
+    try:
+        since = (today_wib() - timedelta(days=3)).isoformat()
+        news_res = supabase.table("daily_market_intel").select("summary_ai").gte("tanggal", since).execute()
+        for row in news_res.data:
+            s = row.get("summary_ai") or {}
+            if ticker in (s.get("saham_disebut") or []) and s.get("sentiment") == "bullish":
+                factors.append("Berita bullish 3 hari terakhir")
+                break
+    except Exception:
+        pass
+
+    try:
+        events = [e for e in get_forex_events() if e["impact"] in ("High", "Medium")]
+        macro_sectors = set()
+        for e in events:
+            for s in (e.get("idx_sector_impact") or "").split(","):
+                s = s.strip()
+                if s and s not in ("—", "All Sectors"):
+                    macro_sectors.add(s)
+        sector = SECTOR_BY_TICKER.get(ticker)
+        if sector and sector in macro_sectors:
+            factors.append("Sektor searah event ekonomi global minggu ini")
+    except Exception:
+        pass
+
+    return {"score": len(factors), "max": 5, "factors": factors}
 
 
 def _sideways_days(hist, band_pct: float = 3.0) -> int:
@@ -496,6 +548,11 @@ def get_stock_detail(ticker: str, period: str = "1M"):
         result["ai_prediction"] = predict_direction(hist)
     except Exception:
         raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
+
+    try:
+        result["conviction"] = _compute_conviction(ticker, result["technical_score"], result["cocok_compression"])
+    except Exception:
+        result["conviction"] = None
     result["sector"] = SECTOR_BY_TICKER.get(ticker, "—")
 
     try:

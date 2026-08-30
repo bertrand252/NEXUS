@@ -192,6 +192,22 @@ function GayaTradingCard({ data }) {
           SL Rp{data.bpjs_last_alert.stop_loss?.toLocaleString('id-ID')} ({data.bpjs_last_alert.status})
         </p>
       )}
+      {data.conviction && (
+        <div className="mt-4 pt-4 border-t border-border">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-xs font-bold text-white">Conviction Score</h4>
+            <span className="text-xs font-mono text-slate-400">{data.conviction.score}/{data.conviction.max} sinyal sepakat</span>
+          </div>
+          {data.conviction.factors.length > 0 ? (
+            <ul className="space-y-1 text-xs text-slate-400">
+              {data.conviction.factors.map((f, i) => <li key={i}>✓ {f}</li>)}
+            </ul>
+          ) : (
+            <p className="text-xs text-slate-500">Belum ada sinyal yang sepakat buat saham ini saat ini.</p>
+          )}
+          <p className="text-[10px] text-slate-600 mt-2">Jumlah sinyal independen yang searah — bukan skor berbobot, pertimbangan tambahan bukan jaminan.</p>
+        </div>
+      )}
     </div>
   );
 }
