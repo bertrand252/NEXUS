@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 CLAUDE.MD
 backtest_results.json
+news_backtest_results.json
