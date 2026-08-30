@@ -106,7 +106,7 @@ export default function Analytics() {
           </div>
         )}
 
-        <div className="grid grid-cols-5 gap-5">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-5">
           <StatCard
             label="Total P&L"
             value={data ? fmtRupiah(data.total_pnl) : '—'}
@@ -155,7 +155,7 @@ export default function Analytics() {
           <canvas ref={monthlyRef} height="90"></canvas>
         </div>
 
-        <div className="grid grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="glow-border rounded-2xl bg-card border border-border p-5">
             <h3 className="text-sm font-bold text-white tracking-tight mb-4">Yearly Comparison</h3>
             <canvas ref={yearlyRef} height="140"></canvas>
@@ -169,7 +169,7 @@ export default function Analytics() {
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <h3 className="text-sm font-bold text-white tracking-tight mb-1">Mentor vs NEXUS — Track Record</h3>
           <p className="text-[11px] text-slate-500 mb-4">Win rate real dari alert Telegram (TP vs SL) dan call mentor (floating PnL), bukan asumsi</p>
-          <div className="grid grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div className="rounded-xl border border-border bg-card2 p-4">
               <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">NEXUS Win Rate</p>
               {signalStats?.warning || signalStats?.win_rate_pct == null ? (

@@ -132,7 +132,7 @@ export default function PortfolioSimulation() {
       </header>
 
       <div className="p-8 space-y-6">
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="space-y-6">
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <h3 className="text-sm font-bold text-white tracking-tight mb-4">Input Portofolio</h3>
@@ -229,7 +229,7 @@ export default function PortfolioSimulation() {
                 <p className="text-[15px] text-slate-100 font-medium leading-relaxed text-justify">{result?.portfolio_impact_summary || '—'}</p>
               </div>
 
-              <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-6">
                 {(result?.per_saham || []).map((s, i) => {
                   const r = RISK[s.risk_level] || RISK.medium;
                   return (

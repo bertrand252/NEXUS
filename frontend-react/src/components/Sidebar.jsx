@@ -62,23 +62,30 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ open = false, onClose }) {
   const profile = useProfile();
   return (
-    <aside className="no-print w-64 shrink-0 bg-[#0D1220] border-r border-border flex flex-col justify-between fixed h-screen z-20">
+    <aside
+      className={`no-print w-64 shrink-0 bg-[#0D1220] border-r border-border flex flex-col justify-between fixed h-screen z-20
+        transition-transform duration-200 md:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}
+    >
       <div>
         <div className="flex items-center gap-3 px-6 py-6 border-b border-border">
           <div className="w-10 h-10 shrink-0"><img src={logo} alt="NEXUS" className="w-full h-full object-cover" /></div>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-[15px] font-bold text-white leading-none tracking-tight">NEXUS</p>
             <p className="text-[10px] text-slate-500 mt-1 tracking-wide">IDX INTELLIGENCE</p>
           </div>
+          <button onClick={onClose} className="md:hidden w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-white transition shrink-0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+          </button>
         </div>
         <nav className="px-3 py-4 space-y-1 text-sm">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
+              onClick={onClose}
               className={({ isActive }) =>
                 isActive
                   ? 'nav-active flex items-center gap-3 px-3 py-2.5 rounded-r-md text-white font-medium'

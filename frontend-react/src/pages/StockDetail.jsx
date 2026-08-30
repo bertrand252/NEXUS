@@ -78,7 +78,7 @@ function MentorCallCard({ call }) {
         <h3 className="text-sm font-bold text-white tracking-tight">Mentor Call</h3>
         <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan/10 text-cyan border border-cyan/30">{call.status || '—'}</span>
       </div>
-      <div className="grid grid-cols-3 gap-4 text-xs">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
         <div><p className="text-slate-500 mb-1">Recom Date</p><p className="font-mono text-slate-200">{call.recom_date || '—'}</p></div>
         <div><p className="text-slate-500 mb-1">Buy Price</p><p className="font-mono text-slate-200">{fmtRupiah(call.buy_price)}</p></div>
         <div><p className="text-slate-500 mb-1">Current Price</p><p className="font-mono text-slate-200">{fmtRupiah(call.current_price)}</p></div>
@@ -269,8 +269,8 @@ export default function StockDetail() {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="md:col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-white tracking-tight">Price Chart</h3>
               <div className="flex gap-1 text-[11px] font-mono">
@@ -288,7 +288,7 @@ export default function StockDetail() {
             </div>
             <div ref={candleRef} style={{ height: 280 }}></div>
             {data?.levels && (
-              <div className="grid grid-cols-4 gap-3 mt-4 text-center">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-center">
                 <div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider">Support</p>
                   <p className="text-sm font-mono font-semibold text-emerald-400">Rp{data.levels.support.toLocaleString('id-ID')}</p>
@@ -348,7 +348,7 @@ export default function StockDetail() {
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-5">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
           <ScoreCard label="Volume Score" value={data?.volume_score} max={25} barClass="bg-cyan" />
           <ScoreCard label="Price Score" value={data?.price_score} max={25} barClass="bg-accent" />
           <ScoreCard label="Accumulation Score" value={data?.accumulation_score} max={30} barClass="bg-strong" />
@@ -360,7 +360,7 @@ export default function StockDetail() {
         {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} />}
         {data?.mentor_call && <MentorCallCard call={data.mentor_call} />}
 
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="glow-border rounded-2xl bg-gradient-to-br from-card to-card2 border border-accent/30 p-5">
             <div className="flex items-center gap-2 mb-3">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.5 8.5L21 9.3L16.3 13.9L17.6 20.5L12 17.1L6.4 20.5L7.7 13.9L3 9.3L9.5 8.5L12 2Z" stroke="#06B6D4" strokeWidth="1.8" strokeLinejoin="round" /></svg>

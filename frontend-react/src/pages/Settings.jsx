@@ -196,7 +196,7 @@ export default function Settings() {
         </div>
       </header>
 
-      <div className="p-8 grid grid-cols-3 gap-6">
+      <div className="p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="glow-border rounded-2xl bg-gradient-to-br from-card to-card2 border border-border p-5">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 rounded-xl bg-[#229ED9]/15 border border-[#229ED9]/30 flex items-center justify-center">

@@ -139,7 +139,7 @@ export default function Dashboard() {
             <Link to="/scanner" className="text-xs text-cyan hover:text-accent font-medium">View all in Scanner →</Link>
           </div>
           {scannerError && <p className="text-sm text-slate-500">Gak bisa konek ke backend ({API_BASE}).</p>}
-          <div className="grid grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             {top5.map((s) => {
               const m = signalMeta(s.signal);
               return (
@@ -166,7 +166,7 @@ export default function Dashboard() {
           </div>
           {sectorHeatmap?.length === 0 && <p className="text-sm text-slate-500 py-2">Cache scanner kosong — refresh dulu di Scanner.</p>}
           {sectorHeatmap?.length > 0 && (
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {sectorHeatmap.map((s) => (
                 <div key={s.sector} className={`rounded-xl border p-3 ${HEATMAP_CLASS(s.avg_score)}`}>
                   <p className="text-xs font-semibold leading-tight">{s.sector}</p>
@@ -196,7 +196,7 @@ export default function Dashboard() {
           {briefingWarning && !briefing && <p className="text-sm text-slate-500">{briefingWarning}</p>}
 
           {briefing && (
-            <div className="grid grid-cols-3 gap-6 mt-2">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-2">
               <div>
                 <p className="text-sm text-slate-300 leading-relaxed mb-3">{briefing.ringkasan}</p>
                 {['positive', 'negative', 'netral'].map((key) => {
@@ -254,8 +254,8 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="md:col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-white tracking-tight">Watchlist Summary</h3>
               <Link to="/settings" className="text-[11px] text-cyan hover:text-accent font-mono">Kelola watchlist →</Link>
