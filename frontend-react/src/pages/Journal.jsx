@@ -147,10 +147,14 @@ export default function Journal() {
           <h1 className="text-lg font-bold text-white tracking-tight">Trading Journal</h1>
           <p className="text-xs text-slate-500 mt-0.5 font-mono">{MONTH_NAMES[viewMonth - 1]} {viewYear}</p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="no-print flex items-center gap-4">
           <span className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span> MARKET OPEN
           </span>
+          <button onClick={() => window.print()} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-card border border-border hover:border-accent/50 hover:text-white text-slate-300 transition">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            Export PDF
+          </button>
           <button className="relative w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center hover:border-accent/50 transition">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8C6 15 3 17 3 17H21S18 15 18 8Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.73 21A2 2 0 0 1 10.27 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-strong"></span>

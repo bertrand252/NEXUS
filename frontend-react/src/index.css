@@ -113,3 +113,30 @@ details[open] .chev {
 .toggle.on .toggle-dot {
   transform: translateX(18px);
 }
+
+/* Export PDF — window.print() bawaan browser, gak butuh library PDF apapun.
+   Sidebar/tombol interaktif disembunyiin (.no-print), background gelap
+   dipaksa jadi putih+teks gelap biar gak boros tinta/keliatan aneh di kertas. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body, main {
+    background-color: #ffffff !important;
+  }
+  main {
+    margin-left: 0 !important;
+  }
+  header {
+    position: static !important;
+    backdrop-filter: none !important;
+  }
+  * {
+    box-shadow: none !important;
+    color: #111827 !important;
+    border-color: #D1D5DB !important;
+  }
+  .glow-border, [class*="bg-card"], [class*="bg-\[#0B0F1A\]"] {
+    background: #ffffff !important;
+  }
+}

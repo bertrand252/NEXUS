@@ -65,7 +65,7 @@ const NAV_ITEMS = [
 export default function Sidebar() {
   const profile = useProfile();
   return (
-    <aside className="w-64 shrink-0 bg-[#0D1220] border-r border-border flex flex-col justify-between fixed h-screen z-20">
+    <aside className="no-print w-64 shrink-0 bg-[#0D1220] border-r border-border flex flex-col justify-between fixed h-screen z-20">
       <div>
         <div className="flex items-center gap-3 px-6 py-6 border-b border-border">
           <div className="w-10 h-10 shrink-0"><img src={logo} alt="NEXUS" className="w-full h-full object-cover" /></div>
