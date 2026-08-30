@@ -640,23 +640,31 @@ def check_and_alert() -> None:
 
 
 def _check_watchlist_alerts() -> None:
-    """Ticker di watchlist user yang breakout+volume kekonfirmasi hari ini
-    (technical_score >= threshold) dapet notif ringan sendiri — independen
-    dari check_and_alert() (yang cuma milih 1 "pick terbaik" se-market),
-    ini soal relevansi personal: ticker yang user pantau sendiri."""
+    """Ticker di watchlist user yang breakout+volume kekonfirmasi (technical_score
+    >= threshold) dapet notif ringan sendiri — independen dari check_and_alert()
+    (yang cuma milih 1 "pick terbaik" se-market), ini soal relevansi personal:
+    ticker yang user pantau sendiri.
+
+    Dedup pake `watchlist.last_alerted_score` (BUKAN _dedup_seen/"today" yang
+    reset tiap tengah malam WIB) — soalnya scanner_cache cuma ke-refresh MANUAL,
+    gak otomatis tiap jam. Kejadian nyata: check jam 22:54 & 00:09 (abis lewat
+    tengah malam WIB) technical_score PERSIS SAMA (scanner_cache belum di-
+    refresh sama sekali di antara 2 waktu itu), tapi dedup harian reset duluan
+    -> alert IDENTIK kekirim 2x. Sekarang cuma alert kalau score BENERAN beda
+    dari terakhir kali dialert, gak peduli lewat tengah malam berapa kali."""
     try:
-        watch_res = supabase.table("watchlist").select("ticker").execute()
-        tickers = [r["ticker"] for r in watch_res.data]
+        watch_res = supabase.table("watchlist").select("ticker,last_alerted_score").execute()
+        watch_by_ticker = {r["ticker"]: r for r in watch_res.data}
     except Exception:
         return
-    if not tickers:
+    if not watch_by_ticker:
         return
 
     try:
         scan_res = (
             supabase.table("scanner_cache")
             .select("ticker,technical_score")
-            .in_("ticker", tickers)
+            .in_("ticker", list(watch_by_ticker))
             .execute()
         )
     except Exception:
@@ -664,15 +672,20 @@ def _check_watchlist_alerts() -> None:
 
     for row in scan_res.data:
         ticker = row["ticker"]
-        if _dedup_seen("watchlist", ticker):
+        score = row.get("technical_score") or 0
+        if score < BREAKOUT_TECHNICAL_THRESHOLD:
             continue
-        if (row.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD:
-            text = (
-                f"⭐ <b>WATCHLIST — {_esc(ticker)}</b>\n\n"
-                f"Breakout + volume kekonfirmasi (technical {row['technical_score']}/20)."
-            )
-            if send_alert(text):
-                _dedup_mark("watchlist", ticker)
+        if watch_by_ticker[ticker].get("last_alerted_score") == score:
+            continue  # sinyal SAMA PERSIS kayak alert terakhir, scanner_cache belum berubah
+        text = (
+            f"⭐ <b>WATCHLIST — {_esc(ticker)}</b>\n\n"
+            f"Breakout + volume kekonfirmasi (technical {score}/20)."
+        )
+        if send_alert(text):
+            try:
+                supabase.table("watchlist").update({"last_alerted_score": score}).eq("ticker", ticker).execute()
+            except Exception:
+                pass
 
 
 def _check_economic_reminders() -> None:
