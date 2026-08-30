@@ -1,0 +1,49 @@
+name: CI
+
+# Railway auto-deploy JALAN TERUS terpisah dari ini (watch git push langsung,
+# gak nunggu CI ini). CI ini cuma buat ngasih tau LEBIH CEPET kalau ada yang
+# rusak (pytest gagal / frontend gak bisa di-build) — bukan gate yang nge-block
+# deploy Railway (single-user tool, laziest setup yang berguna).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Dummy — cuma buat lolos guard "SUPABASE_URL/KEY wajib diisi" di config.py.
+      # Test yang jalan (backend/tests/) fungsi murni doang, gak ada yang beneran
+      # manggil Supabase/yfinance/Groq via network.
+      SUPABASE_URL: https://dummy.supabase.co
+      SUPABASE_KEY: dummy-key-buat-ci-doang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -v
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-react
+    env:
+      VITE_SUPABASE_URL: https://dummy.supabase.co
+      VITE_SUPABASE_ANON_KEY: dummy-key-buat-ci-doang
+      VITE_API_BASE: https://dummy.example.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npx vite build
