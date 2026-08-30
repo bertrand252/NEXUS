@@ -21,6 +21,7 @@ from telegram_bot import send_alert_photo, send_alert, get_channel_updates, dele
 from telegram_scrape import fetch_channel_posts
 from routers.intel import submit_intel, IntelInput
 from routers.settings import DEFAULTS as SETTINGS_DEFAULTS
+from market_calendar import is_trading_day, upcoming_holidays
 from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
 
 TELEGRAM_SCRAPE_INTERVAL_SECONDS = 10 * 60  # preview publik gak realtime kayak bot API, polling 10 menit cukup
@@ -558,7 +559,7 @@ def check_and_alert() -> None:
         return
 
     try:
-        pick = pick_alert_candidate(candidates, macro_events)
+        pick = pick_alert_candidate(candidates, macro_events, upcoming_holidays(within_days=3))
     except Exception:
         return  # Groq gagal, coba lagi interval berikutnya
 
@@ -726,7 +727,12 @@ NIGHT_RECAP_HOUR = 20  # 20:00 waktu lokal server, abis market tutup
 
 def _send_night_recap() -> None:
     """Gated `notif_daily_recap` di Settings. Recap ringan: closing IHSG,
-    jumlah Strong signal hari ini, win rate NEXUS kalau datanya udah ada."""
+    jumlah Strong signal hari ini, win rate NEXUS kalau datanya udah ada.
+    Skip diem-diem kalau hari ini bursa tutup (weekend/libur) — gak ada
+    yang perlu direkap, spam doang kalau tetep dikirim. Swing (check_and_alert)
+    TETEP jalan kayak biasa, ini cuma soal notif rutin doang."""
+    if not is_trading_day(today_wib()):
+        return
     settings = _load_settings()
     if not settings["notif_daily_recap"]:
         return
@@ -846,11 +852,15 @@ BSJP_SCREENER_MINUTE = 30  # SEBELUM market tutup, bukan sesudah — BSJP beli-n
                             # dibaca+eksekusi, bukan telat udah gak bisa beli
 
 
+MAX_BSJP_PER_DAY = 2  # user eksplisit minta dibatesin — jangan kirim SEMUA yang lolos syarat,
+                        # cuma yang PALING kuat, sama semangatnya kayak cap Swing 1-2/minggu
+
+
 def _check_bsjp_screener() -> None:
     """BSJP itu screener checklist pass/fail (lihat scoring.py::bsjp_criteria),
-    BUKAN 1 "pick terbaik" kayak Swing — jadi kirim SEMUA ticker yang lolos
-    sekaligus, gak lewat Groq/pick_alert_candidate (gak butuh judgment call
-    multi-faktor, syaratnya udah jelas AND semua)."""
+    BUKAN 1 "pick terbaik" kayak Swing — tapi tetep DIBATESIN ke yang paling
+    kuat (diurut dari volume_ratio, itu inti sinyal BSJP), bukan kirim semua
+    yang lolos AND-condition (bisa banyak & bikin kewalahan kalau gak dibatesin)."""
     if _dedup_seen("bsjp", "screener"):
         return
     settings = _load_settings()
@@ -858,15 +868,19 @@ def _check_bsjp_screener() -> None:
         return
 
     try:
-        res = supabase.table("scanner_cache").select("ticker,price").eq("cocok_bsjp", True).execute()
+        res = (
+            supabase.table("scanner_cache").select("ticker,price,volume_ratio")
+            .eq("cocok_bsjp", True).order("volume_ratio", desc=True).limit(MAX_BSJP_PER_DAY)
+            .execute()
+        )
     except Exception:
         return
     if not res.data:
         return
 
-    lines = ["🌆 <b>BSJP — Screener Beli Sore Jual Pagi</b>\n", "Ticker yang lolos syarat hari ini:"]
+    lines = ["🌆 <b>BSJP — Screener Beli Sore Jual Pagi</b>\n", "Ticker terkuat hari ini:"]
     for row in res.data:
-        lines.append(f"✅ <b>{_esc(row['ticker'])}</b> — Rp{row['price']:,.0f}")
+        lines.append(f"✅ <b>{_esc(row['ticker'])}</b> — Rp{row['price']:,.0f} (volume {row['volume_ratio']}x rata-rata)")
     lines.append("\n📌 Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.</b>")
 
@@ -897,7 +911,10 @@ def _send_morning_briefing() -> None:
     """"Sarapan pagi" — sintesis ulang daily_briefing (bukan cuma baca cache
     jam 6 pagi, biar nangkep berita yang masuk di antara jam 6-08:45) terus
     kirim ke Telegram: ringkasan + tanggal penting + rekomendasi (ini yang
-    jadi "watchlist hari ini")."""
+    jadi "watchlist hari ini"). Skip diem-diem kalau hari ini bursa tutup —
+    gak ada gunanya "watchlist hari ini" kalau market gak buka."""
+    if not is_trading_day(today_wib()):
+        return
     try:
         briefing = _generate_briefing()
     except Exception:

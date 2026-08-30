@@ -88,11 +88,13 @@ def assess_running_positions(positions: list[dict]) -> dict:
     return ask_json(system_prompt, user_prompt)
 
 
-def pick_alert_candidate(candidates: list[dict], macro_events: list[dict]) -> dict:
+def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcoming_holidays: list[dict] | None = None) -> dict:
     """Fase 1 seleksi alert Telegram — dikasih pool kandidat (technical_score/
     breakout_confirmed dari NEXUS, berita terkait kalau ada, status call mentor
-    kalau ada) plus event ekonomi global minggu ini. Groq milih PALING BANYAK 1
-    ticker yang layak di-alert, atau nolak semua kalau gak ada yang meyakinkan.
+    kalau ada) plus event ekonomi global minggu ini + hari libur bursa yang
+    deket (weekend/tanggal merah — rawan profit taking sebelum bursa tutup
+    lama). Groq milih PALING BANYAK 1 ticker yang layak di-alert, atau nolak
+    semua kalau gak ada yang meyakinkan.
     Return: {"pilih": str|None, "faktor_pendukung": [str], "alasan_singkat": str}."""
     system_prompt = (
         "Kamu analis saham IDX yang pegang prinsip 'buy on breakout+volume, sell "
@@ -121,12 +123,23 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict]) -> di
         "yang udah breakout_confirmed — bukan pengganti breakout itu sendiri. "
         "Kalau gak ada kandidat yang penuhi syarat wajib, WAJIB balikin pilih: "
         "null — mending gak ada call daripada call asal-asalan atau telat. "
+        "\n\nSOAL LIBUR BURSA (upcoming_holidays): kalau ada hari libur/weekend "
+        "dalam 1-3 hari ke depan (apalagi kalau lebih dari 2 hari tutup "
+        "berturut-turut — bukan cuma weekend biasa), itu masa rawan PROFIT "
+        "TAKING (banyak trader jual sebelum bursa tutup lama, harga cenderung "
+        "turun). Kalau kandidat breakout-nya PAS deket tanggal-tanggal itu, "
+        "lebih baik SKIP dulu (pilih null) walau breakout_confirmed true, "
+        "kecuali sinyalnya BENERAN kuat banget (compression_setup true + "
+        "RR tinggi) — sebutin pertimbangan libur ini di alasan_singkat kalau "
+        "itu yang bikin kamu skip atau tetep pilih meski ada risiko ini. "
         "Jangan mengarang faktor yang gak ada di data. Balikin JSON persis: "
         '{"pilih": "TICKER" atau null, "faktor_pendukung": ["poin 1", "poin 2"], '
         '"alasan_singkat": "1 kalimat"}'
     )
     user_prompt = json.dumps(
-        {"kandidat": candidates, "event_ekonomi_global": macro_events}, ensure_ascii=False
+        {"kandidat": candidates, "event_ekonomi_global": macro_events,
+         "upcoming_holidays": upcoming_holidays or []},
+        ensure_ascii=False,
     )
     result = ask_json(system_prompt, user_prompt)
     if not result.get("pilih") or result.get("pilih") == "null":
