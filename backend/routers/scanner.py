@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -314,6 +314,47 @@ def annotate_chart(ticker: str):
         return {"penjelasan": explain_levels(ticker, score_breakdown, levels)}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gagal generate penjelasan: {e}")
+
+
+@router.get("/{ticker}/broker-flow")
+def get_broker_flow(ticker: str):
+    """Kerangka tab "Broker Flow" (StockDetail) — broker summary, broker stalker
+    (top broker net buy/sell hari ini), insider activity, notation, order queue,
+    tape reading, volume profile. SEMUA field None + configured=False kalau
+    INVEZGO_API_KEY belum diisi — frontend nampilin "Belum tersedia" jujur,
+    BUKAN data ngarang. Dibuat sebelum key aktif, jadi tiap field independen
+    (1 gagal gak nge-block yang lain) karena struktur response REAL belum
+    pernah diverifikasi lawan API asli."""
+    ticker = ticker.upper()
+    if not invezgo_client.is_configured():
+        return {
+            "configured": False,
+            "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
+            "notation": None, "price_table": None,
+        }
+
+    today = today_wib().isoformat()
+    result = {"configured": True}
+    try:
+        result["broker_summary"] = invezgo_client.get_broker_summary(ticker)
+    except Exception:
+        result["broker_summary"] = None
+    try:
+        result["insider_activity"] = invezgo_client.get_insider_activity(
+            ticker, (today_wib() - timedelta(days=90)).isoformat(), today,
+        )
+    except Exception:
+        result["insider_activity"] = None
+    try:
+        notation_all = invezgo_client.get_notation_list()
+        result["notation"] = next((n for n in notation_all if n.get("code") == ticker), None)
+    except Exception:
+        result["notation"] = None
+    try:
+        result["price_table"] = invezgo_client.get_price_table(ticker, today)
+    except Exception:
+        result["price_table"] = None
+    return result
 
 
 @router.get("/index/ihsg")

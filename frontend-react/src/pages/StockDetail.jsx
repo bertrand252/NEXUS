@@ -257,18 +257,32 @@ export default function StockDetail() {
   const candles = data ? data.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })) : null;
   const candleRef = useCandlestickChart(candles, data?.levels, data?.ai_zones);
 
-  const brokerConfig = {
+  const [brokerFlow, setBrokerFlow] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setBrokerFlow(null);
+    fetch(`${API_BASE}/scanner/${ticker}/broker-flow`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((json) => { if (!cancelled) setBrokerFlow(json); })
+      .catch(() => { if (!cancelled) setBrokerFlow(null); });
+    return () => { cancelled = true; };
+  }, [ticker]);
+
+  const topBrokers = brokerFlow?.broker_summary
+    ? [...brokerFlow.broker_summary].sort((a, b) => Math.abs(b.net_value) - Math.abs(a.net_value)).slice(0, 7)
+    : null;
+  const brokerConfig = topBrokers ? {
     type: 'bar',
     data: {
-      labels: ['YP', 'MG', 'RG', 'PD', 'CC', 'KZ', 'NI'],
+      labels: topBrokers.map((b) => b.code),
       datasets: [{
-        data: [820, 640, -210, 450, -380, 290, -150],
+        data: topBrokers.map((b) => b.net_value),
         backgroundColor: (ctx) => (ctx.raw >= 0 ? '#2563EB' : '#EF4444'),
         borderRadius: 4,
       }],
     },
     options: { plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#94A3B8', font: { size: 11 } } }, y: { grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 10 } } } } },
-  };
+  } : null;
   const brokerRef = useChart(brokerConfig);
 
   const m = signalMeta(data?.signal);
@@ -452,12 +466,43 @@ export default function StockDetail() {
             )}
           </div>
 
-          <div className="col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
+          <div className="md:col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-white tracking-tight">Broker Summary (Net Value)</h3>
-              <span className="text-[10px] text-slate-500 font-mono">Data placeholder — butuh sumber broker summary berbayar</span>
+              {!brokerFlow?.configured && (
+                <span className="text-[10px] text-slate-500 font-mono">Belum tersedia — nunggu Invezgo API aktif</span>
+              )}
             </div>
-            <canvas ref={brokerRef} height="140"></canvas>
+            {!brokerFlow?.configured && (
+              <p className="text-sm text-slate-500 py-8 text-center">
+                Data broker summary asli belum aktif (nunggu langganan Invezgo). Angka net buy/sell per broker bakal muncul di sini begitu API key-nya keisi — bukan data karangan.
+              </p>
+            )}
+            {brokerFlow?.configured && !topBrokers && (
+              <p className="text-sm text-slate-500 py-8 text-center">Gagal ambil data broker summary hari ini — coba lagi nanti.</p>
+            )}
+            {topBrokers && <canvas ref={brokerRef} height="140"></canvas>}
+
+            {brokerFlow?.configured && (
+              <div className="mt-4 pt-4 border-t border-border grid grid-cols-2 gap-4 text-xs">
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Insider Activity (90 hari)</p>
+                  {brokerFlow.insider_activity?.data?.length ? (
+                    <ul className="space-y-1 text-slate-300">
+                      {brokerFlow.insider_activity.data.slice(0, 3).map((row, i) => (
+                        <li key={i}>{row.name} {row.change >= 0 ? '+' : ''}{row.change}%</li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-slate-500">Gak ada aktivitas insider tercatat.</p>}
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Notasi Khusus</p>
+                  {brokerFlow.notation?.list?.length ? (
+                    <p className="text-strong font-semibold">⚠ {brokerFlow.notation.list.map((n) => n.notation).join(', ')}</p>
+                  ) : <p className="text-slate-500">Gak ada notasi aktif.</p>}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

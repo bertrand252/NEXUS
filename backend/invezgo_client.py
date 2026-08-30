@@ -47,8 +47,101 @@ def get_top_foreign(date: str) -> dict:
     return res.json()
 
 
-def get_broker_summary(code: str) -> dict:
-    res = httpx.get(f"{BASE_URL}/analysis/summary/stock/{code}", headers=_headers(), timeout=30)
+def get_broker_summary(code: str) -> list[dict]:
+    """[{code, buy_freq, buy_volume, buy_value, sell_freq, sell_volume, sell_value,
+    net_value, net_volume, net_freq, name}, ...] — semua broker yang transaksi di
+    saham ini hari itu. FIX: sebelumnya nembak /analysis/summary/stock/{code} yang
+    ternyata endpoint SALAH (general stock summary, bukan broker) — ketauan pas
+    baca ulang OpenAPI spec asli mereka."""
+    res = httpx.get(f"{BASE_URL}/analysis/summary/broker/{code}", headers=_headers(), timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_broker_stalker(broker: str, stock: str) -> dict:
+    """{"broker", "stock", "summary": {"active","total","avg","peak"}, "calendar": [...]}
+    — histori akumulasi 1 broker di 1 saham dari waktu ke waktu ("siapa numpuk barang")."""
+    res = httpx.get(f"{BASE_URL}/analysis/stalker/broker/{broker}/{stock}", headers=_headers(), timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_notation_list() -> list[dict]:
+    """[{code, date, list: [{notation, description}]}, ...] — SEMUA 951 saham
+    sekaligus (1 call), notasi khusus (UMA/suspend/dst) dari BEI. Dipake buat
+    filter keamanan (jangan alert saham yang lagi kena notasi bermasalah)."""
+    res = httpx.get(f"{BASE_URL}/analysis/notation", headers=_headers(), timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_insider_activity(code: str, from_date: str, to_date: str, page: int = 1, limit: int = 10) -> dict:
+    """{"totalPage","page","nextPage","data": [{date, code, name, prev_percent,
+    prev_val, next_percent, next_val, change, badge}]} — perubahan kepemilikan
+    direksi/komisaris/pengendali. from_date/to_date format YYYY-MM-DD."""
+    res = httpx.get(f"{BASE_URL}/analysis/shareholder-insider", headers=_headers(),
+                     params={"code": code, "from": from_date, "to": to_date, "page": page, "limit": limit}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_financial_statement(code: str, statement: str = "BS", period_type: str = "Q", limit: int = 8) -> dict:
+    """Laporan keuangan (BS=Balance Sheet, IS=Income Statement, CF=Cash Flow dugaan
+    enum-nya, belum diverifikasi lawan API asli). period_type: FY/Q/Q1-Q4."""
+    res = httpx.get(f"{BASE_URL}/analysis/financial-statement/{code}", headers=_headers(),
+                     params={"statement": statement, "type": period_type, "limit": limit}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_price_seasonality(code: str) -> dict:
+    """Pola musiman historis harga (bulan apa biasanya naik/turun) — belum
+    diverifikasi struktur field-nya lawan API asli, cuma dari nama endpoint."""
+    res = httpx.get(f"{BASE_URL}/analysis/price-seasonality/{code}", headers=_headers(), timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_sankey_chart(code: str) -> dict:
+    """Visualisasi arus dana masuk/keluar saham — belum diverifikasi struktur
+    field-nya lawan API asli, cuma dari nama endpoint."""
+    res = httpx.get(f"{BASE_URL}/analysis/sankey-chart/{code}", headers=_headers(), timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_top_ritel(date: str) -> dict:
+    """Struktur dugaan sama kayak get_top_accumulation (top mover versi retail)
+    — belum diverifikasi lawan API asli."""
+    res = httpx.get(f"{BASE_URL}/analysis/top/ritel", headers=_headers(), params={"date": date}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_order_queue(code: str, price: float, side: str, page: int = 0, limit: int = 50) -> list[dict]:
+    """[{time, order_id, order_volume, open_volume, done_volume, order_value,
+    open_value, done_value}, ...] — antrian order di 1 level harga. side: BUY/SELL.
+    Dipake buat deteksi order institusi gede yang ngantri."""
+    res = httpx.get(f"{BASE_URL}/analysis/queue/{code}", headers=_headers(),
+                     params={"price": price, "side": side, "page": page, "limit": limit}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_running_trade(code: str, date: str, page: int = 1, limit: int = 50) -> dict:
+    """{"totalPage","page","nextPage","data": [{board, time, price, volume, buyer,
+    seller, buyer_dom, seller_dom, type, avg_price}]} — tape reading, transaksi
+    per-trade. date format YYYY-MM-DD."""
+    res = httpx.get(f"{BASE_URL}/analysis/running-trade/{code}", headers=_headers(),
+                     params={"date": date, "page": page, "limit": limit}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_price_table(code: str, date: str) -> list[dict]:
+    """[{price, buy_volume, sell_volume, buy_freq, sell_freq}, ...] — Volume
+    Profile, per level harga. date format YYYY-MM-DD."""
+    res = httpx.get(f"{BASE_URL}/analysis/price-table/{code}", headers=_headers(), params={"date": date}, timeout=30)
     res.raise_for_status()
     return res.json()
 
