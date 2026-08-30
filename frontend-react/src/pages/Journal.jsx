@@ -15,6 +15,7 @@ export default function Journal() {
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState(new Date().getMonth() + 1);
   const [monthData, setMonthData] = useState({});
+  const [suggestions, setSuggestions] = useState([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDay, setModalDay] = useState(null);
@@ -34,6 +35,13 @@ export default function Journal() {
         setMonthData(byDate);
       } catch {
         if (!cancelled) setMonthData({});
+      }
+      try {
+        const res = await fetch(`${API_BASE}/journal/suggestions?year=${viewYear}&month=${viewMonth}`);
+        const { data } = await res.json();
+        if (!cancelled) setSuggestions(data || []);
+      } catch {
+        if (!cancelled) setSuggestions([]);
       }
     })();
     return () => { cancelled = true; };
@@ -100,6 +108,20 @@ export default function Journal() {
     } finally {
       setSaving(false);
     }
+  }
+
+  const modalDateStr = modalDay ? `${viewYear}-${pad(viewMonth)}-${pad(modalDay)}` : null;
+  const usedEmiten = new Set(groups.map((g) => g.emiten.trim().toUpperCase()).filter(Boolean));
+  const daySuggestions = modalDateStr
+    ? suggestions.filter((s) => s.tanggal === modalDateStr && !usedEmiten.has(s.emiten))
+    : [];
+
+  function addSuggestion(s) {
+    setGroups((gs) => {
+      const empty = gs.find((g) => !g.emiten.trim());
+      const filled = { emiten: s.emiten, pl: s.profit_loss, amount: '' };
+      return empty ? gs.map((g) => (g.id === empty.id ? { ...g, ...filled } : g)) : [...gs, newGroup(filled.emiten, filled.pl)];
+    });
   }
 
   const startDow = new Date(viewYear, viewMonth - 1, 1).getDay();
@@ -169,6 +191,26 @@ export default function Journal() {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
             </button>
           </div>
+
+          {daySuggestions.length > 0 && (
+            <div className="mb-4 p-2.5 rounded-lg bg-cyan/5 border border-cyan/20">
+              <p className="text-[10px] text-cyan font-semibold mb-1.5">📡 Dari sinyal NEXUS (klik buat isi otomatis):</p>
+              <div className="flex flex-wrap gap-1.5">
+                {daySuggestions.map((s) => (
+                  <button
+                    key={s.emiten} onClick={() => addSuggestion(s)}
+                    className={`text-[11px] font-mono font-semibold px-2.5 py-1 rounded-lg border transition ${
+                      s.profit_loss === 'profit'
+                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20'
+                        : 'bg-red-500/10 text-red-300 border-red-500/30 hover:bg-red-500/20'
+                    }`}
+                  >
+                    {s.emiten} ({s.outcome_pct >= 0 ? '+' : ''}{s.outcome_pct}%)
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-4 max-h-72 overflow-y-auto pr-1">
             {groups.map((g) => (

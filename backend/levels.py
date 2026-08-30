@@ -22,8 +22,15 @@ def rr_label(rr_ratio: float) -> str:
 
 
 def support_resistance(hist) -> dict:
-    support = float(hist["Low"].tail(20).min())
-    resistance = float(hist["High"].tail(20).max())
+    # resistance/support dari 20 hari SEBELUM hari ini (exclude hari ini) —
+    # kalau ikut ngitung hari ini, pas lagi breakout (bikin high baru) resistance
+    # jadi SAMA kayak harga sekarang sendiri (tautologi, TP=0%). Bug ini
+    # kejadian beneran: KETR & LIFE punya entry_price==target==close_price
+    # PERSIS gara-gara ini, muncul sebagai "tp_hit 0%" yang gak berarti apa-apa.
+    # Pola fix sama kayak scoring.py::resistance_prior.
+    prior = hist.iloc[:-1].tail(20)
+    support = float(prior["Low"].min()) if not prior.empty else float(hist["Low"].tail(20).min())
+    resistance = float(prior["High"].max()) if not prior.empty else float(hist["High"].tail(20).max())
     price_now = float(hist["Close"].iloc[-1])
 
     # zona entry deket HARGA SEKARANG (bukan nempel di support 20 hari) — kalau

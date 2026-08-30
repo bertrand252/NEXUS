@@ -72,6 +72,42 @@ def get_month(year: int, month: int):
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
+@router.get("/suggestions")
+def get_suggestions(year: int, month: int):
+    """Prefill semi-auto dari signal_alerts yang UDAH DITUTUP (tp_hit/sl_hit/
+    timeout) bulan ini — bukan full-auto (NEXUS gak tau lu beneran ikutin
+    call-nya atau lot berapa, broker retail Indonesia gak ada API publik
+    individual buat itu), tapi minimal emiten+arah profit/loss udah keisi,
+    tinggal user konfirm + isi amount beneran (yang cuma user yang tau)."""
+    start = date(year, month, 1).isoformat()
+    end_month = month + 1 if month < 12 else 1
+    end_year = year if month < 12 else year + 1
+    end = date(end_year, end_month, 1).isoformat()
+
+    try:
+        res = (
+            supabase.table("signal_alerts")
+            .select("ticker,closed_at,outcome_pct,status")
+            .in_("status", ["tp_hit", "sl_hit", "timeout"])
+            .gte("closed_at", start).lt("closed_at", end)
+            .execute()
+        )
+    except Exception:
+        return {"data": []}
+
+    suggestions = []
+    for r in res.data:
+        if r.get("outcome_pct") is None or not r.get("closed_at"):
+            continue
+        suggestions.append({
+            "tanggal": r["closed_at"][:10],
+            "emiten": r["ticker"],
+            "profit_loss": "profit" if r["outcome_pct"] > 0 else "loss",
+            "outcome_pct": r["outcome_pct"],
+        })
+    return {"data": suggestions}
+
+
 @router.get("/analytics")
 def get_analytics(year: int):
     """Rekap buat halaman Analytics: monthly P&L, win rate, best/worst month,
