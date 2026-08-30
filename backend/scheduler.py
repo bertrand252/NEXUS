@@ -25,6 +25,9 @@ from routers.intel import submit_intel, IntelInput
 from routers.settings import DEFAULTS as SETTINGS_DEFAULTS
 from market_calendar import is_trading_day, upcoming_holidays
 from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
+from logger import get_logger
+
+log = get_logger("scheduler")
 
 TELEGRAM_SCRAPE_INTERVAL_SECONDS = 10 * 60  # preview publik gak realtime kayak bot API, polling 10 menit cukup
 
@@ -825,13 +828,15 @@ def _send_running_positions_update() -> None:
 
 async def run_scheduler() -> None:
     while True:
-        check_and_alert()
-        _check_watchlist_alerts()
-        _check_economic_reminders()
-        try:
-            _check_bpjs()
-        except Exception:
-            pass
+        # tiap check DIBUNGKUS SENDIRI-SENDIRI (sebelumnya 3 dari 4 gak
+        # ke-bungkus sama sekali — kalau salah satu raise exception gak
+        # terduga, SELURUH loop ini mati diem-diem, gak ada lagi Swing/
+        # watchlist/econ/BPJS check sampe Railway di-restart manual)
+        for check in (check_and_alert, _check_watchlist_alerts, _check_economic_reminders, _check_bpjs):
+            try:
+                check()
+            except Exception:
+                log.exception(f"{check.__name__} gagal")
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 
@@ -845,11 +850,11 @@ async def run_night_recap() -> None:
         try:
             _send_night_recap()
         except Exception:
-            pass
+            log.exception("_send_night_recap gagal")
         try:
             _send_running_positions_update()
         except Exception:
-            pass
+            log.exception("_send_running_positions_update gagal")
 
 
 BSJP_SCREENER_HOUR = 15
@@ -943,7 +948,7 @@ async def run_bsjp_screener() -> None:
         try:
             _check_bsjp_screener()
         except Exception:
-            pass
+            log.exception("_check_bsjp_screener gagal")
 
 
 MARKET_OPEN = time(9, 0)
@@ -1156,7 +1161,7 @@ async def run_pre_market_briefing() -> None:
         try:
             _send_morning_briefing()
         except Exception:
-            pass
+            log.exception("_send_morning_briefing gagal")
 
 
 async def run_telegram_channel_listener() -> None:
@@ -1172,6 +1177,7 @@ async def run_telegram_channel_listener() -> None:
         try:
             updates = await asyncio.to_thread(get_channel_updates, offset)  # blocking (long-poll 25s), jangan nahan event loop
         except Exception:
+            log.exception("get_channel_updates gagal")
             await asyncio.sleep(10)
             continue
 
@@ -1189,7 +1195,7 @@ async def run_telegram_channel_listener() -> None:
             try:
                 submit_intel(IntelInput(sumber=post["chat"].get("title", "Telegram Channel"), isi_teks=text))
             except Exception:
-                pass  # gagal simpen/ringkas 1 pesan, lanjut ke update berikutnya
+                log.exception("submit_intel gagal (channel listener)")  # gagal simpen/ringkas 1 pesan, lanjut ke update berikutnya
 
 
 async def run_telegram_scrape_listener() -> None:
@@ -1203,6 +1209,7 @@ async def run_telegram_scrape_listener() -> None:
             try:
                 posts = await asyncio.to_thread(fetch_channel_posts, username)
             except Exception:
+                log.exception(f"fetch_channel_posts gagal (@{username})")
                 continue
             if not posts:
                 continue
@@ -1219,7 +1226,7 @@ async def run_telegram_scrape_listener() -> None:
                 try:
                     submit_intel(IntelInput(sumber=f"Telegram @{username}", isi_teks=p["text"]))
                 except Exception:
-                    pass
+                    log.exception(f"submit_intel gagal (scrape @{username})")
                 _last_seen_post_id[username] = p["post_id"]
         await asyncio.sleep(TELEGRAM_SCRAPE_INTERVAL_SECONDS)
 
@@ -1234,23 +1241,13 @@ async def run_morning_routine() -> None:
         if now >= target:
             target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
-        try:
-            refresh_mentor_calls()
-        except Exception:
-            pass  # gagal hari ini, coba lagi besok — jangan crash scheduler
-        try:
-            _generate_briefing()
-        except Exception:
-            pass
-        try:
-            _check_entry_zone_touches()
-        except Exception:
-            pass
-        try:
-            _check_signal_outcomes()
-        except Exception:
-            pass
-        try:
-            _check_portfolio_risk()
-        except Exception:
-            pass
+        # tiap step DIBUNGKUS SENDIRI-SENDIRI (bukan 1 try/except ngelingkupin
+        # semua) — biar 1 step gagal (misal refresh_mentor_calls network error)
+        # gak nge-block step selanjutnya (misal _check_signal_outcomes yang
+        # nutup posisi trading, itu lebih penting daripada mentor sheet)
+        for step in (refresh_mentor_calls, _generate_briefing, _check_entry_zone_touches,
+                     _check_signal_outcomes, _check_portfolio_risk):
+            try:
+                step()
+            except Exception:
+                log.exception(f"{step.__name__} gagal (morning routine)")
