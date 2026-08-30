@@ -63,6 +63,36 @@ export default function Scanner() {
   const [mentorOnly, setMentorOnly] = useState(false);
   const [mentorTickers, setMentorTickers] = useState(new Set());
 
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [screenerFormula, setScreenerFormula] = useState('');
+  const [screenerResult, setScreenerResult] = useState(null);
+  const [screenerError, setScreenerError] = useState(null);
+  const [screenerLoading, setScreenerLoading] = useState(false);
+
+  async function runScreener() {
+    setScreenerLoading(true);
+    setScreenerError(null);
+    setScreenerResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/scanner/screener`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formula: screenerFormula }),
+      });
+      if (res.status === 503) {
+        setScreenerError('Custom screener butuh Invezgo API key, belum aktif — nunggu langganan.');
+        return;
+      }
+      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+      const { data } = await res.json();
+      setScreenerResult((data || []).filter((r) => r.matched));
+    } catch (err) {
+      setScreenerError('Gagal jalanin screener: ' + err.message);
+    } finally {
+      setScreenerLoading(false);
+    }
+  }
+
   async function loadScanner() {
     try {
       const [scanRes, mentorRes] = await Promise.all([
@@ -211,7 +241,45 @@ export default function Scanner() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 4V20M4 4H14L20 10V20H4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             Score ≥ 50 filter
           </button>
+          <button
+            onClick={() => setShowAdvanced((v) => !v)}
+            className={showAdvanced
+              ? 'flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-moderate text-white border border-moderate transition'
+              : 'flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-moderate/10 text-moderate border border-moderate/30 hover:bg-moderate/20 transition'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 21V14M4 10V3M12 21V12M12 8V3M20 21V16M20 12V3M1 14H7M9 8H15M17 16H23" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            Advanced Filter
+          </button>
         </div>
+
+        {showAdvanced && (
+          <div className="glow-border rounded-2xl bg-card border border-border p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-white tracking-tight">Custom Screener (Invezgo)</h3>
+              <span className="text-[10px] text-slate-500 font-mono">Formula custom, contoh: "prev &lt; close"</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text" value={screenerFormula} onChange={(e) => setScreenerFormula(e.target.value)}
+                placeholder='prev < close' className="flex-1 bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/50"
+              />
+              <button
+                onClick={runScreener} disabled={screenerLoading || !screenerFormula.trim()}
+                className="text-xs font-semibold px-4 py-2 rounded-lg bg-moderate/10 text-moderate border border-moderate/30 hover:bg-moderate/20 transition disabled:opacity-50"
+              >
+                {screenerLoading ? 'Nyari...' : 'Jalankan'}
+              </button>
+            </div>
+            {screenerError && <p className="text-sm text-slate-500 mt-3">{screenerError}</p>}
+            {screenerResult && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {screenerResult.map((r, i) => (
+                  <Link key={i} to={`/stock-detail?t=${r.code}`} className="text-xs font-mono px-2.5 py-1 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 transition">{r.code}</Link>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="glow-border rounded-2xl bg-card border border-border overflow-hidden">
           <div className="overflow-x-auto scrollbar-thin">

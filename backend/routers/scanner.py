@@ -293,6 +293,25 @@ def translate_summary(payload: TranslateInput):
         raise HTTPException(status_code=502, detail=f"Gagal translate: {e}")
 
 
+class ScreenerInput(BaseModel):
+    formula: str
+
+
+@router.post("/screener")
+@limiter.limit("3/15minute")  # sama persis rate limit Invezgo endpoint ini (3 request/15 menit) - JANGAN dinaikin
+def run_custom_screener(request: Request, payload: ScreenerInput):
+    """Kerangka "Advanced Filter" Scanner — formula custom (contoh: "prev < close"),
+    langsung diteruskan ke /screener/screen Invezgo. BELUM dites lawan API asli,
+    404 kalau belum configured (bukan array kosong — biar frontend gak nganggep
+    filter emang gak ada yang cocok, padahal fiturnya emang belum aktif)."""
+    if not invezgo_client.is_configured():
+        raise HTTPException(status_code=503, detail="Custom screener butuh Invezgo API key, belum aktif.")
+    try:
+        return {"data": invezgo_client.run_screener(payload.formula)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Screener gagal: {e}")
+
+
 @router.post("/{ticker}/annotate")
 def annotate_chart(ticker: str):
     """Penjelasan Groq buat level support/resistance di chart Stock Detail —
@@ -373,6 +392,20 @@ def get_broker_flow(ticker: str):
     except Exception:
         result["price_seasonality"] = None
     return result
+
+
+@router.get("/top/ritel")
+def get_top_ritel():
+    """Kerangka widget "Top Retail Activity" (Dashboard) — saham yang lagi
+    rame ditransaksiin investor ritel hari ini. Struktur response DUGAAN
+    sama kayak get_top_accumulation ({"accum":[...],"dist":[...]}), belum
+    diverifikasi lawan API asli."""
+    if not invezgo_client.is_configured():
+        return {"configured": False, "data": None}
+    try:
+        return {"configured": True, "data": invezgo_client.get_top_ritel(today_wib().isoformat())}
+    except Exception:
+        return {"configured": True, "data": None}
 
 
 @router.get("/index/ihsg")

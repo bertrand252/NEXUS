@@ -44,6 +44,7 @@ export default function Dashboard() {
   const [refreshingBriefing, setRefreshingBriefing] = useState(false);
   const [watchlist, setWatchlist] = useState(null);
   const [sectorHeatmap, setSectorHeatmap] = useState(null);
+  const [topRitel, setTopRitel] = useState(null);
 
   function loadBriefing() {
     fetch(`${API_BASE}/daily-briefing`)
@@ -89,6 +90,11 @@ export default function Dashboard() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => setSectorHeatmap(data || []))
       .catch(() => setSectorHeatmap([]));
+
+    fetch(`${API_BASE}/scanner/top/ritel`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(setTopRitel)
+      .catch(() => setTopRitel(null));
 
     loadBriefing();
   }, []);
@@ -175,6 +181,18 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+          )}
+        </div>
+
+        <div className="glow-border rounded-2xl bg-card border border-border p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white tracking-tight">Top Retail Activity</h3>
+            {!topRitel?.configured && <span className="text-[11px] text-slate-500 font-mono">Belum tersedia — nunggu Invezgo API aktif</span>}
+          </div>
+          {!topRitel?.configured ? (
+            <p className="text-sm text-slate-500 py-4">Saham yang lagi rame ditransaksiin investor ritel hari ini bakal muncul di sini begitu Invezgo aktif.</p>
+          ) : (
+            <p className="text-sm text-slate-500 py-4">{topRitel.data ? 'Ada data — tampilan detail belum dibuat.' : 'Gagal ambil data hari ini.'}</p>
           )}
         </div>
 
