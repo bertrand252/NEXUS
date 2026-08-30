@@ -147,6 +147,46 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
     return result
 
 
+def pick_bpjs_candidate(candidates: list[dict]) -> dict:
+    """Fase 1 seleksi alert BPJS (Day Trade) — BEDA gate dari Swing
+    (pick_alert_candidate): BPJS gak butuh breakout_confirmed resmi 20-hari,
+    basisnya momentum_score (volume+harga naik di SESI berjalan hari ini,
+    dari intraday.py::session_takeoff, dibanding rata-rata sesi yang sama
+    hari-hari sebelumnya) ATAU call aktif mentor, digabung berita jangka
+    pendek — HARAPANNYA harga lanjut naik ke hari berikutnya (beda BSJP yang
+    reaktif sore-ini-jual-besok-pagi). Gak ada indikator resmi/baku dari
+    mentor buat BPJS — ini judgment call gabungan, mirip pick_alert_candidate
+    tapi gate-nya lebih longgar sesuai sifatnya.
+    Return: {"pilih": str|None, "faktor_pendukung": [str], "alasan_singkat": str}."""
+    system_prompt = (
+        "Kamu analis saham IDX yang nyari kandidat 'BPJS' (Day Trade) — beda "
+        "dari Swing (breakout resistance 20 hari, dipegang berminggu-minggu) "
+        "dan beda dari BSJP (beli sore jual pagi besoknya, reaktif 1 hari). "
+        "BPJS itu momentum yang lagi kejadian HARI INI (volume+harga naik di "
+        "sesi perdagangan yang lagi jalan, dibanding kebiasaan sesi yang sama "
+        "hari-hari sebelumnya — field momentum_score, makin tinggi makin "
+        "kuat) DIGABUNG berita/katalis jangka pendek, dengan HARAPAN harga "
+        "lanjut naik 1-2 hari ke depan (bukan cuma hari ini doang). Dikasih "
+        "daftar kandidat: ticker, momentum_score, session (sesi 1 atau sesi 2 "
+        "yang lagi diukur), berita terkait kalau ada, status call aktif "
+        "mentor trading kalau ada.\n\n"
+        "SYARAT WAJIB: momentum_score > 0, ATAU ada call aktif mentor. GAK "
+        "ADA threshold resmi/baku dari mentor buat BPJS — ini judgment call "
+        "kamu, boleh mempertimbangkan berita jangka pendek yang MENDUKUNG "
+        "kelanjutan kenaikan (bukan sekadar berita netral). Pilih PALING "
+        "BANYAK 1 ticker yang paling meyakinkan, atau null kalau gak ada "
+        "yang cukup meyakinkan — mending gak ada call daripada call asal. "
+        "Jangan mengarang berita/faktor yang gak ada di data. Balikin JSON "
+        'persis: {"pilih": "TICKER" atau null, "faktor_pendukung": ["poin 1"], '
+        '"alasan_singkat": "1 kalimat"}'
+    )
+    user_prompt = json.dumps({"kandidat": candidates}, ensure_ascii=False)
+    result = ask_json(system_prompt, user_prompt)
+    if not result.get("pilih") or result.get("pilih") == "null":
+        result["pilih"] = None
+    return result
+
+
 def analyze_alert(ticker: str, score_breakdown: dict, levels: dict, context: dict | None = None) -> dict:
     """Generate alasan alert Telegram — dipanggil scheduler.py. `context` opsional
     (dari pick_alert_candidate + fase 2): berita, mentor call, event ekonomi global,

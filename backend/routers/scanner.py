@@ -50,6 +50,17 @@ def _get_history(ticker: str, period: str = "2mo"):
     return hist
 
 
+def _get_history_intraday(ticker: str, period: str = "5d", interval: str = "15m"):
+    """Sama pola _get_history, tapi bar 15-menit — dipake BSJP stage-2 (session
+    takeoff) & BPJS. Pola fetch-nya sama persis CHART_TIMEFRAMES["1D"] di bawah,
+    udah kebukti index-nya tz-aware Asia/Jakarta."""
+    hist = yf.Ticker(f"{ticker}.JK").history(period=period, interval=interval)
+    hist = hist.dropna(subset=["Close"])
+    if hist.empty:
+        raise ValueError(f"no intraday data for {ticker}")
+    return hist
+
+
 def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> dict:
     price_now = float(hist["Close"].iloc[-1])
     price_5d_ago = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else float(hist["Close"].iloc[0])
@@ -378,6 +389,24 @@ def get_stock_detail(ticker: str, period: str = "1M"):
         result["mentor_call"] = mentor_res.data[0] if mentor_res.data else None
     except Exception:
         result["mentor_call"] = None
+
+    try:
+        bpjs_res = (
+            supabase.table("signal_alerts").select("alerted_at,status,entry_price,target,stop_loss")
+            .eq("ticker", ticker).eq("source", "bpjs")
+            .order("alerted_at", desc=True).limit(1).execute()
+        )
+        result["bpjs_last_alert"] = bpjs_res.data[0] if bpjs_res.data else None
+    except Exception:
+        result["bpjs_last_alert"] = None  # kolom "source" belum ada / query gagal — jangan gagalin detail saham
+
+    try:
+        # cocok_invest itung PER/PBV/dividend dari yfinance .info (lambat), cuma
+        # dihitung di refresh_fundamentals bulk job — di sini cukup baca cache-nya
+        invest_res = supabase.table("scanner_cache").select("cocok_invest").eq("ticker", ticker).limit(1).execute()
+        result["cocok_invest"] = bool(invest_res.data and invest_res.data[0].get("cocok_invest"))
+    except Exception:
+        result["cocok_invest"] = False
 
     timeframe = CHART_TIMEFRAMES.get(period, CHART_TIMEFRAMES["1M"])
     if timeframe == CHART_TIMEFRAMES["1M"]:

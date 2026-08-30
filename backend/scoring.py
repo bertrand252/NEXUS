@@ -122,7 +122,14 @@ def bsjp_criteria(price_now: float, price_prev: float, volume_today: float,
     0-100 kayak yang lain (ini emang gaya "lolos syarat atau enggak", bukan
     dinilai). Kriteria dari komunitas screener saham Indonesia (Stockbit/DSI,
     formula publik) — harga breakout ≥5% dari kemarin DIKONFIRMASI volume 2x
-    rata-rata, di atas MA5, minat institusi (value >Rp5M), bukan saham gocap."""
+    rata-rata, di atas MA5, minat institusi (value >Rp5M), bukan saham gocap.
+
+    Ini Stage-1 PROXY murah doang (dihitung dari data harian EOD, jalan ke
+    semua 951 ticker tiap refresh scanner_cache, dipake buat badge "BSJP" di
+    Scanner) — BUKAN teknik BSJP asli mentor (spike sesi 2 vs sesi 1
+    intraday). Konfirmasi asli dihitung Stage-2 di `intraday.py::session_takeoff`
+    + `bsjp_intraday_score()` di bawah, cuma jalan ke pool kecil kandidat yang
+    lolos proxy ini, sesaat sebelum alert Telegram (scheduler.py::_check_bsjp_screener)."""
     if not price_prev or not volume_avg20:
         return False
     return (
@@ -132,6 +139,37 @@ def bsjp_criteria(price_now: float, price_prev: float, volume_today: float,
         and value_traded_idr > 5_000_000_000
         and price_prev > 50
     )
+
+
+def bsjp_intraday_score(takeoff: dict | None, value_traded_idr: float) -> float:
+    """Stage-2 BSJP — skor RELATIF buat ranking kandidat (BUKAN pass/fail
+    dengan angka multiplier baku — user eksplisit gak ada indikator resmi dari
+    mentor buat BSJP, cuma "sahamnya oke, terbang di sesi 2"). 0.0 kalau gak
+    ada takeoff (data kurang), sesi 2 gak naik, atau likuiditas di bawah
+    ambang institusi (sama Rp5M kayak proxy Stage-1). Base skor = volume_ratio
+    sesi 2. Sesi 1 yang JUGA spike itu bonus/pendukung ringan, bukan syarat."""
+    if not takeoff or takeoff["price_change_pct"] <= 0:
+        return 0.0
+    if value_traded_idr < 5_000_000_000:
+        return 0.0
+    score = takeoff["volume_ratio"]
+    if takeoff.get("s1_spike_supporting"):
+        score *= 1.1
+    return round(score, 3)
+
+
+def bpjs_momentum_score(takeoff: dict | None, value_traded_idr: float) -> float:
+    """BPJS (Day Trade) — reuse `intraday.py::session_takeoff` tapi buat SESI
+    APAPUN yang lagi jalan (bukan cuma sesi 2 kayak BSJP), karena BPJS
+    horizonnya "harapan lanjut ke hari berikutnya", bukan reaktif sore-ini-jual-
+    besok-pagi kayak BSJP. Ambang likuiditas Rp3M (lebih rendah dari BSJP
+    Rp5M — ponytail: tebakan, gak ada dasar resmi mentor soal ini, gampang
+    di-tweak kalau ternyata kurang pas)."""
+    if not takeoff or takeoff["price_change_pct"] <= 0:
+        return 0.0
+    if value_traded_idr < 3_000_000_000:
+        return 0.0
+    return round(takeoff["volume_ratio"], 3)
 
 
 MIN_COMPRESSION_RR = 1.5  # sama standar kayak MIN_RR_RATIO di scheduler.py

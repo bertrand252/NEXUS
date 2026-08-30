@@ -6,16 +6,18 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 — gak butuh cron/Celery/proses terpisah, paling sederhana buat single-user tool.
 """
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from html import escape as _esc
 import yfinance as yf
 from config import supabase, WIB, today_wib
-from routers.scanner import _get_history
+from routers.scanner import _get_history, _get_history_intraday
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
 from chart_render import render_chart
-from groq_client import analyze_alert, pick_alert_candidate, assess_running_positions
+from scoring import bsjp_intraday_score, bpjs_momentum_score
+from intraday import daily_session_stats, session_takeoff
+from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions
 from forex_factory import get_forex_events
 from telegram_bot import send_alert_photo, send_alert, get_channel_updates, delete_message
 from telegram_scrape import fetch_channel_posts
@@ -826,6 +828,10 @@ async def run_scheduler() -> None:
         check_and_alert()
         _check_watchlist_alerts()
         _check_economic_reminders()
+        try:
+            _check_bpjs()
+        except Exception:
+            pass
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 
@@ -855,12 +861,24 @@ BSJP_SCREENER_MINUTE = 30  # SEBELUM market tutup, bukan sesudah — BSJP beli-n
 MAX_BSJP_PER_DAY = 2  # user eksplisit minta dibatesin — jangan kirim SEMUA yang lolos syarat,
                         # cuma yang PALING kuat, sama semangatnya kayak cap Swing 1-2/minggu
 
+BSJP_POOL_LIMIT = 20  # pool kandidat Stage-1 (proxy EOD murah), BUKAN final list —
+                        # Stage-2 intraday di bawah yang mutusin siapa beneran "terbang" sesi 2
+
 
 def _check_bsjp_screener() -> None:
-    """BSJP itu screener checklist pass/fail (lihat scoring.py::bsjp_criteria),
-    BUKAN 1 "pick terbaik" kayak Swing — tapi tetep DIBATESIN ke yang paling
-    kuat (diurut dari volume_ratio, itu inti sinyal BSJP), bukan kirim semua
-    yang lolos AND-condition (bisa banyak & bikin kewalahan kalau gak dibatesin)."""
+    """2 tahap, sama pola _gather_candidates (screen murah ke semua 951 ->
+    hitung berat cuma ke pool kecil): Stage-1 `scoring.py::bsjp_criteria`
+    (proxy EOD, udah jalan di scanner_cache.cocok_bsjp) nyaring pool kandidat
+    murah dari 951 ticker. Stage-2 di sini beneran ngukur intraday sesi 1 vs
+    sesi 2 (teknik asli mentor: sahamnya "terbang" di sesi 2, sesi 1 spike
+    cuma pendukung) via intraday.py + scoring.py::bsjp_intraday_score — cuma
+    jalan ke pool kecil (BSJP_POOL_LIMIT), sequential (bukan ThreadPoolExecutor,
+    sekelas jumlah ticker sama _gather_candidates).
+
+    User eksplisit gak ada indikator resmi baku dari mentor buat BSJP — kalau
+    Stage-2 gak nemu yang beneran skor >0 (sesi 2 gak "terbang"), JANGAN
+    kirim apa-apa. Lebih baik diam daripada maksain alert dari proxy EOD
+    doang yang belum tentu bener."""
     if _dedup_seen("bsjp", "screener"):
         return
     settings = _load_settings()
@@ -868,20 +886,47 @@ def _check_bsjp_screener() -> None:
         return
 
     try:
-        res = (
+        pool_res = (
             supabase.table("scanner_cache").select("ticker,price,volume_ratio")
-            .eq("cocok_bsjp", True).order("volume_ratio", desc=True).limit(MAX_BSJP_PER_DAY)
+            .eq("cocok_bsjp", True).order("volume_ratio", desc=True).limit(BSJP_POOL_LIMIT)
             .execute()
         )
     except Exception:
         return
-    if not res.data:
+    if not pool_res.data:
         return
 
-    lines = ["🌆 <b>BSJP — Screener Beli Sore Jual Pagi</b>\n", "Ticker terkuat hari ini:"]
-    for row in res.data:
-        lines.append(f"✅ <b>{_esc(row['ticker'])}</b> — Rp{row['price']:,.0f} (volume {row['volume_ratio']}x rata-rata)")
-    lines.append("\n📌 Syarat: breakout ≥5% + volume ≥2x rata-rata 20 hari + minat institusi.")
+    scored = []
+    for row in pool_res.data:
+        ticker = row["ticker"]
+        try:
+            hist_15m = _get_history_intraday(ticker)
+            days = daily_session_stats(hist_15m)
+            takeoff = session_takeoff(days, session="s2")
+        except Exception:
+            continue
+        if takeoff is None:
+            continue
+        value_traded_idr = row["price"] * days[-1]["s2_volume"]
+        score = bsjp_intraday_score(takeoff, value_traded_idr)
+        if score > 0:
+            scored.append({"ticker": ticker, "price": row["price"], "takeoff": takeoff, "score": score})
+
+    if not scored:
+        return  # sesi 2 gak ada yang "terbang" beneran — diam, jangan maksain
+
+    scored.sort(key=lambda c: c["score"], reverse=True)
+    scored = scored[:MAX_BSJP_PER_DAY]
+
+    lines = ["🌆 <b>BSJP — Beli Sore Jual Pagi</b>\n", "Terkonfirmasi \"terbang\" di sesi 2 hari ini:"]
+    for c in scored:
+        t = c["takeoff"]
+        support_note = " (+ sesi 1 juga spike, pendukung)" if t.get("s1_spike_supporting") else ""
+        lines.append(
+            f"✅ <b>{_esc(c['ticker'])}</b> — Rp{c['price']:,.0f} "
+            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, harga +{t['price_change_pct']}%){support_note}"
+        )
+    lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.</b>")
 
     if send_alert("\n".join(lines)):
@@ -899,6 +944,158 @@ async def run_bsjp_screener() -> None:
             _check_bsjp_screener()
         except Exception:
             pass
+
+
+MARKET_OPEN = time(9, 0)
+MARKET_CLOSE = time(15, 50)
+
+BPJS_POOL_LIMIT = 15  # lebih kecil dari pool Swing (20) — dipanggil berkali-kali/hari
+                        # (tiap jam pas market buka), bukan 1x/hari kayak Swing/BSJP
+MAX_BPJS_PER_DAY = 1  # 1 pick terbaik/hari, gaya judgment-call kayak Swing (bukan checklist kayak BSJP)
+
+
+def _in_market_hours() -> bool:
+    """09:00-15:50 WIB + hari trading — beda dari Swing (_in_offhours_window,
+    JUSTRU di luar jam market) & BSJP (1x jam 15:30 doang). User eksplisit:
+    BPJS "jam open market sampe close, sebelum bsjp"."""
+    now = _now_wib()
+    return is_trading_day(now.date()) and MARKET_OPEN <= now.time() < MARKET_CLOSE
+
+
+def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
+    """Stage-1 murah: scanner_cache yang ada aktivitas hari ini (volume_ratio
+    >=1.3, longgar — ponytail heuristic cuma nyaring saham 'lagi hidup') ATAU
+    ada call mentor aktif, urut volume_ratio desc. Stage-2: sequential loop
+    (sekelas jumlah ticker _gather_candidates) ambil intraday, ukur sesi yang
+    LAGI JALAN sekarang (kasar: jam >=13:00 WIB anggap sesi 2, selain itu
+    sesi 1 — lunch break self-correct lewat MIN_SESSION_BARS di
+    intraday.py::session_takeoff, bar belum cukup ya None)."""
+    mentor_by_ticker = _active_mentor_calls()
+    news_by_ticker = _recent_news_by_ticker()
+
+    try:
+        scan_res = (
+            supabase.table("scanner_cache").select("ticker,price,volume_ratio")
+            .gte("volume_ratio", 1.3).order("volume_ratio", desc=True).limit(pool_limit)
+            .execute()
+        )
+        scan_by_ticker = {r["ticker"]: r for r in scan_res.data}
+    except Exception:
+        scan_by_ticker = {}
+
+    pool = set(scan_by_ticker) | set(mentor_by_ticker)
+    session = "s2" if _now_wib().time() >= time(13, 0) else "s1"
+
+    candidates = []
+    for ticker in pool:
+        scan = scan_by_ticker.get(ticker)
+        mentor = mentor_by_ticker.get(ticker)
+        momentum_score = 0.0
+        try:
+            price = scan["price"] if scan else _get_history(ticker)["Close"].iloc[-1]
+            hist_15m = _get_history_intraday(ticker)
+            days = daily_session_stats(hist_15m)
+            takeoff = session_takeoff(days, session=session)
+            if takeoff is not None:
+                value_traded_idr = price * days[-1][f"{session}_volume"]
+                momentum_score = bpjs_momentum_score(takeoff, value_traded_idr)
+        except Exception:
+            pass
+        if momentum_score <= 0 and not mentor:
+            continue
+        candidates.append({
+            "ticker": ticker,
+            "momentum_score": momentum_score,
+            "session": session,
+            "mentor_call": ({"status": mentor["status"], "buy_price": mentor["buy_price"]} if mentor else None),
+            "berita": news_by_ticker.get(ticker),
+        })
+
+    candidates.sort(key=lambda c: c["momentum_score"], reverse=True)
+    return candidates
+
+
+def _build_bpjs_caption(ticker: str, candidate: dict, pick: dict, levels: dict) -> str:
+    """Vibe lebih ringkas dari Swing (_build_caption) — BPJS gak punya sourcing
+    TP1/TP2 multi-timeframe (horizonnya cuma 1-2 hari, `find_smart_tp` didesain
+    buat horizon Swing mingguan-bulanan, dipaksain ke sini jadi confluence yang
+    gak relevan). Entry/TP/SL dari support_resistance() 20-hari biasa, cukup
+    buat ke-track menang/kalah di signal_alerts."""
+    faktor = pick.get("faktor_pendukung") or []
+    faktor_line = f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor))}\n\n" if faktor else ""
+    session_label = "Sesi 2 (siang-sore)" if candidate["session"] == "s2" else "Sesi 1 (pagi)"
+    mentor_line = "\n👤 Ada call aktif mentor trading." if candidate.get("mentor_call") else ""
+    return (
+        f"⚡ <b>BPJS — Day Trade — {_esc(ticker)}</b>\n\n"
+        f"Momentum terdeteksi di {session_label}, skor relatif {candidate['momentum_score']}x rata-rata sesi.{mentor_line}\n\n"
+        f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f}-Rp{levels['entry_high']:,.0f}\n"
+        f"🎯 <b>TARGET</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%)\n"
+        f"⛔ <b>STOP LOSS</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
+        f"⚖️ Risk:Reward — {levels['rr_label']}\n\n"
+        f"{faktor_line}"
+        f"📊 {_esc(pick.get('alasan_singkat', ''))}\n\n"
+        f"⚠️ Judgment call gabungan teknikal+berita, BUKAN indikator resmi mentor. "
+        f"Harapan lanjut naik 1-2 hari ke depan, bukan jaminan."
+    )
+
+
+def _check_bpjs() -> None:
+    """Gate berurutan: jam market -> dedup 1x/hari -> toggle notif (reuse
+    Swing) -> pool kandidat -> Groq pilih -> GUARD PYTHON (bukan cuma prompt,
+    pola sama Keputusan Desain #7 — Swing punya breakout_confirmed check,
+    ini versinya BPJS) -> entry/TP/SL simpel -> kirim -> catat."""
+    if not _in_market_hours():
+        return
+    if _dedup_seen("bpjs", "picked"):
+        return
+    settings = _load_settings()
+    if not settings["notif_strong_signal"]:
+        return
+
+    candidates = _gather_bpjs_candidates()
+    if not candidates:
+        return
+
+    try:
+        pick = pick_bpjs_candidate(candidates)
+    except Exception:
+        return
+
+    ticker = pick.get("pilih")
+    if not ticker:
+        return
+
+    candidate = next((c for c in candidates if c["ticker"] == ticker), None)
+    if candidate is None or (candidate["momentum_score"] <= 0 and not candidate.get("mentor_call")):
+        return  # jaga-jaga Groq halusinasi ticker di luar pool / ngelanggar instruksi sendiri
+
+    try:
+        hist = _get_history(ticker)
+        levels = support_resistance(hist)
+    except Exception:
+        return
+
+    caption = _build_bpjs_caption(ticker, candidate, pick, levels)
+    message_id = send_alert(caption)
+    if not message_id:
+        return
+
+    _dedup_mark("bpjs", "picked")
+
+    try:
+        supabase.table("signal_alerts").insert({
+            "ticker": ticker,
+            "entry_price": float(hist["Close"].iloc[-1]),
+            "entry_low": levels["entry_low"],
+            "entry_high": levels["entry_high"],
+            "target": levels["resistance"],
+            "stop_loss": levels["stop_loss"],
+            "status": "waiting_entry",
+            "telegram_message_id": message_id,
+            "source": "bpjs",
+        }).execute()
+    except Exception:
+        pass
 
 
 PRE_MARKET_HOUR = 8

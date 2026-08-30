@@ -90,6 +90,44 @@ function MentorCallCard({ call }) {
   );
 }
 
+const GAYA_TRADING = [
+  { key: 'invest', label: 'Investasi', hint: 'Big cap + dividen konsisten', cls: 'bg-risklow/10 text-risklow border-risklow/30' },
+  { key: 'swing', label: 'Swing', hint: 'Breakout + volume, RR bagus, dipegang mingguan', cls: 'bg-accent/10 text-accent border-accent/30' },
+  { key: 'bsjp', label: 'BSJP', hint: 'Lolos proxy screener + terkonfirmasi "terbang" di sesi 2', cls: 'bg-moderate/10 text-moderate border-moderate/30' },
+  { key: 'bpjs', label: 'BPJS', hint: 'Ada call Day Trade aktif (masih waiting_entry/open)', cls: 'bg-cyan/10 text-cyan border-cyan/30' },
+];
+
+function GayaTradingCard({ data }) {
+  const cocok = {
+    invest: !!data.cocok_invest,
+    swing: data.signal === 'Strong' || data.signal === 'Moderate',
+    bsjp: !!data.cocok_bsjp,
+    bpjs: !!data.bpjs_last_alert && ['waiting_entry', 'open'].includes(data.bpjs_last_alert.status),
+  };
+  return (
+    <div className="glow-border rounded-2xl bg-card border border-border p-5">
+      <h3 className="text-sm font-bold text-white tracking-tight mb-3">Gaya Trading</h3>
+      <div className="flex items-center gap-2 flex-wrap">
+        {GAYA_TRADING.map((g) => (
+          <span
+            key={g.key} title={g.hint}
+            className={`text-[11px] font-sans font-semibold px-2.5 py-1 rounded-full border ${cocok[g.key] ? g.cls : 'bg-white/[0.02] text-slate-600 border-border'}`}
+          >
+            {cocok[g.key] ? '✓' : '—'} {g.label}
+          </span>
+        ))}
+      </div>
+      {cocok.bpjs && (
+        <p className="text-xs text-slate-400 mt-3">
+          Call BPJS aktif: entry Rp{data.bpjs_last_alert.entry_price?.toLocaleString('id-ID')},
+          target Rp{data.bpjs_last_alert.target?.toLocaleString('id-ID')},
+          SL Rp{data.bpjs_last_alert.stop_loss?.toLocaleString('id-ID')} ({data.bpjs_last_alert.status})
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ScoreCard({ label, value, max, barClass }) {
   return (
     <div className="glow-border rounded-2xl bg-card border border-border p-4">
@@ -316,6 +354,8 @@ export default function StockDetail() {
           <ScoreCard label="Accumulation Score" value={data?.accumulation_score} max={30} barClass="bg-strong" />
           <ScoreCard label="Technical Score" value={data?.technical_score} max={20} barClass="bg-moderate" />
         </div>
+
+        {data && <GayaTradingCard data={data} />}
 
         {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} />}
         {data?.mentor_call && <MentorCallCard call={data.mentor_call} />}
