@@ -52,6 +52,39 @@ from routers.scanner import _sideways_days
 BREAKOUT_TECHNICAL_THRESHOLD = 12  # sinkron manual scheduler.py::BREAKOUT_TECHNICAL_THRESHOLD
 MIN_RR_RATIO = 1.5                 # sinkron manual scheduler.py::MIN_RR_RATIO
 SIGNAL_TIMEOUT_DAYS = 14           # sinkron manual scheduler.py::SIGNAL_TIMEOUT_DAYS
+MAX_RISK_PCT = 20                  # sinkron manual scheduler.py::MAX_RISK_PCT — kejadian nyata PACK
+MAX_REWARD_PCT = 50                # (TP +275%, SL -58%) kekirim ke Telegram sebelum cap ini ada di produksi.
+                                     # Backtest yang sebelumnya jalan TANPA cap ini — hasil "avg win" lama
+                                     # kemungkinan kena inflate outlier kayak gini, makanya di-re-run.
+
+
+def _fetch_ihsg_uptrend_map() -> dict:
+    """Riset VCP (Minervini): breakout compression cuma diklaim ampuh pas market
+    BROAD lagi uptrend — `scoring.py::compression_setup` yang ada SEKARANG gak
+    cek ini sama sekali. Buat eksperimen, index IHSG (^JKSE) di-fetch 1x doang
+    (bukan per ticker), map {date: bool} apa close hari itu di atas MA50-nya
+    sendiri (proxy uptrend paling standar/laziest, sama semangat kayak trend
+    filter yang udah ada di levels.py::determine_trend tapi versi index)."""
+    hist = yf.Ticker("^JKSE").history(period="5y").dropna(subset=["Close"])
+    ma50 = hist["Close"].rolling(50).mean()
+    uptrend = hist["Close"] > ma50
+    return {ts.date(): bool(v) for ts, v in uptrend.items()}
+
+
+def _volume_dry_up(hist_upto: pd.DataFrame, sideways_days: int) -> bool:
+    """Elemen VCP kedua yang ilang di compression_setup lama: volume harusnya
+    MENGECIL selama fase sideways (bukan cuma harga yang diem). Bandingin
+    rata-rata volume SELAMA base vs rata-rata volume 20 hari SEBELUM base
+    mulai — kalau base beneran "volume dry-up", volume selama base harusnya
+    lebih rendah dari kebiasaan sebelumnya."""
+    n = len(hist_upto)
+    if sideways_days < 5 or n < sideways_days + 20:
+        return False
+    vol_during_base = hist_upto["Volume"].iloc[-sideways_days:].mean()
+    vol_before_base = hist_upto["Volume"].iloc[-(sideways_days + 20):-sideways_days].mean()
+    if not vol_before_base:
+        return False
+    return vol_during_base < vol_before_base
 
 _DIR = os.path.dirname(__file__)
 RESULTS_PATH = os.path.join(_DIR, "backtest_results.json")
@@ -103,7 +136,7 @@ def _smart_levels(hist_slice: pd.DataFrame, weekly_slice: pd.DataFrame, monthly_
 
 
 def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, monthly: pd.DataFrame,
-                      timeout_days: int = SIGNAL_TIMEOUT_DAYS) -> list[dict]:
+                      timeout_days: int = SIGNAL_TIMEOUT_DAYS, ihsg_uptrend: dict | None = None) -> list[dict]:
     """Jalan sepanjang histori 1 ticker, cari hari breakout_confirmed (technical_score
     >=12) + RR gate (>=1.5) lolos, simulasiin trade sampe TP/SL/timeout/masih
     kebuka pas data abis. 1 posisi aktif per ticker di satu waktu (skip sinyal baru
@@ -138,6 +171,9 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
         if levels["rr_ratio"] < MIN_RR_RATIO:
             i += 1
             continue
+        if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
+            i += 1
+            continue  # SL/TP kejauhan buat swing beneran, sama sanity check kayak produksi
 
         entry_price = float(close[i])
         target, stop = levels["resistance"], levels["stop_loss"]
@@ -152,6 +188,14 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
         ma10 = float(hist_upto["Close"].tail(10).mean())
         ma20 = float(hist_upto["Close"].tail(20).mean())
         is_compression = compression_setup(ma5, ma10, ma20, entry_price, sideways_days, levels["rr_ratio"])
+
+        # versi VCP (Minervini) - 2 elemen yang ilang di compression_setup lama:
+        # volume harus MENGECIL selama base, DAN market broad (IHSG) harus lagi
+        # uptrend. is_compression_vcp lebih ketat, cuma True kalau ketiganya
+        # (compression lama + volume dry-up + IHSG uptrend) sama-sama kepenuhi.
+        volume_dry_up = _volume_dry_up(hist_upto, sideways_days) if is_compression else False
+        market_uptrend = bool(ihsg_uptrend and ihsg_uptrend.get(entry_date.date(), False)) if ihsg_uptrend else False
+        is_compression_vcp = is_compression and volume_dry_up and market_uptrend
 
         status, exit_price, exit_idx = None, None, None
         j = i + 1
@@ -183,6 +227,7 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
             "outcome_pct": outcome_pct,
             "days_held": (dates[exit_idx] - entry_date).days,
             "compression_setup": is_compression,
+            "compression_vcp": is_compression_vcp,
             "rr_ratio": levels["rr_ratio"],
         })
         i = exit_idx + 1  # lanjut nyari sinyal baru abis posisi lama ditutup
@@ -190,7 +235,7 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
     return trades
 
 
-def _process_one(ticker: str, timeout_days: int = SIGNAL_TIMEOUT_DAYS) -> list[dict]:
+def _process_one(ticker: str, timeout_days: int = SIGNAL_TIMEOUT_DAYS, ihsg_uptrend: dict | None = None) -> list[dict]:
     try:
         t = yf.Ticker(f"{ticker}.JK")
         hist = t.history(period="5y").dropna(subset=["Close"])
@@ -198,7 +243,7 @@ def _process_one(ticker: str, timeout_days: int = SIGNAL_TIMEOUT_DAYS) -> list[d
         monthly = t.history(period="max", interval="1mo").dropna(subset=["Close"])
     except Exception:
         return []
-    return _simulate_ticker(ticker, hist, weekly, monthly, timeout_days)
+    return _simulate_ticker(ticker, hist, weekly, monthly, timeout_days, ihsg_uptrend)
 
 
 def run(tickers: list[str] | None = None, timeout_days: int = SIGNAL_TIMEOUT_DAYS) -> None:
@@ -206,11 +251,18 @@ def run(tickers: list[str] | None = None, timeout_days: int = SIGNAL_TIMEOUT_DAY
         res = supabase.table("scanner_cache").select("ticker").execute()
         tickers = [r["ticker"] for r in res.data]
 
+    print("fetch IHSG buat filter uptrend market (VCP eksperimen)...")
+    try:
+        ihsg_uptrend = _fetch_ihsg_uptrend_map()
+    except Exception:
+        print("gagal fetch IHSG - eksperimen compression_vcp bakal selalu False")
+        ihsg_uptrend = {}
+
     print(f"backtest Swing (breakout+volume) pake {len(tickers)} ticker, histori 5 tahun tiap ticker, timeout={timeout_days} hari...")
     all_trades: list[dict] = []
     errors = 0
     with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(_process_one, t, timeout_days): t for t in tickers}
+        futures = {pool.submit(_process_one, t, timeout_days, ihsg_uptrend): t for t in tickers}
         for future in as_completed(futures):
             try:
                 all_trades.extend(future.result())
@@ -238,6 +290,12 @@ def run(tickers: list[str] | None = None, timeout_days: int = SIGNAL_TIMEOUT_DAY
     print(f"\n=== Breakout BIASA, gak ada compression ({len(non_comp_df)} trade) ===")
     non_comp_stats = _print_stats(non_comp_df) if not non_comp_df.empty else None
 
+    # versi VCP (Minervini) - compression_setup LAMA + volume dry-up + IHSG
+    # uptrend. Ini tes YANG FAIR lawan teknik asli (bukan versi kasar di atas).
+    vcp_df = df[df["compression_vcp"]]
+    print(f"\n=== Breakout compression VERSI VCP ({len(vcp_df)} trade) — + volume dry-up + IHSG uptrend ===")
+    vcp_stats = _print_stats(vcp_df) if not vcp_df.empty else None
+
     if overall["expectancy_pct"] <= 0:
         print("\n⚠️  PERINGATAN: expectancy <=0 — rata-rata gate breakout+volume ini RUGI")
         print("    kalau semua sinyal yang lolos diambil semua, bukan cuma 1-2 pick/minggu terbaik.")
@@ -248,6 +306,7 @@ def run(tickers: list[str] | None = None, timeout_days: int = SIGNAL_TIMEOUT_DAY
         "overall": overall,
         "compression_setup": comp_stats,
         "no_compression": non_comp_stats,
+        "compression_vcp": vcp_stats,
     }
     with open(RESULTS_PATH, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
