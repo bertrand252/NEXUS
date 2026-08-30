@@ -520,6 +520,22 @@ export default function StockDetail() {
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Seasonality</p>
                   <p className="text-slate-500">{brokerFlow.price_seasonality ? 'Ada data — tampilan belum dibuat.' : 'Belum tersedia.'}</p>
                 </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Tape Reading</p>
+                  {brokerFlow.running_trade?.data?.length ? (
+                    <ul className="space-y-1 text-slate-300 font-mono">
+                      {brokerFlow.running_trade.data.slice(0, 3).map((t, i) => (
+                        <li key={i} className={t.type === 'BUY' ? 'text-emerald-400' : 'text-red-400'}>
+                          {t.time} {t.type} {t.volume.toLocaleString('id-ID')} @{t.price}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-slate-500">Belum ada transaksi tercatat.</p>}
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Money Flow (Sankey)</p>
+                  <p className="text-slate-500">{brokerFlow.sankey_chart ? 'Ada data — tampilan belum dibuat.' : 'Belum tersedia.'}</p>
+                </div>
               </div>
             )}
           </div>

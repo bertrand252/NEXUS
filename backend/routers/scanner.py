@@ -175,6 +175,22 @@ def get_sector_heatmap():
     return {"data": data, "warning": None}
 
 
+@router.get("/sectors/rotation")
+def get_sector_rotation():
+    """Kerangka RRG (Relative Rotation Graph) asli — upgrade dari heatmap
+    manual di atas (GET /sectors, based scanner_cache doang) ke rotasi sektor
+    beneran (kuadran leading/weakening/lagging/improving) dari Invezgo.
+    Heatmap manual TETAP JALAN sebagai fallback/default (gratis, gak butuh
+    Invezgo) — endpoint ini TAMBAHAN, bukan gantiin."""
+    if not invezgo_client.is_configured():
+        return {"configured": False, "data": None}
+    try:
+        since = (today_wib() - timedelta(days=90)).isoformat()
+        return {"configured": True, "data": invezgo_client.get_sector_rotation(since, today_wib().isoformat())}
+    except Exception:
+        return {"configured": True, "data": None}
+
+
 @router.post("/refresh")
 @limiter.limit("2/minute")
 def refresh_scanner(request: Request):
@@ -350,6 +366,7 @@ def get_broker_flow(ticker: str):
             "configured": False,
             "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
             "notation": None, "price_table": None, "financial_statement": None, "price_seasonality": None,
+            "sankey_chart": None, "running_trade": None,
         }
 
     today = today_wib().isoformat()
@@ -387,6 +404,17 @@ def get_broker_flow(ticker: str):
         result["financial_statement"] = invezgo_client.get_financial_statement(ticker)
     except Exception:
         result["financial_statement"] = None
+    try:
+        result["sankey_chart"] = invezgo_client.get_sankey_chart(ticker)
+    except Exception:
+        result["sankey_chart"] = None
+    try:
+        # tape reading — limit kecil (10) doang, ini ringkasan/preview,
+        # bukan full replay (lihat diskusi soal "jangan niru fitur replay
+        # Invezgo, boros kuota" — cukup transaksi terakhir buat konteks)
+        result["running_trade"] = invezgo_client.get_running_trade(ticker, today, limit=10)
+    except Exception:
+        result["running_trade"] = None
     try:
         result["price_seasonality"] = invezgo_client.get_price_seasonality(ticker)
     except Exception:

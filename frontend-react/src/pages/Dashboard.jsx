@@ -45,6 +45,7 @@ export default function Dashboard() {
   const [watchlist, setWatchlist] = useState(null);
   const [sectorHeatmap, setSectorHeatmap] = useState(null);
   const [topRitel, setTopRitel] = useState(null);
+  const [sectorRRG, setSectorRRG] = useState(null);
 
   function loadBriefing() {
     fetch(`${API_BASE}/daily-briefing`)
@@ -90,6 +91,11 @@ export default function Dashboard() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(({ data }) => setSectorHeatmap(data || []))
       .catch(() => setSectorHeatmap([]));
+
+    fetch(`${API_BASE}/scanner/sectors/rotation`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(setSectorRRG)
+      .catch(() => setSectorRRG(null));
 
     fetch(`${API_BASE}/scanner/top/ritel`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -168,7 +174,9 @@ export default function Dashboard() {
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white tracking-tight">Sector Rotation</h3>
-            <span className="text-[11px] text-slate-500 font-mono">Sektor mana lagi rame Strong signal</span>
+            <span className="text-[11px] text-slate-500 font-mono">
+              {sectorRRG?.configured ? 'RRG asli ada, tampilan quadrant belum dibuat — masih heatmap manual di bawah' : 'Sektor mana lagi rame Strong signal'}
+            </span>
           </div>
           {sectorHeatmap?.length === 0 && <p className="text-sm text-slate-500 py-2">Cache scanner kosong — refresh dulu di Scanner.</p>}
           {sectorHeatmap?.length > 0 && (
