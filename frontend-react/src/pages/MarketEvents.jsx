@@ -41,6 +41,11 @@ export default function MarketEvents() {
     return () => { cancelled = true; };
   }, []);
 
+  const [corporate, setCorporate] = useState(null);
+  useEffect(() => {
+    fetch(`${API_BASE}/market-events/corporate`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setCorporate).catch(() => setCorporate(null));
+  }, []);
+
   const today = new Date().toISOString().slice(0, 10);
   const upcomingEvents = (events || []).filter((e) => e.date >= today);
   const currencyOptions = [...new Map(upcomingEvents.map((e) => [e.currency, e.flag])).entries()].sort(([a], [b]) => a.localeCompare(b));
@@ -110,6 +115,20 @@ export default function MarketEvents() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div className="glow-border rounded-2xl bg-card border border-border p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white tracking-tight">Corporate Actions (RUPS/Dividen)</h3>
+            {!corporate?.configured && <span className="text-[10px] text-slate-500 font-mono">Belum tersedia — nunggu Invezgo API aktif</span>}
+          </div>
+          {!corporate?.configured ? (
+            <p className="text-sm text-slate-500 py-6 text-center">
+              Jadwal RUPS/dividen resmi (bukan ekstrak dari teks berita) bakal muncul di sini begitu Invezgo aktif.
+            </p>
+          ) : (
+            <p className="text-sm text-slate-500 py-6 text-center">Data ada, tampilan detail belum dibuat.</p>
+          )}
         </div>
       </div>
     </>
