@@ -146,6 +146,44 @@ def get_price_table(code: str, date: str) -> list[dict]:
     return res.json()
 
 
+def get_calendar(code: str | None = None, action_type: str | None = None, page: int = 1, limit: int = 20) -> dict:
+    """{"totalPage","page","nextPage","data": [{code, type, payload: {...beda2
+    per type}}]} — corporate action (IPO/RUPS/DIVIDEND/SPLIT/dst). WAJIB isi
+    code ATAU action_type (gak boleh dua-duanya kosong, syarat API mereka).
+    action_type enum: IPO/PUBLIC_EXPOSE/REVERSE/RIGHT/RUPS_RESULT/
+    RUPS_SCHEDULE/SPLIT/WARRANT/BONUS/CONVERTION/DIVIDEND."""
+    params = {"page": page, "limit": limit}
+    if code:
+        params["code"] = code
+    if action_type:
+        params["type"] = action_type
+    res = httpx.get(f"{BASE_URL}/analysis/calendar", headers=_headers(), params=params, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_sector_rotation(from_date: str, to_date: str, base: str = "COMPOSITE", length: int = 10,
+                         interval: str = "weekly", tail: int = 5) -> dict:
+    """RRG (Relative Rotation Graph) — kuadran leading/weakening/lagging/
+    improving. base=COMPOSITE buat rotasi antar sektor, base=index lain
+    (IDX30/LQ45/dst) buat rotasi antar saham dalam index itu."""
+    res = httpx.get(f"{BASE_URL}/analysis/sector/rotation", headers=_headers(), params={
+        "from": from_date, "to": to_date, "base": base, "length": length, "interval": interval, "tail": tail,
+    }, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def run_screener(formula: str) -> list[dict]:
+    """[{code, matched, ...field lain sesuai formula}, ...] — screener custom
+    pake formula string (contoh: "prev < close"). RATE LIMIT KETAT: 3 request
+    per 15 menit (beda dari endpoint lain) — JANGAN dipanggil sering/otomatis,
+    cuma buat query manual user."""
+    res = httpx.post(f"{BASE_URL}/screener/screen", headers=_headers(), json={"formula": formula}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
 def get_stock_chart(code: str) -> dict:
     res = httpx.get(f"{BASE_URL}/analysis/chart/stock/{code}", headers=_headers(), timeout=30)
     res.raise_for_status()

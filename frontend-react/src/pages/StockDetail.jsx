@@ -67,7 +67,7 @@ function PositionSizeCalculator({ levels }) {
   );
 }
 
-function CompanyInfo({ company, ticker }) {
+function CompanyInfo({ company, ticker, financialStatement }) {
   const [lang, setLang] = useState('en');
   const [translated, setTranslated] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -122,6 +122,12 @@ function CompanyInfo({ company, ticker }) {
         {company.employees && <span className="text-[10px] text-slate-500 font-mono">{company.employees.toLocaleString('id-ID')} karyawan</span>}
       </div>
       {company.summary && <p className="text-sm text-slate-400 leading-relaxed text-justify">{lang === 'id' && translated ? translated : company.summary}</p>}
+      <div className="mt-3 pt-3 border-t border-border">
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Laporan Keuangan (Invezgo)</p>
+        <p className="text-xs text-slate-500">
+          {financialStatement ? 'Ada data — tampilan detail belum dibuat.' : 'Belum tersedia — nunggu Invezgo API aktif.'}
+        </p>
+      </div>
     </div>
   );
 }
@@ -434,7 +440,7 @@ export default function StockDetail() {
 
         {data && <GayaTradingCard data={data} />}
 
-        {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} />}
+        {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} financialStatement={brokerFlow?.financial_statement} />}
         {data?.mentor_call && <MentorCallCard call={data.mentor_call} />}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -484,7 +490,7 @@ export default function StockDetail() {
             {topBrokers && <canvas ref={brokerRef} height="140"></canvas>}
 
             {brokerFlow?.configured && (
-              <div className="mt-4 pt-4 border-t border-border grid grid-cols-2 gap-4 text-xs">
+              <div className="mt-4 pt-4 border-t border-border grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                 <div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Insider Activity (90 hari)</p>
                   {brokerFlow.insider_activity?.data?.length ? (
@@ -500,6 +506,19 @@ export default function StockDetail() {
                   {brokerFlow.notation?.list?.length ? (
                     <p className="text-strong font-semibold">⚠ {brokerFlow.notation.list.map((n) => n.notation).join(', ')}</p>
                   ) : <p className="text-slate-500">Gak ada notasi aktif.</p>}
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Top Akumulator</p>
+                  {brokerFlow.top_broker_stalker?.summary ? (
+                    <p className="text-slate-300">
+                      {brokerFlow.top_broker_stalker.broker} — {brokerFlow.top_broker_stalker.summary.active} hari aktif,
+                      total Rp{Number(brokerFlow.top_broker_stalker.summary.total).toLocaleString('id-ID')}
+                    </p>
+                  ) : <p className="text-slate-500">Belum ada data histori broker.</p>}
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Seasonality</p>
+                  <p className="text-slate-500">{brokerFlow.price_seasonality ? 'Ada data — tampilan belum dibuat.' : 'Belum tersedia.'}</p>
                 </div>
               </div>
             )}

@@ -330,7 +330,7 @@ def get_broker_flow(ticker: str):
         return {
             "configured": False,
             "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
-            "notation": None, "price_table": None,
+            "notation": None, "price_table": None, "financial_statement": None, "price_seasonality": None,
         }
 
     today = today_wib().isoformat()
@@ -339,6 +339,16 @@ def get_broker_flow(ticker: str):
         result["broker_summary"] = invezgo_client.get_broker_summary(ticker)
     except Exception:
         result["broker_summary"] = None
+
+    # broker paling gede net-buy hari ini -> liat histori akumulasi dia
+    # khusus di saham ini (broker stalker butuh 2 parameter: broker+stock,
+    # jadi harus tau broker MANA dulu dari broker_summary di atas)
+    try:
+        top_broker = max(result["broker_summary"], key=lambda b: b.get("net_value", 0)) if result["broker_summary"] else None
+        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker) if top_broker else None
+    except Exception:
+        result["top_broker_stalker"] = None
+
     try:
         result["insider_activity"] = invezgo_client.get_insider_activity(
             ticker, (today_wib() - timedelta(days=90)).isoformat(), today,
@@ -354,6 +364,14 @@ def get_broker_flow(ticker: str):
         result["price_table"] = invezgo_client.get_price_table(ticker, today)
     except Exception:
         result["price_table"] = None
+    try:
+        result["financial_statement"] = invezgo_client.get_financial_statement(ticker)
+    except Exception:
+        result["financial_statement"] = None
+    try:
+        result["price_seasonality"] = invezgo_client.get_price_seasonality(ticker)
+    except Exception:
+        result["price_seasonality"] = None
     return result
 
 
