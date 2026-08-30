@@ -15,6 +15,11 @@ info buat rekomendasi solid, bilang jujur di ringkasan dan biarin rekomendasi
 kosong — jangan maksa. Tiap rekomendasi HARUS nyebutin alasan spesifik yang
 merujuk ke data yang diberikan, bukan opini baru.
 
+BAHASA: SEMUA teks di output (ringkasan, tiap item berita, detail tanggal_penting,
+alasan rekomendasi) WAJIB dalam Bahasa Indonesia — walau sumber berita aslinya
+bahasa Inggris, TERJEMAHIN/tulis ulang dalam Bahasa Indonesia informal, JANGAN
+biarin ada teks bahasa Inggris nyempil atau campur bahasa.
+
 FORMAT BERITA: JANGAN digabung jadi paragraf panjang (males dibaca) — PECAH per
 poin berita jadi 1 kalimat pendek per item, dikelompokin ke 3 kategori sentiment
 (positive/negative/netral), tiap item nyebutin saham yang kena dampak (kalau
