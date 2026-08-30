@@ -5,6 +5,68 @@ import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
 
+function PositionSizeCalculator({ levels }) {
+  const [capital, setCapital] = useState(() => {
+    try { return localStorage.getItem('nexus_capital') || ''; } catch { return ''; }
+  });
+  const [riskPct, setRiskPct] = useState(() => {
+    try { return localStorage.getItem('nexus_risk_pct') || '2'; } catch { return '2'; }
+  });
+
+  useEffect(() => { try { localStorage.setItem('nexus_capital', capital); } catch { /* private mode dll, gapapa */ } }, [capital]);
+  useEffect(() => { try { localStorage.setItem('nexus_risk_pct', riskPct); } catch { /* private mode dll, gapapa */ } }, [riskPct]);
+
+  const cap = parseFloat(capital) || 0;
+  const risk = parseFloat(riskPct) || 0;
+  const entry = levels.entry_low;
+  const stop = levels.stop_loss;
+  const riskPerShare = entry - stop;
+  const riskAmount = cap * (risk / 100);
+  const shares = riskPerShare > 0 && riskAmount > 0 ? Math.floor(riskAmount / riskPerShare) : 0;
+  const lots = Math.floor(shares / 100); // 1 lot IDX = 100 lembar
+  const actualShares = lots * 100;
+  const actualCost = actualShares * entry;
+  const actualRisk = actualShares * riskPerShare;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <h4 className="text-xs font-bold text-white mb-3">Position Size Calculator</h4>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label className="text-[10px] text-slate-500">Modal (Rp)</label>
+          <input
+            type="number" value={capital} onChange={(e) => setCapital(e.target.value)} placeholder="10000000"
+            className="w-full mt-1 bg-card2 border border-border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent/50"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-slate-500">Risk per trade (%)</label>
+          <input
+            type="number" value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="2"
+            className="w-full mt-1 bg-card2 border border-border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent/50"
+          />
+        </div>
+      </div>
+      {cap > 0 && risk > 0 && riskPerShare > 0 ? (
+        lots > 0 ? (
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Lot</p><p className="text-lg font-extrabold font-mono text-accent">{lots}</p></div>
+            <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Modal Terpakai</p><p className="text-sm font-mono text-white mt-1">Rp{actualCost.toLocaleString('id-ID')}</p></div>
+            <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Risiko Riil</p><p className="text-sm font-mono text-moderate mt-1">Rp{actualRisk.toLocaleString('id-ID')}</p></div>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">Modal kurang buat 1 lot pun sesuai risk {risk}% ini.</p>
+        )
+      ) : (
+        <p className="text-xs text-slate-500">Isi modal & risk % buat ngitung berapa lot yang sesuai.</p>
+      )}
+      <p className="text-[10px] text-slate-600 mt-3">
+        Dihitung dari entry Rp{entry?.toLocaleString('id-ID')} & stop loss Rp{stop?.toLocaleString('id-ID')} — pertimbangan tambahan, bukan rekomendasi finansial.
+      </p>
+    </div>
+  );
+}
+
 function CompanyInfo({ company, ticker }) {
   const [lang, setLang] = useState('en');
   const [translated, setTranslated] = useState(null);
@@ -307,6 +369,7 @@ export default function StockDetail() {
                 </div>
               </div>
             )}
+            {data?.levels && <PositionSizeCalculator levels={data.levels} />}
             {data?.levels && (
               <div className="mt-4 pt-4 border-t border-border">
                 {!annotation && (
