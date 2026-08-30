@@ -1,10 +1,11 @@
 import json
 from typing import Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from config import supabase
 from groq_client import ask_json
 from forex_factory import get_forex_events
+from rate_limit import limiter
 
 router = APIRouter()
 
@@ -84,7 +85,8 @@ Belum tersedia — nunggu sumber data otomatis (belum ada API gratis buat data i
 
 
 @router.post("/simulate")
-def simulate_portfolio(payload: SimulateInput):
+@limiter.limit("5/minute")  # tiap panggilan manggil Groq (biaya + TPM limit)
+def simulate_portfolio(request: Request, payload: SimulateInput):
     if not payload.holdings:
         raise HTTPException(status_code=400, detail="Portofolio kosong")
 

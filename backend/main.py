@@ -2,8 +2,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from config import supabase, FRONTEND_ORIGINS
 from auth_guard import require_auth
+from rate_limit import limiter
 from routers import scanner, intel, portfolio, market_events, journal, telegram, watchlist, mentor_calls, daily_briefing, signal_track, settings
 from scheduler import (
     run_scheduler,
@@ -39,6 +43,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NEXUS API", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)  # WAJIB ditambahin SEBELUM CORS (middleware LIFO — kebalik urutannya)
 
 app.add_middleware(
     CORSMiddleware,

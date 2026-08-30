@@ -1,7 +1,7 @@
 import time
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import yfinance as yf
 from scoring import compute_score, bsjp_criteria, invest_criteria, compression_setup
@@ -10,6 +10,7 @@ from config import supabase, today_wib
 from levels import support_resistance, detect_pivot_zones
 from prediction import predict_direction
 from groq_client import translate_to_indonesian, explain_levels
+from rate_limit import limiter
 import invezgo_client
 
 router = APIRouter()
@@ -175,11 +176,16 @@ def get_sector_heatmap():
 
 
 @router.post("/refresh")
-def refresh_scanner():
+@limiter.limit("2/minute")
+def refresh_scanner(request: Request):
     """Live-fetch semua 951 ticker di data/idx_universe.json (paralel via thread pool,
     yfinance itu I/O-bound jadi ini bukan over-engineering — sequential bakal makan
     berpuluh menit), hitung score, terus upsert ke scanner_cache. Manual trigger,
-    belum ada scheduler otomatis."""
+    belum ada scheduler otomatis.
+
+    Rate limit KETAT (2/menit) — bukan cuma jaga backend NEXUS, tapi jaga-jaga
+    Yahoo Finance (951 request ke yfinance per panggilan, udah pernah kena
+    "Too Many Requests" gara-gara terlalu sering refresh, lihat insiden #8)."""
     accum_lookup = _build_accum_lookup()
 
     def _fetch_one(ticker: str) -> dict:
@@ -221,7 +227,8 @@ def refresh_scanner():
 
 
 @router.post("/refresh-fundamentals")
-def refresh_fundamentals():
+@limiter.limit("2/minute")
+def refresh_fundamentals(request: Request):
     """Data fundamental (PER/PBV/dividend yield/market cap) buat Invest
     criteria — TERPISAH dari POST /refresh (harga/volume) karena beda cadence
     (fundamental jarang berubah harian, gak perlu di-refresh tiap kali harga
