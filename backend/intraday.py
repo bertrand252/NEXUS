@@ -127,38 +127,4 @@ def session_takeoff(days: list[dict], session: str = "s2") -> dict | None:
     return result
 
 
-if __name__ == "__main__":
-    import pandas as pd
-
-    def _bar(ts, o, h, l, c, v):
-        return {"Open": o, "High": h, "Low": l, "Close": c, "Volume": v, "_ts": ts}
-
-    rows = []
-    # Kamis (weekday=3): Sesi 1 09:00-12:00, Sesi 2 13:30-15:50 — volume normal
-    for hh, mm in [(9, 0), (9, 15), (10, 0), (11, 0), (11, 45)]:
-        rows.append(_bar(f"2026-08-27 {hh:02d}:{mm:02d}", 100, 101, 99, 100, 100_000))
-    for hh, mm in [(13, 30), (14, 0), (14, 30), (15, 0), (15, 30), (15, 45)]:
-        rows.append(_bar(f"2026-08-27 {hh:02d}:{mm:02d}", 100, 101, 99, 100, 100_000))
-
-    # Jumat (weekday=4): Sesi 1 09:00-11:30, Sesi 2 14:00-15:50 — Sesi 2 TERBANG (volume 5x)
-    for hh, mm in [(9, 0), (9, 15), (10, 0), (11, 0), (11, 15)]:
-        rows.append(_bar(f"2026-08-28 {hh:02d}:{mm:02d}", 100, 101, 99, 100, 90_000))
-    for hh, mm in [(14, 0), (14, 30), (15, 0), (15, 15), (15, 30), (15, 45)]:
-        rows.append(_bar(f"2026-08-28 {hh:02d}:{mm:02d}", 100, 110, 100, 108, 500_000))
-
-    df = pd.DataFrame(rows)
-    df.index = pd.to_datetime(df.pop("_ts")).dt.tz_localize("Asia/Jakarta")
-
-    days = daily_session_stats(df)
-    assert len(days) == 2, f"expected 2 hari, dapet {len(days)}"
-    assert days[0]["date"].weekday() == 3
-    assert days[1]["date"].weekday() == 4
-    assert days[0]["s1_bars"] == 5 and days[0]["s2_bars"] == 6
-    assert days[1]["s1_bars"] == 5 and days[1]["s2_bars"] == 6, "Jumat Sesi 2 harusnya mulai jam 14:00, ke-split 6 bar"
-
-    takeoff = session_takeoff(days, session="s2")
-    assert takeoff is not None
-    assert takeoff["volume_ratio"] > 4, f"volume_ratio harusnya ~5x, dapet {takeoff['volume_ratio']}"
-    assert takeoff["price_change_pct"] > 5, f"price_change_pct harusnya naik gede, dapet {takeoff['price_change_pct']}"
-
-    print("intraday.py self-check OK:", takeoff)
+# self-check pindah ke tests/test_intraday.py (pytest beneran, jalan otomatis)
