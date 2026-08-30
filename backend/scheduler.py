@@ -265,6 +265,18 @@ BREAKOUT_TECHNICAL_THRESHOLD = 12  # technical_score minimal (dari 20) buat dian
 MIN_RR_RATIO = 1.5  # riset: 1:1.5-1:2 standar minimum umum, Swing spesifik idealnya 1:3+ — mulai
                      # dari 1.5 (gak terlalu ketat dulu), bisa dinaikin kalau kandidat kebanyakan lolos
 
+# Sanity bound TERAKHIR buat risk/reward — kejadian nyata (PACK): TP2 +275%,
+# SL -58.88% kekirim ke Telegram, user komplain "gamasuk akal". Root cause:
+# _apply_smart_tp cuma nge-cap SL versi smart_tp (15%, lihat komentar MPIX di
+# bawah), TAPI fallback ke support_resistance() 20-hari BIASA gak ada cap sama
+# sekali — kalau saham lagi volatile/tipis, 20-day low/Fibonacci extension bisa
+# jauh BANGET dari harga sekarang, jauh di luar rentang wajar Swing beneran
+# (user: TP wajar 10-50%, SL wajar 10-20%). Dicek di SATU tempat (gate RR),
+# bukan di tiap sumber TP/SL — biar kepenuhi gak peduli levels-nya dari smart_tp
+# atau fallback 20-hari.
+MAX_RISK_PCT = 20
+MAX_REWARD_PCT = 50
+
 
 _levels_cache: dict[str, dict] = {}  # {ticker: levels lengkap} dari _gather_candidates, dibaca check_and_alert()
 
@@ -357,6 +369,8 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             continue  # gagal fetch, skip — jangan asumsiin RR-nya oke
         if lv["rr_ratio"] < MIN_RR_RATIO:
             continue
+        if lv["risk_pct"] > MAX_RISK_PCT or lv["reward_pct"] > MAX_REWARD_PCT:
+            continue  # SL/TP kejauhan dari harga sekarang buat swing beneran (lihat komentar MAX_RISK_PCT) — skip, jangan kirim angka ngaco
         c["rr_ratio"] = lv["rr_ratio"]
         _levels_cache[c["ticker"]] = lv
         filtered.append(c)
@@ -1092,6 +1106,8 @@ def _check_bpjs() -> None:
         levels = support_resistance(hist)
     except Exception:
         return
+    if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
+        return  # SL/TP kejauhan dari harga sekarang, sama sanity check kayak Swing — jangan kirim angka ngaco
 
     caption = _build_bpjs_caption(ticker, candidate, pick, levels)
     message_id = send_alert(caption)
