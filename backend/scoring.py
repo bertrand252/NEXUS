@@ -199,6 +199,35 @@ def compression_setup(ma5: float, ma10: float, ma20: float, price_now: float,
     )
 
 
+def volume_dry_up(hist_upto, sideways_days: int) -> bool:
+    """Elemen VCP (Minervini) kedua yang ilang di compression_setup lama:
+    volume harusnya MENGECIL selama fase sideways (bukan cuma harga yang
+    diem). Bandingin rata-rata volume SELAMA base vs rata-rata volume 20
+    hari SEBELUM base mulai. Riset VCP (lihat CLAUDE.md) + backtest.py
+    ::_volume_dry_up konfirmasi versi lengkap ini (+ market_uptrend di
+    bawah) ngalahin compression versi longgar di data real."""
+    n = len(hist_upto)
+    if sideways_days < 5 or n < sideways_days + 20:
+        return False
+    vol_during_base = hist_upto["Volume"].iloc[-sideways_days:].mean()
+    vol_before_base = hist_upto["Volume"].iloc[-(sideways_days + 20):-sideways_days].mean()
+    if not vol_before_base:
+        return False
+    return vol_during_base < vol_before_base
+
+
+def is_market_uptrend(ihsg_hist) -> bool:
+    """Elemen VCP ketiga: broad market (IHSG) HARUS lagi uptrend, proxy paling
+    standar — close di atas MA50 sendiri. VCP terbukti (riset + backtest)
+    gak ampuh kalau market lagi sideways/turun, walau setup individual
+    sahamnya kelihatan bagus."""
+    if len(ihsg_hist) < 50:
+        return False
+    ma50 = ihsg_hist["Close"].tail(50).mean()
+    price_now = float(ihsg_hist["Close"].iloc[-1])
+    return bool(ma50 and price_now > ma50)
+
+
 def invest_criteria(per: float | None, pbv: float | None, dividend_yield: float | None,
                      market_cap: float | None) -> bool:
     """Investasi (hold panjang) — big cap + dividen konsisten + harga gak

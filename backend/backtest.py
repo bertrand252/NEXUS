@@ -46,7 +46,7 @@ import yfinance as yf
 from config import supabase
 from prediction_features import compute_features_series
 from levels import support_resistance, find_smart_tp, rr_label
-from scoring import compression_setup
+from scoring import compression_setup, volume_dry_up as _volume_dry_up
 from routers.scanner import _sideways_days
 
 BREAKOUT_TECHNICAL_THRESHOLD = 12  # sinkron manual scheduler.py::BREAKOUT_TECHNICAL_THRESHOLD
@@ -71,20 +71,6 @@ def _fetch_ihsg_uptrend_map() -> dict:
     return {ts.date(): bool(v) for ts, v in uptrend.items()}
 
 
-def _volume_dry_up(hist_upto: pd.DataFrame, sideways_days: int) -> bool:
-    """Elemen VCP kedua yang ilang di compression_setup lama: volume harusnya
-    MENGECIL selama fase sideways (bukan cuma harga yang diem). Bandingin
-    rata-rata volume SELAMA base vs rata-rata volume 20 hari SEBELUM base
-    mulai — kalau base beneran "volume dry-up", volume selama base harusnya
-    lebih rendah dari kebiasaan sebelumnya."""
-    n = len(hist_upto)
-    if sideways_days < 5 or n < sideways_days + 20:
-        return False
-    vol_during_base = hist_upto["Volume"].iloc[-sideways_days:].mean()
-    vol_before_base = hist_upto["Volume"].iloc[-(sideways_days + 20):-sideways_days].mean()
-    if not vol_before_base:
-        return False
-    return vol_during_base < vol_before_base
 
 _DIR = os.path.dirname(__file__)
 RESULTS_PATH = os.path.join(_DIR, "backtest_results.json")

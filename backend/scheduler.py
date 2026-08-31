@@ -15,7 +15,7 @@ from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
 from chart_render import render_chart
-from scoring import bsjp_intraday_score, bpjs_momentum_score
+from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend
 from intraday import daily_session_stats, session_takeoff
 from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem
 from forex_factory import get_forex_events
@@ -358,6 +358,15 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     # mentah ke json.dumps() di pick_alert_candidate, levels yang gede bakal
     # ikut bengkakin token prompt Groq kalau nempel di situ) biar
     # check_and_alert() gak perlu hitung ulang buat pemenang.
+    # market uptrend — dicek SEKALI doang buat semua kandidat (bukan per-ticker),
+    # elemen VCP ketiga: kompresi individual saham gak ampuh kalau IHSG lagi
+    # sideways/turun (riset + backtest.py konfirmasi, lihat komentar di atas)
+    try:
+        ihsg_hist = yf.Ticker("^JKSE").history(period="3mo", auto_adjust=False).dropna(subset=["Close"])
+        market_uptrend = is_market_uptrend(ihsg_hist)
+    except Exception:
+        market_uptrend = False
+
     _levels_cache.clear()
     filtered = []
     for c in candidates:
@@ -372,6 +381,16 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
         if lv["risk_pct"] > MAX_RISK_PCT or lv["reward_pct"] > MAX_REWARD_PCT:
             continue  # SL/TP kejauhan dari harga sekarang buat swing beneran (lihat komentar MAX_RISK_PCT) — skip, jangan kirim angka ngaco
         c["rr_ratio"] = lv["rr_ratio"]
+        # VCP lengkap (compression + volume dry-up + market uptrend) — backtest
+        # (data harga yang udah bener) BUKTIIN versi ini ngalahin breakout biasa
+        # (+0.75% vs +0.57% expectancy), beda dari compression longgar doang
+        # (+0.3%, KALAH dari breakout biasa). Makanya preferensi Groq sekarang
+        # pake compression_vcp, BUKAN compression_setup polos.
+        c["compression_vcp"] = bool(
+            c["compression_setup"]
+            and market_uptrend
+            and volume_dry_up(hist, c["sideways_days_before"] or 0)
+        )
         _levels_cache[c["ticker"]] = lv
         filtered.append(c)
     return filtered
@@ -666,6 +685,9 @@ def _check_watchlist_alerts() -> None:
     refresh sama sekali di antara 2 waktu itu), tapi dedup harian reset duluan
     -> alert IDENTIK kekirim 2x. Sekarang cuma alert kalau score BENERAN beda
     dari terakhir kali dialert, gak peduli lewat tengah malam berapa kali."""
+    settings = _load_settings()
+    if not settings["notif_watchlist"]:
+        return
     try:
         watch_res = supabase.table("watchlist").select("ticker,last_alerted_score").execute()
         watch_by_ticker = {r["ticker"]: r for r in watch_res.data}
@@ -914,7 +936,7 @@ def _check_bsjp_screener() -> None:
     if _dedup_seen("bsjp", "screener"):
         return
     settings = _load_settings()
-    if not settings["notif_strong_signal"]:
+    if not settings["notif_bsjp"]:
         return
 
     try:
@@ -1087,7 +1109,7 @@ def _check_bpjs() -> None:
     if _dedup_seen("bpjs", "picked"):
         return
     settings = _load_settings()
-    if not settings["notif_strong_signal"]:
+    if not settings["notif_bpjs"]:
         return
 
     candidates = _gather_bpjs_candidates()
@@ -1297,7 +1319,7 @@ def _send_weekly_postmortem() -> None:
     data asli, bukan nge-judge tiap trade — kalau data dikit/gak ada pola
     jelas, dia jujur bilang gitu (lihat prompt di groq_client.py)."""
     settings = _load_settings()
-    if not settings["notif_daily_recap"]:  # 1 toggle "recap" yang sama, belum ada toggle terpisah
+    if not settings["notif_weekly_postmortem"]:
         return
 
     since = (today_wib() - timedelta(days=7)).isoformat()
