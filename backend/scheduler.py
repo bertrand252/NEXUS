@@ -413,6 +413,30 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
                 c["financial_statement"] = invezgo_client.get_financial_statement(c["ticker"], statement="IS")
             except Exception:
                 pass
+            # order flow (bid/offer imbalance hari ini, dari Volume Profile) +
+            # broker net-buy 5 hari terakhir — konteks tambahan lain buat Groq
+            # (lihat pick_alert_candidate), pola sama kayak financial_statement:
+            # opsional, diem kalau gagal fetch, JANGAN gagalin kandidat gara-gara ini.
+            today_s = today_wib().isoformat()
+            from_s = (today_wib() - timedelta(days=5)).isoformat()
+            try:
+                pt = invezgo_client.get_price_table(c["ticker"], today_s)
+                buy_vol = sum(float(r.get("buy_volume") or 0) for r in pt)
+                sell_vol = sum(float(r.get("sell_volume") or 0) for r in pt)
+                c["order_flow"] = {
+                    "buy_volume": buy_vol, "sell_volume": sell_vol,
+                    "buy_sell_ratio": round(buy_vol / sell_vol, 2) if sell_vol > 0 else None,
+                }
+            except Exception:
+                pass
+            try:
+                bs = invezgo_client.get_broker_summary(c["ticker"], from_s, today_s)
+                ranked = sorted(bs, key=lambda b: float(b.get("net_value") or 0), reverse=True)
+                c["broker_net_top"] = [
+                    {"code": b["code"], "net_value": float(b["net_value"])} for b in ranked[:3]
+                ]
+            except Exception:
+                pass
         filtered.append(c)
     return filtered
 
