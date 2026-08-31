@@ -187,7 +187,8 @@ export default function PortfolioSimulation() {
               <div className="mt-4">
                 <label className="text-[10px] text-slate-500">Modal Total Trading (Rp) — opsional, buat cek money management</label>
                 <input
-                  type="number" placeholder="cth. 100000000" value={totalCapital} onChange={(e) => setTotalCapital(e.target.value)}
+                  type="number" min="0" placeholder="cth. 100000000" value={totalCapital}
+                  onChange={(e) => setTotalCapital(e.target.value === '' ? '' : String(Math.max(0, parseFloat(e.target.value) || 0)))}
                   className="w-full mt-1 bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/60"
                 />
               </div>
