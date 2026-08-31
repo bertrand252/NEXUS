@@ -5,28 +5,39 @@ import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
 
-// Struktur field laporan keuangan Invezgo belum diverifikasi lawan API asli —
-// render tabel generik dari kolom apapun yang ada di data, daripada nebak nama
-// field (revenue/laba/dst) yang bisa aja salah.
+// Shape CONFIRMED lawan API asli (2026-09-01): {"rows":[{id, name, level,
+// values:[{col, year, amount, period}], is_abstract}]} — pivot table (baris =
+// akun, kolom = quarter). Kolom diambil dari urutan `col` yang muncul di data
+// (API udah ngurutin terbaru dulu), bukan diasumsiin nama field flat lagi.
 function GenericTable({ raw }) {
-  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : null;
+  const rows = Array.isArray(raw?.rows) ? raw.rows : null;
   if (rows && !rows.length) return <p className="text-slate-500 text-[11px]">Belum ada data.</p>;
   if (!rows) {
     return <pre className="text-[10px] text-slate-400 bg-black/30 rounded-lg p-3 overflow-auto max-h-40 font-mono">{JSON.stringify(raw, null, 2)}</pre>;
   }
-  const cols = Object.keys(rows[0]).slice(0, 7);
+  const cols = [];
+  for (const row of rows) {
+    for (const v of row.values || []) {
+      if (!cols.includes(v.col)) cols.push(v.col);
+    }
+  }
   return (
     <div className="overflow-x-auto">
       <table className="text-[11px] text-slate-300 w-full">
         <thead>
           <tr className="text-slate-500 uppercase text-[9px]">
-            {cols.map((c) => <th key={c} className="text-left pr-3 pb-1 font-semibold">{c}</th>)}
+            <th className="text-left pr-3 pb-1 font-semibold">Akun</th>
+            {cols.map((c) => <th key={c} className="text-right pr-3 pb-1 font-semibold whitespace-nowrap">{c}</th>)}
           </tr>
         </thead>
         <tbody>
-          {rows.slice(0, 8).map((r, i) => (
-            <tr key={i} className="border-t border-border/50">
-              {cols.map((c) => <td key={c} className="pr-3 py-1 font-mono">{typeof r[c] === 'number' ? r[c].toLocaleString('id-ID') : String(r[c] ?? '—')}</td>)}
+          {rows.slice(0, 40).map((r) => (
+            <tr key={r.id} className={`border-t border-border/50 ${r.is_abstract ? 'font-semibold text-slate-200' : ''}`}>
+              <td className="pr-3 py-1 whitespace-nowrap" style={{ paddingLeft: `${(r.level || 0) * 12}px` }}>{r.name}</td>
+              {cols.map((c) => {
+                const v = (r.values || []).find((x) => x.col === c);
+                return <td key={c} className="pr-3 py-1 text-right font-mono">{v?.amount != null ? Number(v.amount).toLocaleString('id-ID') : '—'}</td>;
+              })}
             </tr>
           ))}
         </tbody>

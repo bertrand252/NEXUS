@@ -27,29 +27,37 @@ const SENTIMENT_CLASS = {
   mixed: 'bg-moderate/10 text-moderate border-moderate/30',
 };
 
-// Struktur field RRG asli belum diverifikasi lawan API (lihat invezgo_client.py::
-// get_sector_rotation) — coba beberapa nama field yang lazim dipake RRG (JdK
-// methodology: RS-Ratio/RS-Momentum, biasanya berpusat di 100/100). Kuadran:
-// kanan-atas Leading, kanan-bawah Weakening, kiri-bawah Lagging, kiri-atas Improving.
+// Shape CONFIRMED lawan API asli (2026-09-01): {"benchmark","lastDate",
+// "data":[{code,name,trail:[{date,x,y}],quadrant}]} — RS-Ratio/RS-Momentum
+// (JdK methodology, pusat 100/100) itu TIME SERIES per sektor (`trail`,
+// mingguan), bukan titik tunggal. Posisi SEKARANG = titik terakhir tiap
+// trail. `quadrant` udah diklasifikasiin API-nya sendiri (leading/weakening/
+// lagging/improving), gak perlu dihitung manual.
+const QUADRANT_COLOR = { leading: '#10B981', weakening: '#EAB308', lagging: '#EF4444', improving: '#06B6D4' };
+
 function parseRRG(raw) {
   const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : null;
   if (!rows || !rows.length) return null;
-  const xKey = ['rs_ratio', 'rsRatio', 'x'].find((k) => typeof rows[0][k] === 'number');
-  const yKey = ['rs_momentum', 'rsMomentum', 'y'].find((k) => typeof rows[0][k] === 'number');
-  const labelKey = ['label', 'name', 'sector', 'code'].find((k) => rows[0][k] != null);
-  if (!xKey || !yKey) return null;
-  return rows.map((r) => ({ x: r[xKey], y: r[yKey], label: labelKey ? r[labelKey] : '' }));
+  const points = rows
+    .map((r) => {
+      const trail = Array.isArray(r.trail) ? r.trail : null;
+      const last = trail?.length ? trail[trail.length - 1] : null;
+      if (!last || typeof last.x !== 'number' || typeof last.y !== 'number') return null;
+      return { x: last.x, y: last.y, label: r.name || r.code || '', quadrant: r.quadrant };
+    })
+    .filter(Boolean);
+  return points.length ? points : null;
 }
 
 function rrgChartConfig(points) {
   if (!points) return null;
   return {
     type: 'scatter',
-    data: { datasets: [{ data: points, backgroundColor: '#06B6D4', pointRadius: 5 }] },
+    data: { datasets: [{ data: points, backgroundColor: points.map((p) => QUADRANT_COLOR[p.quadrant] || '#06B6D4'), pointRadius: 5 }] },
     options: {
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => `${points[ctx.dataIndex].label} (${ctx.raw.x.toFixed(1)}, ${ctx.raw.y.toFixed(1)})` } },
+        tooltip: { callbacks: { label: (ctx) => `${points[ctx.dataIndex].label} — ${points[ctx.dataIndex].quadrant || '?'} (${ctx.raw.x.toFixed(1)}, ${ctx.raw.y.toFixed(1)})` } },
       },
       scales: {
         x: { title: { display: true, text: 'RS-Ratio', color: '#64748B' }, grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 10 } } },
@@ -57,6 +65,34 @@ function rrgChartConfig(points) {
       },
     },
   };
+}
+
+// Shape CONFIRMED lawan API asli (2026-09-01): {"accum":[{code,name,price,
+// change,value,volume,calculated_value,graph:[...]}],"dist":[...]}. "change"
+// UDAH dalam persen (0.463 = +0.463%, BUKAN fraction dikali 100) — dites
+// silang lawan harga asli yfinance (JRPT 1080→1085 = +0.463%, cocok persis).
+function TopRitelList({ data }) {
+  const accum = data?.accum || [];
+  const dist = data?.dist || [];
+  if (!accum.length && !dist.length) return <p className="text-sm text-slate-500 py-4">Gak ada data hari ini.</p>;
+  const Row = ({ r }) => (
+    <li className="flex items-center justify-between">
+      <span className="font-mono font-semibold text-white">{r.code}</span>
+      <span className={`font-mono ${r.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.change >= 0 ? '+' : ''}{Number(r.change).toFixed(2)}%</span>
+    </li>
+  );
+  return (
+    <div className="grid grid-cols-2 gap-4 text-xs">
+      <div>
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Akumulasi Ritel</p>
+        {accum.length ? <ul className="space-y-1">{accum.slice(0, 5).map((r) => <Row key={r.code} r={r} />)}</ul> : <p className="text-slate-500">Gak ada.</p>}
+      </div>
+      <div>
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Distribusi Ritel</p>
+        {dist.length ? <ul className="space-y-1">{dist.slice(0, 5).map((r) => <Row key={r.code} r={r} />)}</ul> : <p className="text-slate-500">Gak ada.</p>}
+      </div>
+    </div>
+  );
 }
 
 const HEATMAP_CLASS = (avgScore) => {
@@ -218,7 +254,10 @@ export default function Dashboard() {
               <p className="text-[10px] text-slate-500 mt-1">Kuadran: kanan-atas Leading · kanan-bawah Weakening · kiri-bawah Lagging · kiri-atas Improving</p>
             </div>
           )}
-          {sectorRRG?.configured && sectorRRG.data && !rrgPoints && (
+          {sectorRRG?.configured && Array.isArray(sectorRRG.data?.data) && sectorRRG.data.data.length === 0 && (
+            <p className="text-[11px] text-slate-500 mb-4 pb-4 border-b border-border">Belum ada data rotasi sektor.</p>
+          )}
+          {sectorRRG?.configured && sectorRRG.data && !Array.isArray(sectorRRG.data?.data) && !rrgPoints && (
             <div className="mb-4 pb-4 border-b border-border">
               <p className="text-[11px] text-slate-500 mb-2">Struktur field RRG belum ketebak otomatis — data mentah di bawah.</p>
               <pre className="text-[10px] text-slate-400 bg-black/30 rounded-lg p-3 overflow-auto max-h-40 font-mono">{JSON.stringify(sectorRRG.data, null, 2)}</pre>
@@ -245,8 +284,10 @@ export default function Dashboard() {
           </div>
           {!topRitel?.configured ? (
             <p className="text-sm text-slate-500 py-4">Saham yang lagi rame ditransaksiin investor ritel hari ini bakal muncul di sini begitu Invezgo aktif.</p>
+          ) : topRitel.data ? (
+            <TopRitelList data={topRitel.data} />
           ) : (
-            <p className="text-sm text-slate-500 py-4">{topRitel.data ? 'Ada data — tampilan detail belum dibuat.' : 'Gagal ambil data hari ini.'}</p>
+            <p className="text-sm text-slate-500 py-4">Gagal ambil data hari ini.</p>
           )}
         </div>
 

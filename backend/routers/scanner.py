@@ -526,10 +526,11 @@ def get_order_queue(ticker: str, price: float, side: str):
 
 @router.get("/top/ritel")
 def get_top_ritel():
-    """Kerangka widget "Top Retail Activity" (Dashboard) — saham yang lagi
-    rame ditransaksiin investor ritel hari ini. Struktur response DUGAAN
-    sama kayak get_top_accumulation ({"accum":[...],"dist":[...]}), belum
-    diverifikasi lawan API asli."""
+    """Widget "Top Retail Activity" (Dashboard) — saham yang lagi rame
+    ditransaksiin investor ritel hari ini. Shape DIVERIFIKASI lawan API asli
+    (2026-09-01): {"accum":[{code,name,price,change,...}],"dist":[...]} —
+    `change` udah dalam persen (BUKAN fraction). Data "hari ini" (today_wib())
+    kadang kosong sebelum EOD update kelar, itu normal bukan bug."""
     if not invezgo_client.is_configured():
         return {"configured": False, "data": None}
     try:
