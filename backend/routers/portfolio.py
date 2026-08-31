@@ -149,6 +149,11 @@ Belum tersedia — nunggu sumber data otomatis (belum ada API gratis buat data i
 @router.post("/simulate")
 @limiter.limit("5/minute")  # tiap panggilan manggil Groq (biaya + TPM limit)
 def simulate_portfolio(request: Request, payload: SimulateInput):
+    """Simulasi TEST doang — gak persist ke portfolio_holdings. Pisah dari
+    /active biar coba-coba skenario ("what if beli CSMI 200 lot") gak
+    kebawa jadi portofolio yang di-review scheduler.py::_check_portfolio_risk
+    tiap malam (bug lama: dulu tiap simulate SELALU nimpa portfolio_holdings,
+    termasuk auto-run pas halaman baru dibuka)."""
     if not payload.holdings:
         raise HTTPException(status_code=400, detail="Portofolio kosong")
 
@@ -165,9 +170,28 @@ def simulate_portfolio(request: Request, payload: SimulateInput):
     else:
         result["money_management"] = None
 
-    try:
-        supabase.table("portfolio_holdings").upsert({"id": 1, "holdings": holdings}).execute()
-    except Exception:
-        pass  # tabel belum di-setup — jangan gagalin simulasi cuma gara-gara ini, cuma nge-skip persist buat _check_portfolio_risk
-
     return result
+
+
+@router.get("/active")
+def get_active_portfolio():
+    """Portofolio AKTIF (beda dari simulasi test) — ini yang dipantau
+    scheduler.py::_check_portfolio_risk tiap malam. Cuma keisi kalau user
+    eksplisit klik "Simpan sebagai Portofolio Aktif"."""
+    try:
+        res = supabase.table("portfolio_holdings").select("holdings").eq("id", 1).limit(1).execute()
+    except Exception:
+        return {"holdings": None}
+    return {"holdings": res.data[0]["holdings"] if res.data else None}
+
+
+@router.post("/active")
+def save_active_portfolio(payload: SimulateInput):
+    """Simpan holdings sebagai portofolio AKTIF — eksplisit, terpisah dari
+    /simulate (test). Ini yang dibaca scheduler.py::_check_portfolio_risk
+    buat Nightly Portfolio Review."""
+    if not payload.holdings:
+        raise HTTPException(status_code=400, detail="Portofolio kosong")
+    holdings = [h.model_dump() for h in payload.holdings]
+    supabase.table("portfolio_holdings").upsert({"id": 1, "holdings": holdings}).execute()
+    return {"ok": True}

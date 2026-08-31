@@ -12,8 +12,10 @@ from config import GROQ_API_KEY, GROQ_MODEL
 _client = Groq(api_key=GROQ_API_KEY)
 
 
-def ask_json(system_prompt: str, user_prompt: str) -> dict:
-    """Panggil Groq, paksa output JSON, parse, dan lempar error yang jelas kalau gagal."""
+def ask_json(system_prompt: str, user_prompt: str, _retry: bool = True) -> dict:
+    """Panggil Groq, paksa output JSON, parse, dan lempar error yang jelas kalau gagal.
+    Retry SEKALI kalau Groq gagal generate JSON valid (`json_validate_failed` —
+    transient, biasanya ilang begitu dicoba ulang, bukan masalah prompt)."""
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY belum diisi di .env")
 
@@ -28,6 +30,8 @@ def ask_json(system_prompt: str, user_prompt: str) -> dict:
             temperature=0.3,
         )
     except Exception as e:
+        if _retry and "json_validate_failed" in str(e):
+            return ask_json(system_prompt, user_prompt, _retry=False)
         # error asli (misal ConnectError) sering ke-summarize jadi pesan generik
         # kayak "Connection error." — bongkar cause chain-nya biar keliatan akar
         # masalahnya beneran apa (DNS? TLS? timeout? refused?)
@@ -41,6 +45,8 @@ def ask_json(system_prompt: str, user_prompt: str) -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
+        if _retry:
+            return ask_json(system_prompt, user_prompt, _retry=False)
         raise RuntimeError(f"Groq gak balikin JSON valid: {raw[:300]}") from e
 
 

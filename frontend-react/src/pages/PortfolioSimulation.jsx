@@ -43,10 +43,10 @@ export default function PortfolioSimulation() {
       .catch(() => setTimeline([]));
   }, []);
 
-  const [holdings, setHoldings] = useState([
-    { kode: 'BBRI', lot: 80, avg_price: 4650 },
-    { kode: 'ASII', lot: 40, avg_price: 5300 },
-  ]);
+  const [holdings, setHoldings] = useState([]);
+  const [isActivePortfolio, setIsActivePortfolio] = useState(false); // true = holdings ini persis portofolio aktif tersimpan (belum diubah)
+  const [savingActive, setSavingActive] = useState(false);
+  const [saveError, setSaveError] = useState(null);
   const [kode, setKode] = useState('');
   const [lot, setLot] = useState('');
   const [avg, setAvg] = useState('');
@@ -91,11 +91,41 @@ export default function PortfolioSimulation() {
     }
   }
 
+  async function loadActivePortfolio() {
+    try {
+      const res = await fetch(`${API_BASE}/portfolio/active`);
+      const { holdings: saved } = await res.json();
+      if (saved && saved.length > 0) {
+        setHoldings(saved);
+        setIsActivePortfolio(true);
+      }
+    } catch { /* belum ada portofolio aktif tersimpan, gapapa mulai kosong */ }
+  }
+
   useEffect(() => {
     loadIntelHistory();
-    runSimulation();
+    loadActivePortfolio();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function saveActivePortfolio() {
+    if (holdings.length === 0) { alert('Isi portofolio dulu sebelum disimpan'); return; }
+    setSavingActive(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(`${API_BASE}/portfolio/active`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ holdings }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Gagal simpan');
+      setIsActivePortfolio(true);
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSavingActive(false);
+    }
+  }
 
   function addHolding() {
     const lotNum = parseFloat(lot);
@@ -103,9 +133,11 @@ export default function PortfolioSimulation() {
     if (!kode.trim() || !lotNum || !avgNum) { alert('Isi kode, lot, dan avg price dulu'); return; }
     setHoldings((hs) => [...hs, { kode: kode.trim().toUpperCase(), lot: lotNum, avg_price: avgNum }]);
     setKode(''); setLot(''); setAvg('');
+    setIsActivePortfolio(false);
   }
   function removeHolding(i) {
     setHoldings((hs) => hs.filter((_, idx) => idx !== i));
+    setIsActivePortfolio(false);
   }
 
   const totalValue = holdings.reduce((sum, h) => sum + h.lot * h.avg_price, 0) || 1;
@@ -139,7 +171,13 @@ export default function PortfolioSimulation() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="space-y-6">
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-4">Input Portofolio</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-bold text-white tracking-tight">Input Portofolio</h3>
+                <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border ${isActivePortfolio ? 'bg-risklow/10 text-risklow border-risklow/30' : 'bg-slate-500/10 text-slate-400 border-slate-500/30'}`}>
+                  {isActivePortfolio ? 'Portofolio Aktif' : 'Belum disimpan (test)'}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-500 -mt-2 mb-3">Portofolio Aktif dipantau Nightly Portfolio Review tiap malam. Ubah holdings di bawah = test doang, gak kepake buat alert sampe disimpan.</p>
               <div className="space-y-2 mb-3">
                 <input
                   type="text" placeholder="Kode saham (e.g. BBCA)" value={kode} onChange={(e) => setKode(e.target.value)}
@@ -197,6 +235,10 @@ export default function PortfolioSimulation() {
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="white" strokeWidth="2" strokeLinejoin="round" /></svg>
                 {simRunning ? 'Menjalankan AI...' : 'Jalankan Simulasi'}
               </button>
+              <button onClick={saveActivePortfolio} disabled={savingActive || isActivePortfolio} className="w-full mt-2 flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-risklow/50 hover:text-risklow transition disabled:opacity-50">
+                {isActivePortfolio ? '✓ Ini Portofolio Aktif' : savingActive ? 'Menyimpan...' : 'Simpan sebagai Portofolio Aktif'}
+              </button>
+              {saveError && <p className="text-xs text-strong mt-2">{saveError}</p>}
             </div>
 
             <details className="glow-border rounded-2xl bg-card border border-border p-5" open>

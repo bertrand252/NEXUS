@@ -1074,10 +1074,11 @@ def _check_economic_reminders() -> None:
 
 
 def _check_portfolio_risk() -> None:
-    """Gated `notif_portfolio_risk` di Settings. Reuse holdings terakhir yang
-    kesimpen otomatis pas user klik "Jalankan Simulasi" di Portfolio Simulation
-    (routers/portfolio.py::simulate_portfolio) — gak ada UI simpan-portofolio
-    terpisah, ini "nangkep" opportunistic. Dipindah dari pagi ke MALAM (jalan
+    """Gated `notif_portfolio_risk` di Settings. Reuse holdings yang eksplisit
+    disimpen user lewat tombol "Simpan sebagai Portofolio Aktif" di Portfolio
+    Simulation (routers/portfolio.py::save_active_portfolio) — TERPISAH dari
+    simulasi test/"what if" (routers/portfolio.py::simulate_portfolio, gak
+    persist). Dipindah dari pagi ke MALAM (jalan
     bareng Recap Malam) + detail per-saham (technical + _detect_bandar), sama
     kedalaman kayak _send_running_positions_update — bedanya holdings ini APA
     YANG BENERAN DIPEGANG user (portfolio_holdings), bukan cuma posisi yang
