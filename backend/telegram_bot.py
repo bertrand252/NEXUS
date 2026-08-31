@@ -27,9 +27,12 @@ def get_latest_chat_id() -> str | None:
 
 
 def get_channel_updates(offset: int | None = None, timeout: int = 25) -> list[dict]:
-    """Long-poll getUpdates buat channel_post doang. offset biar Telegram gak
-    ngirim ulang update yang udah di-ack (dipake scheduler.py)."""
-    params = {"timeout": timeout, "allowed_updates": '["channel_post"]'}
+    """Long-poll getUpdates — channel_post (forward berita) + callback_query
+    (tombol Terima/Tolak rotasi Swing). Digabung 1 fungsi/1 loop (bukan 2
+    poller terpisah) karena Telegram NOLAK >1 getUpdates paralel per bot
+    token (409 Conflict) — offset biar Telegram gak ngirim ulang update yang
+    udah di-ack (dipake scheduler.py::run_telegram_channel_listener)."""
+    params = {"timeout": timeout, "allowed_updates": '["channel_post","callback_query"]'}
     if offset is not None:
         params["offset"] = offset
     res = requests.get(f"{API_BASE}/getUpdates", params=params, timeout=timeout + 10)
@@ -103,6 +106,54 @@ def send_alert_photo(photo_bytes: bytes, caption: str) -> int | None:
     if not chat_id:
         return None
     return send_photo(chat_id, photo_bytes, caption)
+
+
+def send_message_with_buttons(chat_id: str, text: str, buttons: list[list[dict]]) -> int | None:
+    """buttons: [[{"text": "...", "callback_data": "..."}], ...] — inline
+    keyboard (dipake buat usul rotasi Swing: tombol Terima/Tolak)."""
+    res = requests.post(
+        f"{API_BASE}/sendMessage",
+        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+              "reply_markup": {"inline_keyboard": buttons}},
+        timeout=8,
+    )
+    if not res.ok:
+        return None
+    return res.json().get("result", {}).get("message_id")
+
+
+def send_alert_with_buttons(text: str, buttons: list[list[dict]]) -> int | None:
+    chat_id = get_saved_chat_id()
+    if not chat_id:
+        return None
+    return send_message_with_buttons(chat_id, text, buttons)
+
+
+def answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
+    """Wajib dipanggil abis tombol diklik — kalau enggak, Telegram nunjukin
+    loading spinner nempel di tombol user selamanya (client-side UX doang,
+    bukan API requirement fatal, tapi diem-diem gagal disini gak masalah)."""
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    try:
+        requests.post(f"{API_BASE}/answerCallbackQuery", json=payload, timeout=8)
+    except Exception:
+        pass
+
+
+def edit_message_text(message_id: int, text: str, remove_buttons: bool = True) -> bool:
+    """Update pesan usul rotasi abis user mutusin (ilangin tombol, tunjukin
+    hasil keputusan) — biar gak nyangkut nunjukin tombol yang udah gak
+    relevan lagi kalau di-scroll ulang."""
+    chat_id = get_saved_chat_id()
+    if not chat_id:
+        return False
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
+    if remove_buttons:
+        payload["reply_markup"] = {"inline_keyboard": []}
+    res = requests.post(f"{API_BASE}/editMessageText", json=payload, timeout=8)
+    return res.ok
 
 
 def delete_message(message_id: int) -> bool:

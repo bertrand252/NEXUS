@@ -111,8 +111,13 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
         "biasa +0.57%, sedangkan compression_setup SENDIRIAN (tanpa volume "
         "dry-up + market uptrend) cuma +0.3% — JUSTRU KALAH dari breakout biasa. "
         "Jadi: KALAU ada beberapa kandidat yang sama-sama breakout_confirmed, "
-        "UTAMAKAN yang compression_vcp true. compression_setup true TAPI "
-        "compression_vcp false itu BUKAN sinyal unggulan (data buktiin gak lebih "
+        "UTAMAKAN yang compression_vcp true. Kalau ADA BEBERAPA kandidat "
+        "compression_vcp true sekaligus, UTAMAKAN yang sideways_days_before "
+        "PALING PANJANG — prinsip mentor user: 'makin lama sideways/ngumpul "
+        "tenaga sebelum breakout, makin kenceng lompatannya', jadi durasi "
+        "sideways itu bukan cuma syarat lolos-gak-lolos, tapi juga pembeda "
+        "kualitas ANTAR kandidat yang sama-sama lolos. compression_setup true "
+        "TAPI compression_vcp false itu BUKAN sinyal unggulan (data buktiin gak lebih "
         "baik dari breakout biasa) — jangan diprioritasin di atas breakout biasa "
         "cuma gara-gara compression_setup true doang. Kalau ada: berita terkait "
         "beberapa hari terakhir, status call aktif mentor trading, "
@@ -156,6 +161,52 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
     result = ask_json(system_prompt, user_prompt)
     if not result.get("pilih") or result.get("pilih") == "null":
         result["pilih"] = None
+    return result
+
+
+def evaluate_portfolio_rotation(current_positions: list[dict], new_candidate: dict) -> dict:
+    """Portfolio Swing user SELALU dijaga maksimal 5 saham konkuren (keputusan
+    eksplisit user — lebih dari itu kesulitan diawasin "kayak supermarket").
+    Dipanggil pas 5 slot lagi penuh SEMUA tapi ada kandidat baru yang lolos
+    gate breakout+volume/VCP — Groq mutusin worth GANTI posisi PALING LEMAH
+    yang lagi dipegang demi kandidat baru ini, atau enggak. Keputusan final
+    TETEP di tangan user (dikirim sebagai tombol Terima/Tolak Telegram, NEXUS
+    gak pernah auto-eksekusi) — ini cuma REKOMENDASI awal.
+    Return: {"rotate": bool, "drop_ticker": str|None, "alasan": str}."""
+    system_prompt = (
+        "Kamu analis saham IDX yang jagain portofolio Swing user — SELALU "
+        "maksimal 5 saham konkuren (keputusan sadar user: lebih dari itu "
+        "kesulitan diawasin, bukan soal return doang). Semua 5 slot lagi "
+        "kepake (current_positions, ada entry_price/price_now/pnl_pct/target/"
+        "stop_loss tiap posisi), TAPI ada 1 kandidat BARU (new_candidate) "
+        "yang udah lolos gate breakout+volume/VCP NEXUS. Tugas kamu: putusin "
+        "worth GANTI salah satu posisi lama demi kandidat baru ini, atau "
+        "enggak.\n\n"
+        "PENTING — ini BUKAN keputusan ringan: ganti posisi = REALISASI P&L "
+        "SEKARANG JUGA (untung atau rugi apapun posisinya saat ini juga), "
+        "BUKAN nunggu TP/SL asli kesentuh. Cuma rotate kalau kandidat baru "
+        "JAUH lebih meyakinkan (compression_vcp lebih kuat/sideways_days_"
+        "before lebih panjang, rr_ratio lebih bagus) DIBANDING posisi PALING "
+        "LEMAH yang lagi dipegang (floating rugi gede tanpa katalis jelas, "
+        "atau momentum udah keliatan mati/gak sesuai thesis awal pas entry). "
+        "Kalau semua 5 posisi masih on-thesis & wajar (floating untung, atau "
+        "rugi kecil tapi belum ada tanda momentum mati), JANGAN rotate cuma "
+        "gara-gara ada kandidat baru yang 'lumayan' — itu overtrading, bukan "
+        "disiplin. Default-nya NOLAK, cuma rotate kalau alasannya BENERAN "
+        "kuat & jelas.\n\n"
+        "Jangan mengarang faktor yang gak ada di data. Balikin JSON persis: "
+        '{"rotate": true/false, "drop_ticker": "TICKER yang mau diganti" '
+        'atau null, "alasan": "penjelasan lengkap kenapa rotate atau enggak, '
+        'sebut posisi mana yang paling lemah kalau rotate"}'
+    )
+    user_prompt = json.dumps(
+        {"posisi_running": current_positions, "kandidat_baru": new_candidate},
+        ensure_ascii=False,
+    )
+    result = ask_json(system_prompt, user_prompt)
+    if not result.get("rotate"):
+        result["rotate"] = False
+        result["drop_ticker"] = None
     return result
 
 

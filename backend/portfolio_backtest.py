@@ -71,13 +71,13 @@ MENTOR_SLOT_PCT = 20        # tiap posisi SELALU 20% dari MODAL AWAL (fixed nomi
                               # asli dari mentor user, beda paradigma total dari risk-based:
                               # size gak dari jarak SL sama sekali, jadi otomatis imun dari
                               # bug MAX_POSITION_PCT yang tadi ketemu (GRPH dkk).
-MENTOR_MAX_POSITIONS = 4      # 80% max deployed / 20% per slot = 4 slot aktif; sisa 20%
-                              # (slot ke-5) sengaja gak pernah dipake buat ENTRY baru langsung,
-                              # tapi karena cash itu 1 kolam bersama (bukan sub-akun per slot),
-                              # otomatis jadi "reserve" yang ngerefill slot abis kena CL —
-                              # persis mekanisme yang user jelasin (Saham A pake 20%, kena CL 15%,
-                              # sisa 17%, entry berikutnya tetep dapet full 20% "amunisi" dari
-                              # kolam bersama, bukan cuma 17% doang).
+MENTOR_MAX_POSITIONS = 5      # sinkron manual scheduler.py::MAX_CONCURRENT_SWING — keputusan
+                              # user: portofolio SELALU 5 saham Swing konkuren (lebih dari itu
+                              # susah diawasin "kaya supermarket"), naik dari 4 sebelumnya.
+                              # 5×20%=100% deployed kalau MENTOR_SLOT_PCT tetep 20 — beda dari
+                              # versi lama (4×20%=80%, sisa 20% jadi reserve refill abis kena CL).
+                              # User nyebut mau turunin % per slot (gak dikonfirmasi berapa
+                              # pastinya) - MENTOR_SLOT_PCT BELUM diturunin, jangan tebak angkanya.
 
 
 def simulate_portfolio_mentor(trades: list[dict], initial_capital: float = INITIAL_CAPITAL,

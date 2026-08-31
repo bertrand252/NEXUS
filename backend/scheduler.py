@@ -17,9 +17,12 @@ from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_l
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend
 from intraday import daily_session_stats, session_takeoff
-from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem
+from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation
 from forex_factory import get_forex_events
-from telegram_bot import send_alert_photo, send_alert, get_channel_updates, delete_message
+from telegram_bot import (
+    send_alert_photo, send_alert, get_channel_updates, delete_message,
+    send_alert_with_buttons, answer_callback_query, edit_message_text,
+)
 from telegram_scrape import fetch_channel_posts
 from routers.intel import submit_intel, IntelInput
 from routers.settings import DEFAULTS as SETTINGS_DEFAULTS
@@ -340,10 +343,16 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             "berita": berita,
         })
 
-    # urut dari breakout+volume paling kuat (technical_score), BUKAN total_score —
-    # total_score masih kecampur Accumulation Score yang mock, technical_score
-    # murni breakout+volume yang REAL
-    candidates.sort(key=lambda c: c["technical_score"] or 0, reverse=True)
+    # urut compression_setup duluan (prinsip mentor: "makin lama sideways makin
+    # kenceng lompatannya" - candidate yang lama "ngumpul tenaga" jangan sampe
+    # ke-cut pool_limit cuma gara-gara technical_score-nya pas-pasan dibanding
+    # breakout biasa yang baru gerak), sideways_days_before PALING PANJANG jadi
+    # tie-breaker ke-2, technical_score (breakout+volume, REAL bukan total_score
+    # yang kecampur Accumulation Score mock) baru ke-3
+    candidates.sort(
+        key=lambda c: (c["compression_setup"], c["sideways_days_before"] or 0, c["technical_score"] or 0),
+        reverse=True,
+    )
     candidates = candidates[:pool_limit]
 
     # syarat RR minimal — DIHITUNG PAKE ANALISA LENGKAP (multi-timeframe: gap+
@@ -533,10 +542,20 @@ def _check_signal_outcomes() -> None:
             send_alert(f"⏱ <b>TIMEOUT — {_esc(row['ticker'])}</b> ({SIGNAL_TIMEOUT_DAYS} hari)\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}), gak kena TP/SL.")
 
 
-MAX_ALERTS_PER_WEEK = 2  # Swing itu 1-2 saham TERBAIK per MINGGU, bukan harian —
-                           # gerakannya gak secepat itu. Ngirim tiap hari/tiap jam
-                           # itu perilaku Scalping, bukan Swing (user eksplisit koreksi
-                           # ini — awalnya sempet dibatesin 2/hari doang, masih kebanyakan)
+MAX_ALERTS_PER_WEEK = 5  # Swing max 5 saham TERBAIK per MINGGU (revisi user dari 2 —
+                           # gak harus kirim tiap hari, tapi dikasih lebih banyak slot
+                           # kalau emang ada beberapa setup meyakinkan minggu itu),
+                           # bukan harian — gerakannya gak secepat itu, ngirim tiap
+                           # hari/jam itu perilaku Scalping bukan Swing
+
+MAX_CONCURRENT_SWING = 5  # portofolio SELALU dijaga maksimal 5 saham Swing RUNNING
+                           # bersamaan (keputusan sadar user: lebih dari itu susah
+                           # diawasin — "kaya supermarket"). BEDA dari MAX_ALERTS_
+                           # PER_WEEK (itu batas SINYAL BARU per minggu, ini batas
+                           # POSISI KONKUREN kapan aja). Begitu 5 slot penuh, kandidat
+                           # baru yang meyakinkan gak langsung di-skip — ditawarin
+                           # ROTASI (ganti posisi paling lemah) lewat tombol Telegram
+                           # (lihat _propose_rotation), keputusan final tetep di user.
 
 
 def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
@@ -590,6 +609,222 @@ def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
         levels["rr_ratio_tp2"] = round(reward_pct_tp2 / risk_pct, 2) if risk_pct > 0 else 0.0
 
 
+def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: dict,
+                       candidate: dict, macro_events: list[dict]) -> int | None:
+    """Bangun caption+chart, kirim ke Telegram, insert signal_alerts (source
+    'swing'). Dipake DUA alur: check_and_alert() (flow normal, slot masih
+    kosong) DAN _handle_rotation_callback() (abis user klik Terima rotasi) —
+    biar logic kirim alert gak duplikat di 2 tempat."""
+    channel = detect_trend_channel(hist)
+    chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"], channel)
+    score_breakdown = {
+        "volume_score": score_row["volume_score"],
+        "price_score": score_row["price_score"],
+        "accumulation_score": score_row["accumulation_score"],
+        "technical_score": score_row["technical_score"],
+    }
+    context = {
+        "faktor_pendukung": pick.get("faktor_pendukung", []),
+        "berita": candidate.get("berita"),
+        "mentor_call": candidate.get("mentor_call"),
+        "event_ekonomi_global": macro_events,
+        "fundamental": _fetch_fundamental_summary(ticker),
+    }
+    reasoning = analyze_alert(ticker, score_breakdown, levels, context)
+    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []))
+    message_id = send_alert_photo(chart_png, caption)
+    if not message_id:
+        return None  # Telegram belum di-connect di Settings, atau gagal kirim
+
+    _dedup_mark("alerted", ticker)
+    try:
+        supabase.table("signal_alerts").insert({
+            "ticker": ticker,
+            "entry_price": float(hist["Close"].iloc[-1]),
+            "entry_low": levels["entry_low"],
+            "entry_high": levels["entry_high"],
+            "target": levels["resistance"],
+            "stop_loss": levels["stop_loss"],
+            "status": "waiting_entry",  # belum "open" beneran — nunggu harga kesentuh zona entry dulu
+            "telegram_message_id": message_id,  # dipake buat unsend pas posisi ditutup
+            "source": "swing",
+        }).execute()
+    except Exception:
+        pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
+    return message_id
+
+
+def _count_open_swing_positions() -> int:
+    """Posisi Swing yang lagi 'makan slot' (waiting_entry ATAU open) — source
+    NULL dianggep Swing juga (row lama dari sebelum kolom `source` ada, BSJP/
+    BPJS eksplisit set source='bpjs' dkk jadi gak kehitung di sini)."""
+    try:
+        res = supabase.table("signal_alerts").select("source").in_("status", ["waiting_entry", "open"]).execute()
+        return sum(1 for r in res.data if r.get("source") in (None, "swing"))
+    except Exception:
+        return 0  # tabel/kolom belum ada — anggep 0 slot kepake, biar alert tetep jalan normal
+
+
+def _propose_rotation(ticker: str, hist, levels: dict, score_row: dict, pick: dict,
+                       candidate: dict, macro_events: list[dict]) -> None:
+    """5 slot Swing lagi penuh SEMUA tapi ada kandidat baru meyakinkan —
+    tawarin GANTI posisi paling lemah lewat Groq (evaluate_portfolio_rotation).
+    Kalau Groq nilai worth, kirim Telegram dengan tombol Terima/Tolak —
+    KEPUTUSAN FINAL tetep di user, NEXUS gak pernah auto-eksekusi rotasi.
+    Dedup per hari per ticker (biar gak nawarin ulang candidate yang sama
+    tiap jam selama masih pending)."""
+    if _dedup_seen("rotation_proposed", ticker):
+        return
+
+    try:
+        open_res = supabase.table("signal_alerts").select("*").in_("status", ["waiting_entry", "open"]).execute()
+        current_rows = [r for r in open_res.data if r.get("source") in (None, "swing")]
+    except Exception:
+        return
+    if not current_rows:
+        return
+
+    current_positions = []
+    for row in current_rows:
+        try:
+            price_now = float(_get_history(row["ticker"])["Close"].iloc[-1])
+        except Exception:
+            continue
+        current_positions.append({
+            "ticker": row["ticker"], "entry_price": row["entry_price"], "price_now": price_now,
+            "pnl_pct": round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2),
+            "target": row["target"], "stop_loss": row["stop_loss"],
+        })
+    if not current_positions:
+        return
+
+    new_candidate = {
+        "ticker": ticker, "compression_vcp": candidate.get("compression_vcp"),
+        "sideways_days_before": candidate.get("sideways_days_before"),
+        "rr_ratio": candidate.get("rr_ratio"), "signal": candidate.get("signal"),
+        "faktor_pendukung": pick.get("faktor_pendukung", []),
+    }
+
+    try:
+        verdict = evaluate_portfolio_rotation(current_positions, new_candidate)
+    except Exception:
+        return
+    if not verdict.get("rotate") or not verdict.get("drop_ticker"):
+        return  # Groq nilai gak worth rotate — diem, sama kayak skip biasa
+
+    drop_ticker = verdict["drop_ticker"]
+    drop_row = next((r for r in current_rows if r["ticker"] == drop_ticker), None)
+    if drop_row is None:
+        return  # Groq halusinasi ticker di luar 5 posisi — jaga2
+
+    payload = {
+        "new_ticker": ticker, "new_levels": levels, "new_score_row": dict(score_row),
+        "new_pick": pick, "new_candidate": candidate, "macro_events": macro_events,
+        "drop_signal_alert_id": drop_row["id"], "drop_ticker": drop_ticker,
+    }
+    try:
+        ins = supabase.table("pending_rotations").insert({
+            "payload": payload, "status": "pending", "alasan": verdict.get("alasan"),
+        }).execute()
+        rotation_id = ins.data[0]["id"]
+    except Exception:
+        return  # tabel belum di-setup — jangan kirim tombol yang gak bisa dieksekusi
+
+    _dedup_mark("rotation_proposed", ticker)
+    alasan = _esc(verdict.get("alasan") or "-")
+    text = (
+        f"🔄 <b>USUL ROTASI SWING</b>\n\n"
+        f"5 slot lagi penuh. Kandidat baru <b>{_esc(ticker)}</b> dinilai lebih "
+        f"meyakinkan dari <b>{_esc(drop_ticker)}</b> yang lagi running.\n\n"
+        f"{alasan}\n\n"
+        f"Terima = tutup {_esc(drop_ticker)} SEKARANG (realisasi P&L saat ini, "
+        f"apapun untung/rugi-nya), buka {_esc(ticker)} jadi slot baru."
+    )
+    buttons = [[
+        {"text": "✅ Terima", "callback_data": f"rot_yes:{rotation_id}"},
+        {"text": "❌ Tolak", "callback_data": f"rot_no:{rotation_id}"},
+    ]]
+    send_alert_with_buttons(text, buttons)
+
+
+def _handle_rotation_callback(callback: dict) -> None:
+    """Proses klik tombol Terima/Tolak dari _propose_rotation. callback_data
+    format 'rot_yes:<id>' / 'rot_no:<id>' — id nunjuk baris pending_rotations."""
+    data = callback.get("data", "")
+    callback_id = callback.get("id")
+    message_id = (callback.get("message") or {}).get("message_id")
+
+    if not data.startswith(("rot_yes:", "rot_no:")):
+        return  # bukan tombol rotasi
+
+    action, _, rotation_id = data.partition(":")
+    try:
+        res = supabase.table("pending_rotations").select("*").eq("id", int(rotation_id)).limit(1).execute()
+        row = res.data[0] if res.data else None
+    except Exception:
+        row = None
+    if not row:
+        if callback_id:
+            answer_callback_query(callback_id, "Draft rotasi udah gak ketemu (mungkin expired).")
+        return
+    if row["status"] != "pending":
+        if callback_id:
+            answer_callback_query(callback_id, "Udah diproses sebelumnya.")
+        return
+
+    payload = row["payload"]
+
+    if action == "rot_no":
+        supabase.table("pending_rotations").update({"status": "rejected"}).eq("id", row["id"]).execute()
+        if callback_id:
+            answer_callback_query(callback_id, "Ditolak.")
+        if message_id:
+            edit_message_text(message_id, "❌ <b>Rotasi ditolak</b> — posisi lama tetep dipegang.")
+        return
+
+    # rot_yes: tutup posisi lama SEKARANG (realisasi P&L saat ini, BUKAN nunggu TP/SL asli)
+    try:
+        old_res = supabase.table("signal_alerts").select("*").eq("id", payload["drop_signal_alert_id"]).limit(1).execute()
+        old_row = old_res.data[0] if old_res.data else None
+    except Exception:
+        old_row = None
+
+    if old_row:
+        try:
+            price_now = float(_get_history(old_row["ticker"])["Close"].iloc[-1])
+        except Exception:
+            price_now = old_row["entry_price"]
+        outcome_pct = round((price_now - old_row["entry_price"]) / old_row["entry_price"] * 100, 2)
+        try:
+            supabase.table("signal_alerts").update({
+                "status": "rotated_out", "closed_at": datetime.now(timezone.utc).isoformat(),
+                "close_price": price_now, "outcome_pct": outcome_pct,
+            }).eq("id", old_row["id"]).execute()
+        except Exception:
+            pass
+        if old_row.get("telegram_message_id"):
+            delete_message(old_row["telegram_message_id"])
+
+    try:
+        _send_swing_alert(
+            payload["new_ticker"], _get_history(payload["new_ticker"]), payload["new_levels"],
+            payload["new_score_row"], payload["new_pick"], payload["new_candidate"],
+            payload.get("macro_events", []),
+        )
+    except Exception:
+        log.exception("gagal buka posisi baru abis rotasi diterima")
+
+    supabase.table("pending_rotations").update({"status": "accepted"}).eq("id", row["id"]).execute()
+    if callback_id:
+        answer_callback_query(callback_id, "Diterima — rotasi dieksekusi.")
+    if message_id:
+        edit_message_text(
+            message_id,
+            f"✅ <b>Rotasi diterima</b> — {_esc(payload['drop_ticker'])} ditutup, "
+            f"{_esc(payload['new_ticker'])} dibuka jadi slot baru.",
+        )
+
+
 def check_and_alert() -> None:
     if not _in_offhours_window():
         return  # Swing itu non-urgent, sengaja cuma alert pas market tutup (17:00-08:00)
@@ -599,7 +834,7 @@ def check_and_alert() -> None:
         return  # user matiin "Strong signal alerts" di Settings
 
     if _dedup_count_since("alerted", today_wib() - timedelta(days=7)) >= MAX_ALERTS_PER_WEEK:
-        return  # udah kena limit 2 alert minggu ini
+        return  # udah kena limit sinyal BARU minggu ini
 
     _check_invalidated()
 
@@ -643,45 +878,22 @@ def check_and_alert() -> None:
         if levels is None:
             levels = support_resistance(hist)
             _apply_smart_tp(levels, ticker, hist)
-        channel = detect_trend_channel(hist)
-        chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"], channel)
-        score_breakdown = {
-            "volume_score": score_row["volume_score"],
-            "price_score": score_row["price_score"],
-            "accumulation_score": score_row["accumulation_score"],
-            "technical_score": score_row["technical_score"],
-        }
-        context = {
-            "faktor_pendukung": pick.get("faktor_pendukung", []),
-            "berita": candidate.get("berita"),
-            "mentor_call": candidate.get("mentor_call"),
-            "event_ekonomi_global": macro_events,
-            "fundamental": _fetch_fundamental_summary(ticker),
-        }
-        reasoning = analyze_alert(ticker, score_breakdown, levels, context)
     except Exception:
-        return  # gagal di yfinance/Groq/render — coba lagi interval berikutnya, jangan tandain alerted
+        return  # gagal fetch harga — coba lagi interval berikutnya
 
-    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []))
-    message_id = send_alert_photo(chart_png, caption)
-    if not message_id:
-        return  # Telegram belum di-connect di Settings, atau gagal kirim
-
-    _dedup_mark("alerted", ticker)
+    # portofolio SELALU dijaga max 5 saham Swing konkuren (keputusan user) —
+    # kalau penuh, jangan langsung skip diem-diem kayak dulu, tawarin ROTASI
+    if _count_open_swing_positions() >= MAX_CONCURRENT_SWING:
+        try:
+            _propose_rotation(ticker, hist, levels, score_row, pick, candidate, macro_events)
+        except Exception:
+            log.exception("_propose_rotation gagal")
+        return
 
     try:
-        supabase.table("signal_alerts").insert({
-            "ticker": ticker,
-            "entry_price": float(hist["Close"].iloc[-1]),
-            "entry_low": levels["entry_low"],
-            "entry_high": levels["entry_high"],
-            "target": levels["resistance"],
-            "stop_loss": levels["stop_loss"],
-            "status": "waiting_entry",  # belum "open" beneran — nunggu harga kesentuh zona entry dulu
-            "telegram_message_id": message_id,  # dipake buat unsend pas posisi ditutup
-        }).execute()
+        _send_swing_alert(ticker, hist, levels, score_row, pick, candidate, macro_events)
     except Exception:
-        pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
+        return  # gagal di Groq/render — coba lagi interval berikutnya, jangan tandain alerted
 
 
 def _check_watchlist_alerts() -> None:
@@ -742,17 +954,22 @@ WHALE_MIN_VALUE = 500_000_000  # Rp500 juta/transaksi — ASUMSI heuristik kasar
                                  # keliatan distribusi asli, mungkin perlu beda ambang per saham
                                  # (saham gede vs kecil) bukan 1 angka flat.
 
+SPLIT_ORDER_MIN_TRADES = 3          # minimal berapa transaksi kecil dari buyer SAMA dalam 1 menit
+SPLIT_ORDER_MIN_SELLERS = 2         # minimal berapa broker LAWAN beda (bukan cuma 1 seller doang)
+SPLIT_ORDER_MIN_TOTAL_VALUE = 500_000_000  # total gabungan minimal — sama ambang whale, ASUMSI juga
+
 
 def _check_whale_alerts() -> None:
-    """Kerangka Whale/Block Trade Alert — deteksi 1 transaksi ABNORMAL gede dari
-    running-trade Invezgo, cuma buat ticker di watchlist (BUKAN semua 951 saham,
-    biar hemat kuota — ide awal user: "bisa gak sih deteksi market maker makan
-    barang dari ritel"). Diem total kalau Invezgo belum aktif (is_configured()),
-    biar loop ini gak ngapa-ngapain sampe API key beneran keisi.
-
-    Dedup per (ticker, time, price, volume) — running_trade gak punya trade id
-    eksplisit di struktur dugaan yang ada di invezgo_client.py, jadi composite
-    key ini yang paling deterministik buat "transaksi yang sama"."""
+    """Kerangka Whale/Block Trade Alert — 2 pola deteksi dari running-trade
+    Invezgo, cuma buat ticker di watchlist (BUKAN semua 951 saham, hemat kuota):
+    1. Transaksi TUNGGAL abnormal gede.
+    2. Split order — 1 buyer pecah order jadi beberapa transaksi kecil dalam
+       menit yang sama, makan barang dari BEBERAPA broker lawan beda (ide user:
+       "broker A jam 9:39 beli 3x 50rb lembar, barangnya dari broker B/C/D" —
+       pola akumulasi institusi yang sengaja dipecah biar gak keliatan 1
+       transaksi gede di tape). Dedup per (ticker, buyer, menit) biar gak
+       ke-alert ulang tiap loop.
+    Diem total kalau Invezgo belum aktif (is_configured())."""
     settings = _load_settings()
     if not settings["notif_whale_alert"]:
         return
@@ -774,6 +991,8 @@ def _check_whale_alerts() -> None:
             trades = resp.get("data") or []
         except Exception:
             continue
+
+        # pola 1: transaksi tunggal gede
         for t in trades:
             try:
                 value = float(t["price"]) * float(t["volume"])
@@ -792,6 +1011,40 @@ def _check_whale_alerts() -> None:
             )
             if send_alert(text):
                 _dedup_mark("whale", key)
+
+        # pola 2: split order — group by (buyer, menit)
+        groups: dict[tuple[str, str], list[dict]] = {}
+        for t in trades:
+            buyer = t.get("buyer")
+            minute = str(t.get("time", ""))[:5]  # "HH:MM:SS" -> "HH:MM"
+            if not buyer or not minute:
+                continue
+            groups.setdefault((buyer, minute), []).append(t)
+
+        for (buyer, minute), group in groups.items():
+            if len(group) < SPLIT_ORDER_MIN_TRADES:
+                continue
+            sellers = {g.get("seller") for g in group if g.get("seller")}
+            if len(sellers) < SPLIT_ORDER_MIN_SELLERS:
+                continue
+            try:
+                total_value = sum(float(g["price"]) * float(g["volume"]) for g in group)
+                total_volume = sum(float(g["volume"]) for g in group)
+            except Exception:
+                continue
+            if total_value < SPLIT_ORDER_MIN_TOTAL_VALUE:
+                continue
+            key = f"{ticker}:{buyer}:{minute}"
+            if _dedup_seen("split_order", key):
+                continue
+            text = (
+                f"🧩 <b>SPLIT ORDER — {_esc(ticker)}</b>\n\n"
+                f"Broker {_esc(buyer)} pecah {len(group)}x order jam {minute} "
+                f"(dari {len(sellers)} broker lawan: {_esc(', '.join(sorted(sellers)))}) — "
+                f"total {int(total_volume):,} lembar, nilai ~Rp{total_value:,.0f}"
+            )
+            if send_alert(text):
+                _dedup_mark("split_order", key)
 
 
 def _check_economic_reminders() -> None:
@@ -887,13 +1140,94 @@ def _send_night_recap() -> None:
     send_alert("\n".join(lines))
 
 
+def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
+    """Perkiraan broker paling banyak akumulasi + trend akumulasi/distribusi
+    BELAKANGAN, dari Inventory Chart (time series net value per broker) — jauh
+    lebih representatif dari broker_summary yang cuma snapshot 1 rentang
+    digabung jadi 1 angka. None kalau Invezgo belum aktif/gagal fetch/gak ada
+    broker net-buy signifikan.
+
+    JUJUR soal batasnya: avg_price_estimate itu APPROKSIMASI dari 2 hari
+    net-buy TERBESAR broker itu doang (bukan rata-rata seluruh periode — fetch
+    running-trade per hari buat SELURUH periode sideways/holding kemahalan
+    kuota), volume-weighted dari transaksi yang beneran match buyer=broker itu
+    di hari-hari sample. SENGAJA GAK nyoba nebak sisa modal bandar buat
+    memprediksi average-down/up — gak ada cara tau itu dari data publik
+    manapun (permintaan eksplisit user), ini cuma info posisi doang."""
+    if not invezgo_client.is_configured():
+        return None
+    try:
+        inv = invezgo_client.get_inventory_chart_stock(ticker, from_date, to_date)
+    except Exception:
+        return None
+    brokers = inv.get("broker") or []
+    if not brokers:
+        return None
+
+    ranked = []
+    for b in brokers:
+        data = b.get("data") or []
+        total = sum(d.get("value", 0) for d in data)
+        ranked.append((b.get("broker"), total, data))
+    ranked.sort(key=lambda r: r[1], reverse=True)
+    top_broker, top_total, top_data = ranked[0]
+    if top_total <= 0:
+        return None  # gak ada broker yang net-BUY sepanjang periode, jangan nunjuk "bandar" ngasal
+
+    # trend BELAKANGAN (5 hari terakhir vs 5 hari sebelumnya, semua broker
+    # digabung) — ini yang jawab "market maker mulai buang atau nambah barang"
+    daily_totals: dict[str, float] = {}
+    for b in brokers:
+        for d in (b.get("data") or []):
+            daily_totals[d["date"]] = daily_totals.get(d["date"], 0) + d.get("value", 0)
+    dates_sorted = sorted(daily_totals)
+    recent_sum = sum(daily_totals[d] for d in dates_sorted[-5:])
+    prior_sum = sum(daily_totals[d] for d in dates_sorted[-10:-5])
+    if recent_sum > 0 and recent_sum > prior_sum * 1.2:
+        trend = "akumulasi_meningkat"
+    elif recent_sum < 0 and prior_sum >= 0:
+        trend = "distribusi_meningkat"
+    elif recent_sum < prior_sum * 0.5:
+        trend = "akumulasi_melambat"
+    else:
+        trend = "netral"
+
+    top_days = sorted([d for d in top_data if d.get("value", 0) > 0], key=lambda d: d["value"], reverse=True)[:2]
+    weighted_sum = weighted_vol = 0.0
+    for d in top_days:
+        try:
+            resp = invezgo_client.get_running_trade(ticker, d["date"], limit=100)
+        except Exception:
+            continue
+        for r in resp.get("data") or []:
+            if r.get("buyer") != top_broker:
+                continue
+            try:
+                p, v = float(r["price"]), float(r["volume"])
+            except Exception:
+                continue
+            weighted_sum += p * v
+            weighted_vol += v
+    avg_price = round(weighted_sum / weighted_vol, 2) if weighted_vol > 0 else None
+
+    return {
+        "broker": top_broker,
+        "cumulative_net_value": round(top_total, 0),
+        "avg_price_estimate": avg_price,
+        "avg_price_sample_days": [d["date"] for d in top_days],
+        "trend": trend,
+    }
+
+
 def _send_running_positions_update() -> None:
     """Digest posisi 'running' (signal_alerts status='open') — dikirim tiap
     malam bareng Recap Malam. Beda dari _check_signal_outcomes() (yang OTOMATIS
     nutup posisi kalau harga literal nyentuh TP/SL) — ini progress report buat
     yang MASIH open: masih layak dipegang (dari berita/konteks terbaru, bukan
     cuma angka harga doang), atau ada red flag baru yang lebih urgent dari
-    stop-loss teknikal."""
+    stop-loss teknikal. Plus broker summary OTOMATIS tiap malam per posisi
+    (lihat _detect_bandar) — jawab "market maker mulai buang atau nambah
+    barang", kerangka nunggu Invezgo aktif."""
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
         return
@@ -913,10 +1247,11 @@ def _send_running_positions_update() -> None:
         except Exception:
             continue
         pnl_pct = round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2)
+        entry_date = str(row.get("created_at") or "")[:10] or (today_wib() - timedelta(days=30)).isoformat()
         positions.append({
             "ticker": row["ticker"], "entry_price": row["entry_price"], "price_now": price_now,
             "pnl_pct": pnl_pct, "target": row["target"], "stop_loss": row["stop_loss"],
-            "berita": news_by_ticker.get(row["ticker"]),
+            "berita": news_by_ticker.get(row["ticker"]), "entry_date": entry_date,
         })
     if not positions:
         return
@@ -926,6 +1261,7 @@ def _send_running_positions_update() -> None:
     except Exception:
         verdicts = {}
 
+    today = today_wib().isoformat()
     lines = ["📋 <b>Update Posisi Running</b>\n"]
     for p in positions:
         v = verdicts.get(p["ticker"], {})
@@ -942,6 +1278,21 @@ def _send_running_positions_update() -> None:
                 f"🟢 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
                 f"lanjut, target TP Rp{p['target']:,.0f}\n{alasan}\n"
             )
+        # broker summary otomatis per posisi open — cuma jalan kalau Invezgo
+        # aktif, diem total kalau enggak (lihat _detect_bandar). Jawab "market
+        # maker mulai buang atau nambah barang" + perkiraan bandar (informasi
+        # doang, BUKAN dasar keputusan average-down/up — gak ada cara tau sisa
+        # modal bandar dari data publik manapun)
+        bandar = _detect_bandar(p["ticker"], p["entry_date"], today)
+        if bandar:
+            trend_label = {
+                "akumulasi_meningkat": "📈 akumulasi MENINGKAT belakangan ini",
+                "distribusi_meningkat": "📉 mulai ADA DISTRIBUSI belakangan ini",
+                "akumulasi_melambat": "⚠️ akumulasi MELAMBAT belakangan ini",
+                "netral": "netral",
+            }.get(bandar["trend"], bandar["trend"])
+            avg_txt = f", avg beli ~Rp{bandar['avg_price_estimate']:,.0f} (perkiraan)" if bandar["avg_price_estimate"] else ""
+            lines.append(f"   🏦 Broker {_esc(bandar['broker'])} paling akumulasi{avg_txt} — {trend_label}\n")
     send_alert("\n".join(lines))
 
 
@@ -1292,13 +1643,14 @@ async def run_pre_market_briefing() -> None:
 
 
 async def run_telegram_channel_listener() -> None:
-    """Long-poll Telegram getUpdates buat channel_post dari TELEGRAM_CHANNEL_IDS,
-    forward teksnya langsung ke submit_intel() (manggil function-nya langsung,
-    bukan HTTP ke diri sendiri — sama proses). Skip diem-diem kalau belum ada
-    channel yang di-setup di .env."""
-    if not TELEGRAM_CHANNEL_IDS:
-        return
-
+    """Long-poll Telegram getUpdates — 2 concern beda DIGABUNG di 1 loop (bukan
+    2 poller terpisah) karena Telegram NOLAK >1 getUpdates paralel per bot
+    token (409 Conflict):
+    1. callback_query — tombol Terima/Tolak rotasi Swing (_propose_rotation).
+       SELALU diproses, gak peduli TELEGRAM_CHANNEL_IDS di-setup atau enggak.
+    2. channel_post dari TELEGRAM_CHANNEL_IDS, forward ke submit_intel()
+       (manggil function-nya langsung, bukan HTTP ke diri sendiri — sama
+       proses). Di-skip kalau TELEGRAM_CHANNEL_IDS kosong di .env."""
     offset = None
     while True:
         try:
@@ -1310,6 +1662,17 @@ async def run_telegram_channel_listener() -> None:
 
         for u in updates:
             offset = u["update_id"] + 1
+
+            callback = u.get("callback_query")
+            if callback:
+                try:
+                    _handle_rotation_callback(callback)
+                except Exception:
+                    log.exception("_handle_rotation_callback gagal")
+                continue
+
+            if not TELEGRAM_CHANNEL_IDS:
+                continue
             post = u.get("channel_post")
             if not post:
                 continue

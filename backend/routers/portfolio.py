@@ -43,8 +43,13 @@ class SimulateInput(BaseModel):
                                           # opsional, cuma dibutuhin buat money management check
 
 
-MM_SLOT_PCT = 20   # sinkron manual portfolio_backtest.py::MENTOR_SLOT_PCT — max % modal per saham
-MM_MAX_SLOTS = 4   # sinkron manual portfolio_backtest.py::MENTOR_MAX_POSITIONS — 80% max deployed / 20% per slot
+MM_SLOT_PCT = 20   # sinkron manual portfolio_backtest.py::MENTOR_SLOT_PCT — max % modal per saham.
+                    # BELUM diturunin walau MM_MAX_SLOTS naik ke 5 — user nyebut mau turunin %
+                    # (5×20%=100% deployed, gak ada reserve) tapi belum kasih angka pasti, JANGAN
+                    # tebak angkanya, tunggu konfirmasi eksplisit sebelum ubah dari 20.
+MM_MAX_SLOTS = 5   # sinkron manual portfolio_backtest.py::MENTOR_MAX_POSITIONS & scheduler.py::
+                    # MAX_CONCURRENT_SWING — keputusan user: portofolio SELALU 5 saham Swing
+                    # konkuren (lebih dari itu susah diawasin "kaya supermarket")
 
 
 def _money_management_check(holdings: list[dict], total_capital: float) -> dict:
