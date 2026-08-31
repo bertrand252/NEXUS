@@ -423,7 +423,7 @@ def get_broker_flow(ticker: str):
             "configured": False,
             "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
             "notation": None, "price_table": None, "financial_statement": None, "price_seasonality": None,
-            "sankey_chart": None, "running_trade": None,
+            "sankey_chart": None, "running_trade": None, "shareholder_above": None,
         }
 
     today = today_wib().isoformat()
@@ -448,6 +448,14 @@ def get_broker_flow(ticker: str):
         )
     except Exception:
         result["insider_activity"] = None
+    try:
+        # >5% doang — itu ambang wajib lapor ke bursa (regulasi BEI), bukan
+        # parameter yang bisa diturunin, di bawah itu emang gak ada datanya
+        result["shareholder_above"] = invezgo_client.get_shareholder_above(
+            ticker, (today_wib() - timedelta(days=90)).isoformat(), today,
+        )
+    except Exception:
+        result["shareholder_above"] = None
     try:
         notation_all = invezgo_client.get_notation_list()
         result["notation"] = next((n for n in notation_all if n.get("code") == ticker), None)

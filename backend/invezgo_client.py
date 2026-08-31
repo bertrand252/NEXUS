@@ -66,6 +66,17 @@ def get_broker_stalker(broker: str, stock: str) -> dict:
     return res.json()
 
 
+def get_shareholder_above(code: str, from_date: str, to_date: str, page: int = 1, limit: int = 10) -> dict:
+    """{"totalPage","page","nextPage","data": [{date, code, name, format_securities,
+    prev_val, prev_pct, next_val, next_pct, change, nationality}]} — perubahan
+    kepemilikan >5% (institusi/investor besar, BEDA dari insider yang direksi/
+    komisaris) dari laporan bursa. from_date/to_date format YYYY-MM-DD."""
+    res = httpx.get(f"{BASE_URL}/analysis/shareholder-above", headers=_headers(),
+                     params={"code": code, "from": from_date, "to": to_date, "page": page, "limit": limit}, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
 def get_notation_list() -> list[dict]:
     """[{code, date, list: [{notation, description}]}, ...] — SEMUA 951 saham
     sekaligus (1 call), notasi khusus (UMA/suspend/dst) dari BEI. Dipake buat

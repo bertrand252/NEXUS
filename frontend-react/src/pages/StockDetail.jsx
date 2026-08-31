@@ -473,6 +473,16 @@ export default function StockDetail() {
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Money Flow (Sankey)</p>
                   <p className="text-slate-500">{brokerFlow.sankey_chart ? 'Ada data — tampilan belum dibuat.' : 'Belum tersedia.'}</p>
                 </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Kepemilikan &gt;5% (90 hari)</p>
+                  {brokerFlow.shareholder_above?.data?.length ? (
+                    <ul className="space-y-1 text-slate-300">
+                      {brokerFlow.shareholder_above.data.slice(0, 3).map((row, i) => (
+                        <li key={i}>{row.name}: {row.prev_pct?.toFixed(1)}% → {row.next_pct?.toFixed(1)}%</li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-slate-500">Gak ada perubahan &gt;5% tercatat.</p>}
+                </div>
               </div>
             )}
           </div>
