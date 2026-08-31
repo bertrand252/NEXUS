@@ -518,8 +518,8 @@ def _apply_smart_tp(levels: dict, ticker: str, hist_daily) -> None:
     try:
         # weekly & monthly "max" — dari AWAL saham listing, bukan cuma
         # beberapa tahun (user eksplisit minta ini, bukan 20 hari/2 bulan doang)
-        weekly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1wk").dropna(subset=["Close"])
-        monthly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1mo").dropna(subset=["Close"])
+        weekly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1wk", auto_adjust=False).dropna(subset=["Close"])
+        monthly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1mo", auto_adjust=False).dropna(subset=["Close"])
         smart = find_smart_tp({"daily": hist_daily, "weekly": weekly, "monthly": monthly}, price_now)
         levels["trend"] = determine_trend(weekly if len(weekly) >= 50 else hist_daily)
     except Exception:

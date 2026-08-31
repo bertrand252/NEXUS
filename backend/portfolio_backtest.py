@@ -66,6 +66,91 @@ def _gather_all_trades(tickers: list[str]) -> list[dict]:
     return all_trades
 
 
+MENTOR_SLOT_PCT = 20        # tiap posisi SELALU 20% dari MODAL AWAL (fixed nominal,
+                              # BUKAN dari modal berjalan/gak compound) - money management
+                              # asli dari mentor user, beda paradigma total dari risk-based:
+                              # size gak dari jarak SL sama sekali, jadi otomatis imun dari
+                              # bug MAX_POSITION_PCT yang tadi ketemu (GRPH dkk).
+MENTOR_MAX_POSITIONS = 4      # 80% max deployed / 20% per slot = 4 slot aktif; sisa 20%
+                              # (slot ke-5) sengaja gak pernah dipake buat ENTRY baru langsung,
+                              # tapi karena cash itu 1 kolam bersama (bukan sub-akun per slot),
+                              # otomatis jadi "reserve" yang ngerefill slot abis kena CL —
+                              # persis mekanisme yang user jelasin (Saham A pake 20%, kena CL 15%,
+                              # sisa 17%, entry berikutnya tetep dapet full 20% "amunisi" dari
+                              # kolam bersama, bukan cuma 17% doang).
+
+
+def simulate_portfolio_mentor(trades: list[dict], initial_capital: float = INITIAL_CAPITAL,
+                               slot_pct: float = MENTOR_SLOT_PCT, max_positions: int = MENTOR_MAX_POSITIONS) -> dict:
+    """Money management ala mentor user — LIHAT MENTOR_SLOT_PCT/MENTOR_MAX_POSITIONS
+    di atas buat penjelasan lengkap mekanismenya. Struktur event-loop SAMA persis
+    kayak simulate_portfolio(), cuma beda di bagian sizing (fixed slot, bukan
+    risk-based) - lihat situ kalau mau ubah shared logic-nya."""
+    for i, t in enumerate(trades):
+        t["_id"] = i
+    events = []
+    for t in trades:
+        events.append({"date": t["entry_date"], "order": 1, "type": "entry", "trade": t})
+        events.append({"date": t["exit_date"], "order": 0, "type": "exit", "trade": t})
+    events.sort(key=lambda e: (e["date"], e["order"]))
+
+    slot_nominal = initial_capital * (slot_pct / 100)
+    cash = float(initial_capital)
+    open_positions: dict[int, dict] = {}
+    equity_curve = []
+    taken = skipped_capacity = skipped_capital = 0
+
+    def _current_equity() -> float:
+        return cash + sum(p["shares"] * p["entry_price"] for p in open_positions.values())
+
+    for e in events:
+        t = e["trade"]
+        if e["type"] == "exit":
+            pos = open_positions.pop(t["_id"], None)
+            if pos:
+                cash += pos["shares"] * t["exit_price"]
+                equity_curve.append({"date": e["date"], "equity": round(_current_equity(), 2)})
+            continue
+
+        if len(open_positions) >= max_positions:
+            skipped_capacity += 1
+            continue
+        if cash < slot_nominal:
+            skipped_capital += 1  # reserve abis (bisa kejadian abis serangkaian CL beruntun)
+            continue
+        shares = int(slot_nominal / t["entry_price"])
+        shares = (shares // LOT_SIZE) * LOT_SIZE
+        if shares < LOT_SIZE:
+            skipped_capital += 1
+            continue
+        cost = shares * t["entry_price"]
+        cash -= cost
+        open_positions[t["_id"]] = {"shares": shares, "entry_price": t["entry_price"]}
+        taken += 1
+        equity_curve.append({"date": e["date"], "equity": round(_current_equity(), 2)})
+
+    final_equity = _current_equity()
+    peak = initial_capital
+    max_dd_pct = 0.0
+    for pt in equity_curve:
+        peak = max(peak, pt["equity"])
+        max_dd_pct = max(max_dd_pct, (peak - pt["equity"]) / peak * 100)
+
+    return {
+        "mode": "mentor_fixed_slot",
+        "initial_capital": initial_capital,
+        "slot_pct": slot_pct,
+        "max_positions": max_positions,
+        "final_equity": round(final_equity, 2),
+        "total_return_pct": round((final_equity - initial_capital) / initial_capital * 100, 2),
+        "max_drawdown_pct": round(max_dd_pct, 2),
+        "trades_taken": taken,
+        "trades_total_signals": len(trades),
+        "trades_skipped_max_positions": skipped_capacity,
+        "trades_skipped_no_capital": skipped_capital,
+    }
+
+
 def simulate_portfolio(trades: list[dict], initial_capital: float = INITIAL_CAPITAL,
                         max_concurrent_positions: int = MAX_CONCURRENT_POSITIONS) -> dict:
     """Jalanin trade-trade (dari SEMUA ticker, dicampur kronologis) lewat 1
@@ -161,7 +246,7 @@ def _ihsg_benchmark(start_date: str, end_date: str) -> float | None:
     """Return IHSG buy-and-hold di rentang tanggal yang sama, buat pembanding
     — "kalau modalnya ditaro IHSG doang dari awal, hasilnya berapa"."""
     try:
-        hist = yf.Ticker("^JKSE").history(start=start_date, end=end_date).dropna(subset=["Close"])
+        hist = yf.Ticker("^JKSE").history(start=start_date, end=end_date, auto_adjust=False).dropna(subset=["Close"])
         if len(hist) < 2:
             return None
         return round((float(hist["Close"].iloc[-1]) - float(hist["Close"].iloc[0])) / float(hist["Close"].iloc[0]) * 100, 2)

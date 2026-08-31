@@ -65,7 +65,7 @@ def _fetch_ihsg_uptrend_map() -> dict:
     (bukan per ticker), map {date: bool} apa close hari itu di atas MA50-nya
     sendiri (proxy uptrend paling standar/laziest, sama semangat kayak trend
     filter yang udah ada di levels.py::determine_trend tapi versi index)."""
-    hist = yf.Ticker("^JKSE").history(period="5y").dropna(subset=["Close"])
+    hist = yf.Ticker("^JKSE").history(period="5y", auto_adjust=False).dropna(subset=["Close"])
     ma50 = hist["Close"].rolling(50).mean()
     uptrend = hist["Close"] > ma50
     return {ts.date(): bool(v) for ts, v in uptrend.items()}
@@ -239,9 +239,9 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
 def _process_one(ticker: str, timeout_days: int = SIGNAL_TIMEOUT_DAYS, ihsg_uptrend: dict | None = None) -> list[dict]:
     try:
         t = yf.Ticker(f"{ticker}.JK")
-        hist = t.history(period="5y").dropna(subset=["Close"])
-        weekly = t.history(period="max", interval="1wk").dropna(subset=["Close"])
-        monthly = t.history(period="max", interval="1mo").dropna(subset=["Close"])
+        hist = t.history(period="5y", auto_adjust=False).dropna(subset=["Close"])
+        weekly = t.history(period="max", interval="1wk", auto_adjust=False).dropna(subset=["Close"])
+        monthly = t.history(period="max", interval="1mo", auto_adjust=False).dropna(subset=["Close"])
     except Exception:
         return []
     return _simulate_ticker(ticker, hist, weekly, monthly, timeout_days, ihsg_uptrend)

@@ -46,7 +46,7 @@ def _get_tickers() -> list[str]:
 
 def _process_one(ticker: str) -> list[dict]:
     try:
-        hist = yf.Ticker(f"{ticker}.JK").history(period="5y").dropna(subset=["Close"])
+        hist = yf.Ticker(f"{ticker}.JK").history(period="5y", auto_adjust=False).dropna(subset=["Close"])
     except Exception:
         return []
     if len(hist) < 60:

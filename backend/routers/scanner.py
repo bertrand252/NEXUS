@@ -43,7 +43,13 @@ def _build_accum_lookup() -> dict | None:
 
 
 def _get_history(ticker: str, period: str = "2mo"):
-    hist = yf.Ticker(f"{ticker}.JK").history(period=period)  # .JK suffix = IDX di Yahoo Finance
+    # auto_adjust=False — yfinance defaultnya TRUE sekarang (nge-adjust harga
+    # historis buat dividen), bikin harga lama keliatan lebih HALUS/RENDAH dari
+    # harga NOMINAL asli yang beneran ditransaksiin (beda jauh dari TradingView
+    # — kejadian nyata BSSR: adjusted 2022 high Rp2.565, unadjusted Rp5.800).
+    # Support/resistance/breakout HARUS dari harga nominal asli, bukan yang
+    # di-smooth buat itungan total-return investor jangka panjang.
+    hist = yf.Ticker(f"{ticker}.JK").history(period=period, auto_adjust=False)  # .JK suffix = IDX di Yahoo Finance
     # baris terakhir kadang NaN (suspend/gak ada transaksi hari itu) — buang biar
     # gak nyebar NaN ke scoring & JSON response (NaN gak valid JSON, bikin 500)
     hist = hist.dropna(subset=["Close"])
@@ -55,7 +61,7 @@ def _get_history(ticker: str, period: str = "2mo"):
 def _get_history_intraday(ticker: str, period: str = "5d", interval: str = "15m"):
     """Sama pola _get_history, tapi bar 15-menit — dipake BSJP stage-2 (session
     takeoff) & BPJS. Index-nya udah kebukti tz-aware Asia/Jakarta."""
-    hist = yf.Ticker(f"{ticker}.JK").history(period=period, interval=interval)
+    hist = yf.Ticker(f"{ticker}.JK").history(period=period, interval=interval, auto_adjust=False)
     hist = hist.dropna(subset=["Close"])
     if hist.empty:
         raise ValueError(f"no intraday data for {ticker}")
@@ -491,7 +497,7 @@ def get_top_ritel():
 def get_ihsg():
     """Harga IHSG (^JKSE) + sparkline 20 hari terakhir, buat banner Market Mood di Dashboard."""
     try:
-        hist = yf.Ticker("^JKSE").history(period="2mo").dropna(subset=["Close"])
+        hist = yf.Ticker("^JKSE").history(period="2mo", auto_adjust=False).dropna(subset=["Close"])
         if hist.empty:
             raise ValueError("no data")
     except Exception:
@@ -588,7 +594,7 @@ def get_stock_detail(ticker: str):
     # bikin bingung, dikira "1 candle = 1 hari/minggu/bulan", padahal cuma beda
     # PERIODE doang, interval-nya tetep daily kecuali 1D yang malah 15-menit).
     try:
-        chart_hist = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1d").dropna(subset=["Close"])
+        chart_hist = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1d", auto_adjust=False).dropna(subset=["Close"])
     except Exception:
         chart_hist = hist  # gagal fetch histori penuh, fallback ke window scoring daripada chart kosong
 

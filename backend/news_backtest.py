@@ -78,7 +78,7 @@ def run() -> None:
     errors = 0
     for ticker, items in by_ticker.items():
         try:
-            hist = yf.Ticker(f"{ticker}.JK").history(period="3mo").dropna(subset=["Close"])
+            hist = yf.Ticker(f"{ticker}.JK").history(period="3mo", auto_adjust=False).dropna(subset=["Close"])
         except Exception:
             errors += 1
             continue

@@ -17,7 +17,7 @@ def _overnight_global_context() -> str:
     lines = []
     for ticker, name in GLOBAL_INDICES.items():
         try:
-            hist = yf.Ticker(ticker).history(period="5d").dropna(subset=["Close"])
+            hist = yf.Ticker(ticker).history(period="5d", auto_adjust=False).dropna(subset=["Close"])
             if len(hist) < 2:
                 continue
             chg = (hist["Close"].iloc[-1] - hist["Close"].iloc[-2]) / hist["Close"].iloc[-2] * 100
