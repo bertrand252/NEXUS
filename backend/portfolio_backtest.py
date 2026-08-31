@@ -66,7 +66,7 @@ def _gather_all_trades(tickers: list[str]) -> list[dict]:
     return all_trades
 
 
-MENTOR_SLOT_PCT = 20        # tiap posisi SELALU 20% dari MODAL AWAL (fixed nominal,
+MENTOR_SLOT_PCT = 16        # tiap posisi SELALU 16% dari MODAL AWAL (fixed nominal,
                               # BUKAN dari modal berjalan/gak compound) - money management
                               # asli dari mentor user, beda paradigma total dari risk-based:
                               # size gak dari jarak SL sama sekali, jadi otomatis imun dari
@@ -74,10 +74,9 @@ MENTOR_SLOT_PCT = 20        # tiap posisi SELALU 20% dari MODAL AWAL (fixed nomi
 MENTOR_MAX_POSITIONS = 5      # sinkron manual scheduler.py::MAX_CONCURRENT_SWING — keputusan
                               # user: portofolio SELALU 5 saham Swing konkuren (lebih dari itu
                               # susah diawasin "kaya supermarket"), naik dari 4 sebelumnya.
-                              # 5×20%=100% deployed kalau MENTOR_SLOT_PCT tetep 20 — beda dari
-                              # versi lama (4×20%=80%, sisa 20% jadi reserve refill abis kena CL).
-                              # User nyebut mau turunin % per slot (gak dikonfirmasi berapa
-                              # pastinya) - MENTOR_SLOT_PCT BELUM diturunin, jangan tebak angkanya.
+                              # 5×16%=80% deployed, sisa 20% reserve — proporsi sama kayak
+                              # versi lama (4×20%=80%), user pilih turunin % biar reserve
+                              # kejaga walau slot naik 4→5.
 
 
 def simulate_portfolio_mentor(trades: list[dict], initial_capital: float = INITIAL_CAPITAL,
