@@ -49,7 +49,7 @@ function PositionSizeCalculator({ levels }) {
       </div>
       {cap > 0 && risk > 0 && riskPerShare > 0 ? (
         lots > 0 ? (
-          <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
             <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Lot</p><p className="text-lg font-extrabold font-mono text-accent">{lots}</p></div>
             <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Modal Terpakai</p><p className="text-sm font-mono text-white mt-1">Rp{actualCost.toLocaleString('id-ID')}</p></div>
             <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Risiko Riil</p><p className="text-sm font-mono text-moderate mt-1">Rp{actualRisk.toLocaleString('id-ID')}</p></div>
