@@ -283,6 +283,7 @@ MAX_REWARD_PCT = 50
 
 
 _levels_cache: dict[str, dict] = {}  # {ticker: levels lengkap} dari _gather_candidates, dibaca check_and_alert()
+_invezgo_enrich_cache: dict[str, dict] = {}  # {ticker: {"date": str, "fields": dict}} — 1x fetch/ticker/hari, lihat komentar di _gather_candidates
 
 
 def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int = 20) -> list[dict]:
@@ -402,41 +403,45 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             and volume_dry_up(hist, c["sideways_days_before"] or 0)
         )
         _levels_cache[c["ticker"]] = lv
-        # laporan keuangan (Income Statement, per quarter) — konteks fundamental
-        # TAMBAHAN buat keputusan Groq (lihat pick_alert_candidate), bukan syarat
-        # wajib. Diem total kalau Invezgo belum aktif (is_configured()). RAW dict
-        # dikirim apa adanya (bukan di-parsing manual di sini) — struktur field
-        # BELUM diverifikasi lawan API asli, biar Groq sendiri yang baca apa yang
-        # kepake, kita gak ikut nebak nama field yang bisa aja salah.
+        # laporan keuangan + order flow + broker net-buy — konteks tambahan buat
+        # Groq (lihat pick_alert_candidate), bukan syarat wajib, diem kalau
+        # Invezgo belum aktif/gagal fetch. Di-cache PER TICKER PER HARI
+        # (_invezgo_enrich_cache) — check_and_alert ini jalan TIAP JAM selama
+        # window off-hours (~15 jam/malam), tanpa cache bakal re-fetch 3 request
+        # x tiap kandidat pool TIAP JAM padahal datanya sama aja (market udah
+        # tutup, data hari itu udah final) — boros kuota Invezgo parah kalau kelewatan.
         if invezgo_client.is_configured():
-            try:
-                c["financial_statement"] = invezgo_client.get_financial_statement(c["ticker"], statement="IS")
-            except Exception:
-                pass
-            # order flow (bid/offer imbalance hari ini, dari Volume Profile) +
-            # broker net-buy 5 hari terakhir — konteks tambahan lain buat Groq
-            # (lihat pick_alert_candidate), pola sama kayak financial_statement:
-            # opsional, diem kalau gagal fetch, JANGAN gagalin kandidat gara-gara ini.
             today_s = today_wib().isoformat()
-            from_s = (today_wib() - timedelta(days=5)).isoformat()
-            try:
-                pt = invezgo_client.get_price_table(c["ticker"], today_s)
-                buy_vol = sum(float(r.get("buy_volume") or 0) for r in pt)
-                sell_vol = sum(float(r.get("sell_volume") or 0) for r in pt)
-                c["order_flow"] = {
-                    "buy_volume": buy_vol, "sell_volume": sell_vol,
-                    "buy_sell_ratio": round(buy_vol / sell_vol, 2) if sell_vol > 0 else None,
-                }
-            except Exception:
-                pass
-            try:
-                bs = invezgo_client.get_broker_summary(c["ticker"], from_s, today_s)
-                ranked = sorted(bs, key=lambda b: float(b.get("net_value") or 0), reverse=True)
-                c["broker_net_top"] = [
-                    {"code": b["code"], "net_value": float(b["net_value"])} for b in ranked[:3]
-                ]
-            except Exception:
-                pass
+            cached = _invezgo_enrich_cache.get(c["ticker"])
+            if cached and cached["date"] == today_s:
+                c.update(cached["fields"])
+            else:
+                fields = {}
+                try:
+                    fields["financial_statement"] = invezgo_client.get_financial_statement(c["ticker"], statement="IS")
+                except Exception:
+                    pass
+                try:
+                    pt = invezgo_client.get_price_table(c["ticker"], today_s)
+                    buy_vol = sum(float(r.get("buy_volume") or 0) for r in pt)
+                    sell_vol = sum(float(r.get("sell_volume") or 0) for r in pt)
+                    fields["order_flow"] = {
+                        "buy_volume": buy_vol, "sell_volume": sell_vol,
+                        "buy_sell_ratio": round(buy_vol / sell_vol, 2) if sell_vol > 0 else None,
+                    }
+                except Exception:
+                    pass
+                try:
+                    from_s = (today_wib() - timedelta(days=5)).isoformat()
+                    bs = invezgo_client.get_broker_summary(c["ticker"], from_s, today_s)
+                    ranked = sorted(bs, key=lambda b: float(b.get("net_value") or 0), reverse=True)
+                    fields["broker_net_top"] = [
+                        {"code": b["code"], "net_value": float(b["net_value"])} for b in ranked[:3]
+                    ]
+                except Exception:
+                    pass
+                _invezgo_enrich_cache[c["ticker"]] = {"date": today_s, "fields": fields}
+                c.update(fields)
         filtered.append(c)
     return filtered
 
