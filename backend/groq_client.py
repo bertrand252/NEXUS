@@ -245,3 +245,24 @@ def explain_levels(ticker: str, score_breakdown: dict, levels: dict) -> str:
     user_prompt = json.dumps({"ticker": ticker, **score_breakdown, **levels}, ensure_ascii=False)
     result = ask_json(system_prompt, user_prompt)
     return result.get("penjelasan", "")
+
+
+def generate_postmortem(summary: dict) -> dict:
+    """Weekly Postmortem — dikasih rekap SEMUA posisi (Swing+BPJS) yang closed
+    7 hari terakhir (menang/kalah/timeout per ticker), Groq cari POLA (bukan
+    nge-judge tiap trade satu-satu). JANGAN ngarang alasan spesifik yang gak
+    ada di data (misal nyebut berita/sektor spesifik kalau gak dikasih) —
+    kalau datanya kurang buat nemuin pola jelas, bilang jujur apa adanya."""
+    system_prompt = (
+        "Kamu analis trading yang review histori seminggu terakhir. Dikasih rekap "
+        "posisi yang udah closed (ticker, source Swing/BPJS, status tp_hit/sl_hit/"
+        "timeout, outcome_pct). Cari POLA yang kelihatan dari data ini doang "
+        "(misal: 'kebanyakan kena SL', 'timeout mendominasi berarti target "
+        "kejauhan', 'BPJS lebih akurat dari Swing minggu ini') — JANGAN ngarang "
+        "alasan spesifik (berita/sektor/apapun) yang gak ada di data yang dikasih. "
+        "Kalau datanya sedikit/gak ada pola jelas, bilang jujur apa adanya, jangan "
+        "maksa nyimpulin sesuatu. Bahasa Indonesia santai, 2-3 kalimat tiap bagian. "
+        "Balikin JSON persis: {\"pola\": \"...\", \"saran\": \"...\"}"
+    )
+    user_prompt = json.dumps(summary, ensure_ascii=False)
+    return ask_json(system_prompt, user_prompt)

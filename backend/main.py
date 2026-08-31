@@ -15,6 +15,7 @@ from scheduler import (
     run_night_recap,
     run_pre_market_briefing,
     run_bsjp_screener,
+    run_weekly_postmortem,
     run_telegram_channel_listener,
     run_telegram_scrape_listener,
 )
@@ -22,10 +23,11 @@ from scheduler import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """7 task background (lihat scheduler.py buat detail tiap fungsi):
+    """8 task background (lihat scheduler.py buat detail tiap fungsi):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
     (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (16:00, screener BSJP),
-    run_night_recap, run_telegram_channel_listener (channel yang bot-nya admin),
+    run_night_recap, run_weekly_postmortem (Minggu 21:00, rekap Swing+BPJS
+    seminggu), run_telegram_channel_listener (channel yang bot-nya admin),
     run_telegram_scrape_listener (channel yang cuma di-subscribe biasa, di-scrape
     dari preview publik). Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_pre_market_briefing()),
         asyncio.create_task(run_bsjp_screener()),
         asyncio.create_task(run_night_recap()),
+        asyncio.create_task(run_weekly_postmortem()),
         asyncio.create_task(run_telegram_channel_listener()),
         asyncio.create_task(run_telegram_scrape_listener()),
     ]

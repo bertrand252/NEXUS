@@ -17,7 +17,7 @@ from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_l
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score
 from intraday import daily_session_stats, session_takeoff
-from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions
+from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem
 from forex_factory import get_forex_events
 from telegram_bot import send_alert_photo, send_alert, get_channel_updates, delete_message
 from telegram_scrape import fetch_channel_posts
@@ -1280,3 +1280,71 @@ async def run_morning_routine() -> None:
                 step()
             except Exception:
                 log.exception(f"{step.__name__} gagal (morning routine)")
+
+
+WEEKLY_POSTMORTEM_HOUR = 21  # Minggu malam WIB — abis 1 minggu trading penuh (Sen-Jum) kelar
+
+
+def _send_weekly_postmortem() -> None:
+    """Rekap SEMUA posisi Swing+BPJS yang closed 7 hari terakhir (BSJP gak
+    ikut — masih alert-only, gak ada tracking outcome). Groq nyari pola dari
+    data asli, bukan nge-judge tiap trade — kalau data dikit/gak ada pola
+    jelas, dia jujur bilang gitu (lihat prompt di groq_client.py)."""
+    settings = _load_settings()
+    if not settings["notif_daily_recap"]:  # 1 toggle "recap" yang sama, belum ada toggle terpisah
+        return
+
+    since = (today_wib() - timedelta(days=7)).isoformat()
+    try:
+        res = (
+            supabase.table("signal_alerts").select("ticker,source,status,outcome_pct,closed_at")
+            .gte("closed_at", since).in_("status", ["tp_hit", "sl_hit", "timeout"]).execute()
+        )
+    except Exception:
+        return
+    rows = res.data
+
+    if not rows:
+        send_alert("📋 <b>Weekly Postmortem</b>\n\nGak ada posisi yang closed minggu ini.")
+        return
+
+    wins = [r for r in rows if r["status"] == "tp_hit"]
+    losses = [r for r in rows if r["status"] == "sl_hit"]
+    timeouts = [r for r in rows if r["status"] == "timeout"]
+    win_rate = round(len(wins) / len(rows) * 100, 1)
+
+    summary = {
+        "total": len(rows), "tp_hit": len(wins), "sl_hit": len(losses), "timeout": len(timeouts),
+        "win_rate_pct": win_rate,
+        "detail": [{"ticker": r["ticker"], "source": r.get("source") or "swing", "status": r["status"],
+                    "outcome_pct": r["outcome_pct"]} for r in rows],
+    }
+    try:
+        insight = generate_postmortem(summary)
+    except Exception:
+        insight = {}
+
+    text = (
+        f"📋 <b>Weekly Postmortem</b>\n\n"
+        f"{len(rows)} posisi closed minggu ini — {len(wins)} TP, {len(losses)} SL, "
+        f"{len(timeouts)} timeout (win rate {win_rate}%).\n\n"
+        f"🔍 <b>Pola:</b> {_esc(insight.get('pola', 'Gagal generate insight minggu ini.'))}\n\n"
+        f"💡 <b>Saran:</b> {_esc(insight.get('saran', '-'))}"
+    )
+    send_alert(text)
+
+
+async def run_weekly_postmortem() -> None:
+    while True:
+        now = _now_wib()
+        days_until_sunday = (6 - now.weekday()) % 7  # Python weekday(): Senin=0 ... Minggu=6
+        target = (now + timedelta(days=days_until_sunday)).replace(
+            hour=WEEKLY_POSTMORTEM_HOUR, minute=0, second=0, microsecond=0,
+        )
+        if target <= now:
+            target += timedelta(days=7)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            _send_weekly_postmortem()
+        except Exception:
+            log.exception("_send_weekly_postmortem gagal")
