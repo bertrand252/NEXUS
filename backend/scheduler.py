@@ -939,10 +939,15 @@ def _check_bsjp_screener() -> None:
             continue
         if takeoff is None:
             continue
-        value_traded_idr = row["price"] * days[-1]["s2_volume"]
+        # harga LIVE dari intraday yang BARU di-fetch — row["price"] itu dari
+        # scanner_cache, basi kalau belum di-refresh manual hari ini (kejadian
+        # nyata: user dapet call BSJP jam 15:30 tapi harganya dari refresh
+        # pagi). Data intraday-nya sendiri udah fresh, tinggal dipake.
+        price_now = float(hist_15m["Close"].iloc[-1])
+        value_traded_idr = price_now * days[-1]["s2_volume"]
         score = bsjp_intraday_score(takeoff, value_traded_idr)
         if score > 0:
-            scored.append({"ticker": ticker, "price": row["price"], "takeoff": takeoff, "score": score})
+            scored.append({"ticker": ticker, "price": price_now, "takeoff": takeoff, "score": score})
 
     if not scored:
         return  # sesi 2 gak ada yang "terbang" beneran — diam, jangan maksain
@@ -1020,12 +1025,13 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
 
     candidates = []
     for ticker in pool:
-        scan = scan_by_ticker.get(ticker)
         mentor = mentor_by_ticker.get(ticker)
         momentum_score = 0.0
         try:
-            price = scan["price"] if scan else _get_history(ticker)["Close"].iloc[-1]
+            # harga LIVE dari intraday, BUKAN scanner_cache (basi kalau belum
+            # di-refresh manual hari ini — sama bug yang ketemu di BSJP)
             hist_15m = _get_history_intraday(ticker)
+            price = float(hist_15m["Close"].iloc[-1])
             days = daily_session_stats(hist_15m)
             takeoff = session_takeoff(days, session=session)
             if takeoff is not None:
