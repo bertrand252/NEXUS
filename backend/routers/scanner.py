@@ -54,8 +54,7 @@ def _get_history(ticker: str, period: str = "2mo"):
 
 def _get_history_intraday(ticker: str, period: str = "5d", interval: str = "15m"):
     """Sama pola _get_history, tapi bar 15-menit — dipake BSJP stage-2 (session
-    takeoff) & BPJS. Pola fetch-nya sama persis CHART_TIMEFRAMES["1D"] di bawah,
-    udah kebukti index-nya tz-aware Asia/Jakarta."""
+    takeoff) & BPJS. Index-nya udah kebukti tz-aware Asia/Jakarta."""
     hist = yf.Ticker(f"{ticker}.JK").history(period=period, interval=interval)
     hist = hist.dropna(subset=["Close"])
     if hist.empty:
@@ -512,14 +511,6 @@ def get_ihsg():
     }
 
 
-CHART_TIMEFRAMES = {
-    "1D": {"period": "5d", "interval": "15m"},
-    "1W": {"period": "1mo", "interval": "1d"},
-    "1M": {"period": "2mo", "interval": "1d"},
-    "1Y": {"period": "1y", "interval": "1d"},
-}
-
-
 def _candles_from_hist(hist) -> list[dict]:
     return [
         {
@@ -535,10 +526,10 @@ def _candles_from_hist(hist) -> list[dict]:
 
 
 @router.get("/{ticker}")
-def get_stock_detail(ticker: str, period: str = "1M"):
+def get_stock_detail(ticker: str):
     """Detail 1 saham: skor + level support/resistance (selalu dari window 2 bulan,
-    biar scoring konsisten) + candlestick (periode bisa diganti-ganti via ?period=
-    1D/1W/1M/1Y buat tombol timeframe di frontend, gak ikut ngubah skor)."""
+    biar scoring konsisten) + candlestick daily histori PENUH (period="max",
+    gak ada lagi toggle timeframe — 1 mode doang, ini gak ikut ngubah skor)."""
     ticker = ticker.upper()
     try:
         hist = _get_history(ticker)
@@ -592,18 +583,14 @@ def get_stock_detail(ticker: str, period: str = "1M"):
     except Exception:
         result["cocok_invest"] = False
 
-    timeframe = CHART_TIMEFRAMES.get(period, CHART_TIMEFRAMES["1M"])
-    if timeframe == CHART_TIMEFRAMES["1M"]:
-        chart_hist = hist  # udah di-fetch di atas, gak perlu call yfinance lagi
-    else:
-        try:
-            chart_hist = (
-                yf.Ticker(f"{ticker}.JK")
-                .history(period=timeframe["period"], interval=timeframe["interval"])
-                .dropna(subset=["Close"])
-            )
-        except Exception:
-            chart_hist = hist  # gagal fetch periode lain, fallback ke yang udah ada daripada chart kosong
+    # 1 mode doang buat chart candlestick: daily, histori PENUH dari awal listing
+    # (period="max") — bukan 1D/1W/1M/1Y beda interval kayak dulu (itu ternyata
+    # bikin bingung, dikira "1 candle = 1 hari/minggu/bulan", padahal cuma beda
+    # PERIODE doang, interval-nya tetep daily kecuali 1D yang malah 15-menit).
+    try:
+        chart_hist = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1d").dropna(subset=["Close"])
+    except Exception:
+        chart_hist = hist  # gagal fetch histori penuh, fallback ke window scoring daripada chart kosong
 
     result["candles"] = _candles_from_hist(chart_hist)
 

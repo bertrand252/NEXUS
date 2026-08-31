@@ -5,84 +5,6 @@ import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
 
-function PositionSizeCalculator({ levels }) {
-  const [capital, setCapital] = useState(() => {
-    try { return localStorage.getItem('nexus_capital') || ''; } catch { return ''; }
-  });
-  const [riskPct, setRiskPct] = useState(() => {
-    try { return localStorage.getItem('nexus_risk_pct') || '2'; } catch { return '2'; }
-  });
-
-  useEffect(() => { try { localStorage.setItem('nexus_capital', capital); } catch { /* private mode dll, gapapa */ } }, [capital]);
-  useEffect(() => { try { localStorage.setItem('nexus_risk_pct', riskPct); } catch { /* private mode dll, gapapa */ } }, [riskPct]);
-
-  const MAX_POSITION_PCT = 20; // gak lebih dari 20% modal di 1 saham — batas diversifikasi standar,
-                                 // INDEPENDEN dari risk %. Tanpa ini, saham murah/tipis dengan jarak
-                                 // SL kecil (misal entry Rp50, SL Rp49) bisa ngasih rekomendasi share
-                                 // segunung yang nelen SELURUH modal di 1 saham doang — kejadian
-                                 // beneran ketauan pas backtest portfolio (GRPH: 100% modal 1 posisi).
-  const cap = parseFloat(capital) || 0;
-  const risk = parseFloat(riskPct) || 0;
-  const entry = levels.entry_low;
-  const stop = levels.stop_loss;
-  const riskPerShare = entry - stop;
-  const riskAmount = cap * (risk / 100);
-  const sharesFromRisk = riskPerShare > 0 && riskAmount > 0 ? Math.floor(riskAmount / riskPerShare) : 0;
-  const maxPositionCost = cap * (MAX_POSITION_PCT / 100);
-  const sharesFromMaxPosition = entry > 0 ? Math.floor(maxPositionCost / entry) : 0;
-  const shares = Math.min(sharesFromRisk, sharesFromMaxPosition);
-  const cappedByDiversification = sharesFromRisk > 0 && sharesFromMaxPosition < sharesFromRisk;
-  const lots = Math.floor(shares / 100); // 1 lot IDX = 100 lembar
-  const actualShares = lots * 100;
-  const actualCost = actualShares * entry;
-  const actualRisk = actualShares * riskPerShare;
-
-  return (
-    <div className="mt-4 pt-4 border-t border-border">
-      <h4 className="text-xs font-bold text-white mb-3">Position Size Calculator</h4>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div>
-          <label className="text-[10px] text-slate-500">Modal (Rp)</label>
-          <input
-            type="number" value={capital} onChange={(e) => setCapital(e.target.value)} placeholder="10000000"
-            className="w-full mt-1 bg-card2 border border-border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent/50"
-          />
-        </div>
-        <div>
-          <label className="text-[10px] text-slate-500">Risk per trade (%)</label>
-          <input
-            type="number" value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="2"
-            className="w-full mt-1 bg-card2 border border-border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent/50"
-          />
-        </div>
-      </div>
-      {cap > 0 && risk > 0 && riskPerShare > 0 ? (
-        lots > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
-            <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Lot</p><p className="text-lg font-extrabold font-mono text-accent">{lots}</p></div>
-            <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Modal Terpakai</p><p className="text-sm font-mono text-white mt-1">Rp{actualCost.toLocaleString('id-ID')}</p></div>
-            <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Risiko Riil</p><p className="text-sm font-mono text-moderate mt-1">Rp{actualRisk.toLocaleString('id-ID')}</p></div>
-          </div>
-        ) : cappedByDiversification && sharesFromMaxPosition < 100 ? (
-          <p className="text-xs text-slate-500">Modal kurang buat 1 lot pun kalau dibatesin max {MAX_POSITION_PCT}% per saham.</p>
-        ) : (
-          <p className="text-xs text-slate-500">Modal kurang buat 1 lot pun sesuai risk {risk}% ini.</p>
-        )
-      ) : (
-        <p className="text-xs text-slate-500">Isi modal & risk % buat ngitung berapa lot yang sesuai.</p>
-      )}
-      {cappedByDiversification && lots > 0 && (
-        <p className="text-[10px] text-moderate mt-2">
-          ⚠ Dibatesin ke max {MAX_POSITION_PCT}% modal per saham (bukan risk-based murni) — saham ini jarak SL-nya kecil relatif ke harga, risk-based doang bisa ngasih size kegedean.
-        </p>
-      )}
-      <p className="text-[10px] text-slate-600 mt-3">
-        Dihitung dari entry Rp{entry?.toLocaleString('id-ID')} & stop loss Rp{stop?.toLocaleString('id-ID')} — pertimbangan tambahan, bukan rekomendasi finansial.
-      </p>
-    </div>
-  );
-}
-
 function CompanyInfo({ company, ticker, financialStatement }) {
   const [lang, setLang] = useState('en');
   const [translated, setTranslated] = useState(null);
@@ -247,7 +169,6 @@ export default function StockDetail() {
 
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
-  const [timeframe, setTimeframe] = useState('1M');
   const [searchInput, setSearchInput] = useState('');
   const [annotation, setAnnotation] = useState(null);
   const [annotating, setAnnotating] = useState(false);
@@ -281,7 +202,7 @@ export default function StockDetail() {
     setError(null);
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/scanner/${ticker}?period=${timeframe}`);
+        const res = await fetch(`${API_BASE}/scanner/${ticker}`);
         if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
         const json = await res.json();
         if (!cancelled) setData(json);
@@ -290,7 +211,7 @@ export default function StockDetail() {
       }
     })();
     return () => { cancelled = true; };
-  }, [ticker, timeframe]);
+  }, [ticker]);
 
   const candles = data ? data.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })) : null;
   const candleRef = useCandlestickChart(candles, data?.levels, data?.ai_zones);
@@ -383,24 +304,12 @@ export default function StockDetail() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-2 glow-border rounded-2xl bg-card border border-border p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-white tracking-tight">Price Chart</h3>
-              <div className="flex gap-1 text-[11px] font-mono">
-                {['1D', '1W', '1M', '1Y'].map((tf) => (
-                  <button
-                    key={tf} onClick={() => setTimeframe(tf)}
-                    className={tf === timeframe
-                      ? 'px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30'
-                      : 'px-2.5 py-1 rounded text-slate-500 hover:text-slate-300'}
-                  >
-                    {tf}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div ref={candleRef} style={{ height: 280 }}></div>
+        <div className="glow-border rounded-2xl bg-card border border-border p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-white tracking-tight">Price Chart</h3>
+            <span className="text-[10px] text-slate-500 font-mono">Daily · histori penuh</span>
+          </div>
+          <div ref={candleRef} style={{ height: 360 }}></div>
             {data?.levels && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-center">
                 <div>
@@ -421,7 +330,6 @@ export default function StockDetail() {
                 </div>
               </div>
             )}
-            {data?.levels && <PositionSizeCalculator levels={data.levels} />}
             {data?.levels && (
               <div className="mt-4 pt-4 border-t border-border">
                 {!annotation && (
@@ -433,8 +341,9 @@ export default function StockDetail() {
                 {annotation && <p className="text-sm text-slate-300 leading-relaxed text-justify">{annotation}</p>}
               </div>
             )}
-          </div>
+        </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
           <div className="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col items-center justify-center">
             <h3 className="text-sm font-bold text-white tracking-tight self-start mb-2">Accumulation Score</h3>
             <svg viewBox="-18 -5 236 145" className="w-full max-w-[240px]">
@@ -461,12 +370,8 @@ export default function StockDetail() {
             </div>
             <p className="text-xs text-slate-500 mt-2">Zone: <span className={`font-semibold ${zoneColorClass(data?.signal)}`}>{data ? zoneLabel(data.signal) : '—'}</span></p>
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
           <ScoreCard label="Volume Score" value={data?.volume_score} max={25} barClass="bg-cyan" />
           <ScoreCard label="Price Score" value={data?.price_score} max={25} barClass="bg-accent" />
-          <ScoreCard label="Accumulation Score" value={data?.accumulation_score} max={30} barClass="bg-strong" />
           <ScoreCard label="Technical Score" value={data?.technical_score} max={20} barClass="bg-moderate" />
         </div>
 
