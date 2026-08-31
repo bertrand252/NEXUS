@@ -1077,7 +1077,13 @@ def _check_portfolio_risk() -> None:
     """Gated `notif_portfolio_risk` di Settings. Reuse holdings terakhir yang
     kesimpen otomatis pas user klik "Jalankan Simulasi" di Portfolio Simulation
     (routers/portfolio.py::simulate_portfolio) — gak ada UI simpan-portofolio
-    terpisah, ini "nangkep" opportunistic."""
+    terpisah, ini "nangkep" opportunistic. Dipindah dari pagi ke MALAM (jalan
+    bareng Recap Malam) + detail per-saham (technical + _detect_bandar), sama
+    kedalaman kayak _send_running_positions_update — bedanya holdings ini APA
+    YANG BENERAN DIPEGANG user (portfolio_holdings), bukan cuma posisi yang
+    NEXUS sendiri alert-in (signal_alerts). portfolio_holdings gak nyimpen
+    tanggal beli, jadi _detect_bandar pakai window tetap 30 hari ke belakang
+    (bukan entry_date asli kayak posisi Swing)."""
     settings = _load_settings()
     if not settings["notif_portfolio_risk"]:
         return
@@ -1086,17 +1092,46 @@ def _check_portfolio_risk() -> None:
         res = supabase.table("portfolio_holdings").select("holdings").eq("id", 1).limit(1).execute()
     except Exception:
         return
-    if not res.data or not res.data[0].get("holdings"):
+    holdings = (res.data[0].get("holdings") if res.data else None) or []
+    if not holdings:
         return
 
     from routers.portfolio import _simulate
     try:
-        result = _simulate(res.data[0]["holdings"])
+        result = _simulate(holdings)
     except Exception:
         return
 
+    per_saham = {p.get("kode"): p for p in result.get("per_saham", [])}
+    today = today_wib().isoformat()
+    lookback_from = (today_wib() - timedelta(days=30)).isoformat()
+    risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🚨"}
+
+    lines = ["💼 <b>Portfolio Review Malam</b>\n"]
+    for h in holdings:
+        kode = h["kode"]
+        try:
+            price_now = float(_get_history(kode)["Close"].iloc[-1])
+            pnl_pct = round((price_now - h["avg_price"]) / h["avg_price"] * 100, 2)
+            pnl_txt = f"{'+' if pnl_pct >= 0 else ''}{pnl_pct}%"
+        except Exception:
+            pnl_txt = "?"
+        p = per_saham.get(kode, {})
+        risk = p.get("risk_level", "-")
+        alasan = _esc(p.get("alasan") or "-")
+        lines.append(f"{risk_emoji.get(risk, '⚪')} <b>{_esc(kode)}</b> ({pnl_txt}) — risk {risk}\n{alasan}\n")
+
+        bandar = _detect_bandar(kode, lookback_from, today)
+        if bandar:
+            lines.append(_format_bandar_line(bandar))
+
     if result.get("overall_risk") == "high":
-        send_alert(f"🚨 <b>PORTFOLIO RISK: HIGH</b>\n\n{_esc(result.get('portfolio_impact_summary', '-'))}")
+        lines.append(f"\n🚨 <b>OVERALL RISK: HIGH</b>\n{_esc(result.get('portfolio_impact_summary', '-'))}")
+    rekomendasi = result.get("rekomendasi_aksi") or []
+    if rekomendasi:
+        lines.append("\n📌 Rekomendasi: " + "; ".join(_esc(r) for r in rekomendasi))
+
+    send_alert("\n".join(lines))
 
 
 NIGHT_RECAP_HOUR = 20  # 20:00 waktu lokal server, abis market tutup
@@ -1219,6 +1254,22 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     }
 
 
+_BANDAR_TREND_LABELS = {
+    "akumulasi_meningkat": "📈 akumulasi MENINGKAT belakangan ini",
+    "distribusi_meningkat": "📉 mulai ADA DISTRIBUSI belakangan ini",
+    "akumulasi_melambat": "⚠️ akumulasi MELAMBAT belakangan ini",
+    "netral": "netral",
+}
+
+
+def _format_bandar_line(bandar: dict) -> str:
+    """Baris digest buat 1 hasil _detect_bandar — dipakai _send_running_positions_update
+    (posisi Swing NEXUS) & _check_portfolio_risk (holdings asli user)."""
+    trend_label = _BANDAR_TREND_LABELS.get(bandar["trend"], bandar["trend"])
+    avg_txt = f", avg beli ~Rp{bandar['avg_price_estimate']:,.0f} (perkiraan)" if bandar["avg_price_estimate"] else ""
+    return f"   🏦 Broker {_esc(bandar['broker'])} paling akumulasi{avg_txt} — {trend_label}\n"
+
+
 def _send_running_positions_update() -> None:
     """Digest posisi 'running' (signal_alerts status='open') — dikirim tiap
     malam bareng Recap Malam. Beda dari _check_signal_outcomes() (yang OTOMATIS
@@ -1285,14 +1336,7 @@ def _send_running_positions_update() -> None:
         # modal bandar dari data publik manapun)
         bandar = _detect_bandar(p["ticker"], p["entry_date"], today)
         if bandar:
-            trend_label = {
-                "akumulasi_meningkat": "📈 akumulasi MENINGKAT belakangan ini",
-                "distribusi_meningkat": "📉 mulai ADA DISTRIBUSI belakangan ini",
-                "akumulasi_melambat": "⚠️ akumulasi MELAMBAT belakangan ini",
-                "netral": "netral",
-            }.get(bandar["trend"], bandar["trend"])
-            avg_txt = f", avg beli ~Rp{bandar['avg_price_estimate']:,.0f} (perkiraan)" if bandar["avg_price_estimate"] else ""
-            lines.append(f"   🏦 Broker {_esc(bandar['broker'])} paling akumulasi{avg_txt} — {trend_label}\n")
+            lines.append(_format_bandar_line(bandar))
     send_alert("\n".join(lines))
 
 
@@ -1325,6 +1369,10 @@ async def run_night_recap() -> None:
             _send_running_positions_update()
         except Exception:
             log.exception("_send_running_positions_update gagal")
+        try:
+            _check_portfolio_risk()
+        except Exception:
+            log.exception("_check_portfolio_risk gagal")
 
 
 BSJP_SCREENER_HOUR = 15
@@ -1736,7 +1784,7 @@ async def run_morning_routine() -> None:
         # gak nge-block step selanjutnya (misal _check_signal_outcomes yang
         # nutup posisi trading, itu lebih penting daripada mentor sheet)
         for step in (refresh_mentor_calls, _generate_briefing, _check_entry_zone_touches,
-                     _check_signal_outcomes, _check_portfolio_risk):
+                     _check_signal_outcomes):
             try:
                 step()
             except Exception:
