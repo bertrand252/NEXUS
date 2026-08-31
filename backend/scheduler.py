@@ -1191,18 +1191,11 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     memprediksi average-down/up — gak ada cara tau itu dari data publik
     manapun (permintaan eksplisit user), ini cuma info posisi doang.
 
-    TODO (nunggu Invezgo aktif, data mentah beneran buat validasi): mentor
-    user kasih insight baru (contoh CARE & BANK) — SIDEWAYS LAMA + akumulasi
-    STEADY/naik terus (cumulative net value broker naik konsisten walau
-    harga sideways, bukan naik-turun) itu sign BAGUS, artinya barang lagi
-    "dikeringin"/dipegang bandar makin banyak, jadi lebih RINGAN naiknya
-    pas breakout beneran kejadian. Sekarang `_detect_bandar` cuma liat
-    "broker paling akumulasi" + "trend 5 hari terakhir vs 5 hari sebelumnya"
-    doang, BELUM eksplisit nangkep pola "durasi akumulasi steady vs harga
-    sideways" ini. Kalau mau ditambahin: butuh window lebih panjang
-    (nyambung ke `sideways_days_before` dari scoring.py::compression_setup)
-    + cek konsistensi arah cumulative net value (bukan cuma total/trend
-    pendek) selama periode sideways itu."""
+    Insight mentor (contoh CARE & BANK): SIDEWAYS LAMA + akumulasi STEADY
+    (broker net-buy KONSISTEN mayoritas hari, bukan cuma total net-buy gede)
+    itu sign bagus — barang lagi "dikeringin", breakout jadi lebih ringan.
+    Dicek dari `inv["price"]` (udah kebawa 1x fetch bareng, gak nambah request)
+    buat sideways + % hari net-buy positif broker top buat konsistensi."""
     if not invezgo_client.is_configured():
         return None
     try:
@@ -1259,12 +1252,21 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
             weighted_vol += v
     avg_price = round(weighted_sum / weighted_vol, 2) if weighted_vol > 0 else None
 
+    # ponytail: threshold sideways 12% & konsistensi 70% heuristik arbitrer
+    # (belum divalidasi statistik), tuning kalau kebanyakan false positive/negative
+    consistency_pct = round(sum(1 for d in top_data if d.get("value", 0) > 0) / len(top_data) * 100, 1) if top_data else None
+    closes = [p["close"] for p in (inv.get("price") or []) if p.get("close")]
+    sideways = len(closes) >= 5 and (max(closes) - min(closes)) / (sum(closes) / len(closes)) * 100 <= 12
+    steady_accumulation_sideways = bool(sideways and consistency_pct is not None and consistency_pct >= 70)
+
     return {
         "broker": top_broker,
         "cumulative_net_value": round(top_total, 0),
         "avg_price_estimate": avg_price,
         "avg_price_sample_days": [d["date"] for d in top_days],
         "trend": trend,
+        "consistency_pct": consistency_pct,
+        "steady_accumulation_sideways": steady_accumulation_sideways,
     }
 
 
@@ -1281,7 +1283,10 @@ def _format_bandar_line(bandar: dict) -> str:
     (posisi Swing NEXUS) & _check_portfolio_risk (holdings asli user)."""
     trend_label = _BANDAR_TREND_LABELS.get(bandar["trend"], bandar["trend"])
     avg_txt = f", avg beli ~Rp{bandar['avg_price_estimate']:,.0f} (perkiraan)" if bandar["avg_price_estimate"] else ""
-    return f"   🏦 Broker {_esc(bandar['broker'])} paling akumulasi{avg_txt} — {trend_label}\n"
+    line = f"   🏦 Broker {_esc(bandar['broker'])} paling akumulasi{avg_txt} — {trend_label}\n"
+    if bandar.get("steady_accumulation_sideways"):
+        line += f"   🎯 Sideways + akumulasi STEADY ({bandar['consistency_pct']}% hari net-buy) — breakout berpotensi lebih ringan\n"
+    return line
 
 
 def _send_running_positions_update() -> None:
