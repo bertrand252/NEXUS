@@ -40,6 +40,12 @@ from backtest import _process_one
 INITIAL_CAPITAL = 10_000_000  # Rp10 juta, angka bulat buat ilustrasi
 RISK_PCT_PER_TRADE = 2.0      # sama default Position Sizing Calculator (StockDetail)
 MAX_CONCURRENT_POSITIONS = 10  # diversifikasi wajar — ASUMSI, bukan dari riset
+MAX_POSITION_PCT = 20          # BUG NYATA ketemu pas riset: saham murah/tipis (GRPH: entry Rp50,
+                                # SL Rp49, risk/share Rp1) bikin position sizing risk-based DOANG
+                                # ngasih size gila (60 juta lembar @ modal 3M = 100% modal 1 saham).
+                                # Cap independen ini (sama kayak fix Position Sizing Calculator di
+                                # StockDetail.jsx) - JANGAN lebih dari 20% modal per saham, gak
+                                # peduli seberapa kecil risk/share-nya.
 LOT_SIZE = 100                 # 1 lot IDX = 100 lembar
 
 _DIR = os.path.dirname(__file__)
@@ -110,7 +116,10 @@ def simulate_portfolio(trades: list[dict], initial_capital: float = INITIAL_CAPI
             skipped_bad_risk += 1
             continue
         risk_amount = initial_capital * (RISK_PCT_PER_TRADE / 100)
-        shares = int(risk_amount / risk_per_share)
+        shares_from_risk = int(risk_amount / risk_per_share)
+        max_position_cost = initial_capital * (MAX_POSITION_PCT / 100)
+        shares_from_max_position = int(max_position_cost / t["entry_price"]) if t["entry_price"] > 0 else 0
+        shares = min(shares_from_risk, shares_from_max_position)
         shares = (shares // LOT_SIZE) * LOT_SIZE
         if shares < LOT_SIZE:
             skipped_bad_risk += 1

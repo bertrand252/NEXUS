@@ -16,13 +16,22 @@ function PositionSizeCalculator({ levels }) {
   useEffect(() => { try { localStorage.setItem('nexus_capital', capital); } catch { /* private mode dll, gapapa */ } }, [capital]);
   useEffect(() => { try { localStorage.setItem('nexus_risk_pct', riskPct); } catch { /* private mode dll, gapapa */ } }, [riskPct]);
 
+  const MAX_POSITION_PCT = 20; // gak lebih dari 20% modal di 1 saham — batas diversifikasi standar,
+                                 // INDEPENDEN dari risk %. Tanpa ini, saham murah/tipis dengan jarak
+                                 // SL kecil (misal entry Rp50, SL Rp49) bisa ngasih rekomendasi share
+                                 // segunung yang nelen SELURUH modal di 1 saham doang — kejadian
+                                 // beneran ketauan pas backtest portfolio (GRPH: 100% modal 1 posisi).
   const cap = parseFloat(capital) || 0;
   const risk = parseFloat(riskPct) || 0;
   const entry = levels.entry_low;
   const stop = levels.stop_loss;
   const riskPerShare = entry - stop;
   const riskAmount = cap * (risk / 100);
-  const shares = riskPerShare > 0 && riskAmount > 0 ? Math.floor(riskAmount / riskPerShare) : 0;
+  const sharesFromRisk = riskPerShare > 0 && riskAmount > 0 ? Math.floor(riskAmount / riskPerShare) : 0;
+  const maxPositionCost = cap * (MAX_POSITION_PCT / 100);
+  const sharesFromMaxPosition = entry > 0 ? Math.floor(maxPositionCost / entry) : 0;
+  const shares = Math.min(sharesFromRisk, sharesFromMaxPosition);
+  const cappedByDiversification = sharesFromRisk > 0 && sharesFromMaxPosition < sharesFromRisk;
   const lots = Math.floor(shares / 100); // 1 lot IDX = 100 lembar
   const actualShares = lots * 100;
   const actualCost = actualShares * entry;
@@ -54,11 +63,18 @@ function PositionSizeCalculator({ levels }) {
             <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Modal Terpakai</p><p className="text-sm font-mono text-white mt-1">Rp{actualCost.toLocaleString('id-ID')}</p></div>
             <div><p className="text-[10px] text-slate-500 uppercase tracking-wider">Risiko Riil</p><p className="text-sm font-mono text-moderate mt-1">Rp{actualRisk.toLocaleString('id-ID')}</p></div>
           </div>
+        ) : cappedByDiversification && sharesFromMaxPosition < 100 ? (
+          <p className="text-xs text-slate-500">Modal kurang buat 1 lot pun kalau dibatesin max {MAX_POSITION_PCT}% per saham.</p>
         ) : (
           <p className="text-xs text-slate-500">Modal kurang buat 1 lot pun sesuai risk {risk}% ini.</p>
         )
       ) : (
         <p className="text-xs text-slate-500">Isi modal & risk % buat ngitung berapa lot yang sesuai.</p>
+      )}
+      {cappedByDiversification && lots > 0 && (
+        <p className="text-[10px] text-moderate mt-2">
+          ⚠ Dibatesin ke max {MAX_POSITION_PCT}% modal per saham (bukan risk-based murni) — saham ini jarak SL-nya kecil relatif ke harga, risk-based doang bisa ngasih size kegedean.
+        </p>
       )}
       <p className="text-[10px] text-slate-600 mt-3">
         Dihitung dari entry Rp{entry?.toLocaleString('id-ID')} & stop loss Rp{stop?.toLocaleString('id-ID')} — pertimbangan tambahan, bukan rekomendasi finansial.
