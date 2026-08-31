@@ -229,6 +229,7 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
             "compression_setup": is_compression,
             "compression_vcp": is_compression_vcp,
             "rr_ratio": levels["rr_ratio"],
+            "stop_loss": round(stop, 2),  # dipake portfolio_backtest.py buat position sizing (risk per share)
         })
         i = exit_idx + 1  # lanjut nyari sinyal baru abis posisi lama ditutup
 
