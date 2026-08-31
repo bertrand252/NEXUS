@@ -1,9 +1,30 @@
 from datetime import timedelta
 from fastapi import APIRouter, HTTPException
+import yfinance as yf
 from config import supabase, today_wib
 from groq_client import ask_json
 
 router = APIRouter()
+
+GLOBAL_INDICES = {"^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "Nasdaq"}
+
+
+def _overnight_global_context() -> str:
+    """Perubahan semalem index AS — IHSG sering kebawa arah market global
+    pas buka pagi (gap up/down), konteks murah (yfinance doang, 3 ticker)
+    buat AI Daily Briefing biar gak buta market luar. Diem-diem return string
+    kosong kalau yfinance gagal — jangan gagalin briefing cuma gara-gara ini."""
+    lines = []
+    for ticker, name in GLOBAL_INDICES.items():
+        try:
+            hist = yf.Ticker(ticker).history(period="5d").dropna(subset=["Close"])
+            if len(hist) < 2:
+                continue
+            chg = (hist["Close"].iloc[-1] - hist["Close"].iloc[-2]) / hist["Close"].iloc[-2] * 100
+            lines.append(f"{name} {chg:+.2f}%")
+        except Exception:
+            continue
+    return ", ".join(lines)
 
 BRIEFING_SYSTEM_PROMPT = """Kamu analyst assistant buat NEXUS, platform screening saham IDX. Dikasih
 kumpulan ringkasan berita/intel market beberapa hari terakhir (masing-masing udah
@@ -14,6 +35,12 @@ ATURAN PENTING: JANGAN ngarang data yang gak ada di input. Kalau gak ada cukup
 info buat rekomendasi solid, bilang jujur di ringkasan dan biarin rekomendasi
 kosong — jangan maksa. Tiap rekomendasi HARUS nyebutin alasan spesifik yang
 merujuk ke data yang diberikan, bukan opini baru.
+
+KONTEKS GLOBAL: kalau ada baris "[Konteks global semalam]" di input, itu
+perubahan real index AS (S&P 500/Dow/Nasdaq) semalem — boleh disebut di
+ringkasan KALAU relevan (IHSG suka kebawa arah global pas buka), tapi JANGAN
+nge-klaim hubungan sebab-akibat yang pasti ("IHSG PASTI naik karena..") —
+cukup sebut sebagai KONTEKS, bukan prediksi pasti.
 
 BAHASA: SEMUA teks di output (ringkasan, tiap item berita, detail tanggal_penting,
 alasan rekomendasi) WAJIB dalam Bahasa Indonesia — walau sumber berita aslinya
@@ -53,8 +80,9 @@ def _generate_briefing(days: int = 3) -> dict:
         .execute()
     )
     entries = [e for e in res.data if e.get("summary_ai")][:MAX_ENTRIES]
+    global_context = _overnight_global_context()
 
-    if not entries:
+    if not entries and not global_context:
         briefing = {
             "market_sentiment": "neutral",
             "ringkasan": "Belum ada intel yang masuk beberapa hari terakhir — belum bisa disintesis.",
@@ -69,8 +97,11 @@ def _generate_briefing(days: int = 3) -> dict:
             f"event={e['summary_ai'].get('event_penting', [])[:MAX_POIN_PER_ENTRY]}"
             for e in entries
         ]
+        if global_context:
+            lines.insert(0, f"[Konteks global semalam] {global_context}")
         briefing = ask_json(BRIEFING_SYSTEM_PROMPT, "\n".join(lines))
 
+    briefing["global_context"] = global_context or None
     briefing["tanggal"] = today_wib().isoformat()
     supabase.table("daily_briefing").upsert(briefing, on_conflict="tanggal").execute()
     return briefing
