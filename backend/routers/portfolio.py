@@ -37,6 +37,48 @@ class Holding(BaseModel):
 
 class SimulateInput(BaseModel):
     holdings: list[Holding]
+    total_capital: float | None = None  # modal total trading (holdings + cash nganggur) —
+                                          # opsional, cuma dibutuhin buat money management check
+
+
+MM_SLOT_PCT = 20   # sinkron manual portfolio_backtest.py::MENTOR_SLOT_PCT — max % modal per saham
+MM_MAX_SLOTS = 4   # sinkron manual portfolio_backtest.py::MENTOR_MAX_POSITIONS — 80% max deployed / 20% per slot
+
+
+def _money_management_check(holdings: list[dict], total_capital: float) -> dict:
+    """Money management ala mentor user (bukan AI/Groq — ini kalkulasi
+    deterministik doang): max 20% modal per saham, max 80% modal dipakai
+    (4 slot), 20% sisa jadi 'amunisi' — kalau 1 slot abis kena CL, slot
+    berikutnya TETEP dapet 'peluru' penuh 20% dari modal AWAL (bukan dari
+    modal berjalan), bukan cuma sisa abis rugi. Lihat portfolio_backtest.py
+    ::simulate_portfolio_mentor buat versi backtest historisnya."""
+    max_per_stock = total_capital * (MM_SLOT_PCT / 100)
+    deployed = sum(h["lot"] * h["avg_price"] for h in holdings)
+    cash_available = total_capital - deployed
+
+    warnings = []
+    for h in holdings:
+        value = h["lot"] * h["avg_price"]
+        if value > max_per_stock * 1.001:  # toleransi pembulatan kecil
+            pct = round(value / total_capital * 100, 1)
+            warnings.append(f"{h['kode']} kelewat {MM_SLOT_PCT}% modal (sekarang {pct}%) — over-konsentrasi.")
+
+    slots_used = len(holdings)
+    slots_remaining = max(0, MM_MAX_SLOTS - slots_used)
+    next_position_ammo = min(max_per_stock, cash_available) if cash_available > 0 else 0
+
+    return {
+        "max_per_stock_pct": MM_SLOT_PCT,
+        "max_per_stock_amount": round(max_per_stock, 2),
+        "max_slots": MM_MAX_SLOTS,
+        "slots_used": slots_used,
+        "slots_remaining": slots_remaining,
+        "deployed_amount": round(deployed, 2),
+        "deployed_pct": round(deployed / total_capital * 100, 1) if total_capital else 0,
+        "cash_available": round(cash_available, 2),
+        "next_position_ammo": round(next_position_ammo, 2),
+        "warnings": warnings,
+    }
 
 
 def _recent_intel_summaries(days: int = 3) -> list[dict[str, Any]]:
@@ -97,6 +139,11 @@ def simulate_portfolio(request: Request, payload: SimulateInput):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Groq gagal memproses simulasi: {e}")
+
+    if payload.total_capital and payload.total_capital > 0:
+        result["money_management"] = _money_management_check(holdings, payload.total_capital)
+    else:
+        result["money_management"] = None
 
     try:
         supabase.table("portfolio_holdings").upsert({"id": 1, "holdings": holdings}).execute()

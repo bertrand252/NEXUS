@@ -50,6 +50,10 @@ export default function PortfolioSimulation() {
   const [kode, setKode] = useState('');
   const [lot, setLot] = useState('');
   const [avg, setAvg] = useState('');
+  const [totalCapital, setTotalCapital] = useState(() => {
+    try { return localStorage.getItem('nexus_portfolio_capital') || ''; } catch { return ''; }
+  });
+  useEffect(() => { try { localStorage.setItem('nexus_portfolio_capital', totalCapital); } catch { /* private mode dll, gapapa */ } }, [totalCapital]);
 
   const [intel, setIntel] = useState(null);
   const [intelError, setIntelError] = useState(false);
@@ -76,7 +80,7 @@ export default function PortfolioSimulation() {
       const res = await fetch(`${API_BASE}/portfolio/simulate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ holdings }),
+        body: JSON.stringify({ holdings, total_capital: parseFloat(totalCapital) || null }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Simulasi gagal');
       setResult(await res.json());
@@ -180,6 +184,14 @@ export default function PortfolioSimulation() {
                 </table>
               </div>
 
+              <div className="mt-4">
+                <label className="text-[10px] text-slate-500">Modal Total Trading (Rp) — opsional, buat cek money management</label>
+                <input
+                  type="number" placeholder="cth. 100000000" value={totalCapital} onChange={(e) => setTotalCapital(e.target.value)}
+                  className="w-full mt-1 bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/60"
+                />
+              </div>
+
               <button onClick={runSimulation} disabled={simRunning} className="w-full mt-4 flex items-center justify-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg bg-accent hover:bg-accent/90 text-white transition">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="white" strokeWidth="2" strokeLinejoin="round" /></svg>
                 {simRunning ? 'Menjalankan AI...' : 'Jalankan Simulasi'}
@@ -257,6 +269,40 @@ export default function PortfolioSimulation() {
                 </div>
               </div>
             </div>
+
+            {result?.money_management && (
+              <div className="glow-border rounded-2xl bg-card border border-border p-6">
+                <h3 className="text-sm font-bold text-white tracking-tight mb-1">Money Management</h3>
+                <p className="text-[11px] text-slate-500 mb-4">Max {result.money_management.max_per_stock_pct}% modal/saham, max {result.money_management.max_slots} slot — kalkulasi langsung, bukan AI.</p>
+
+                {result.money_management.warnings.length > 0 && (
+                  <div className="mb-4 space-y-1.5">
+                    {result.money_management.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-moderate">⚠ {w}</p>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                  <div>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider">Slot Terpakai</p>
+                    <p className="text-lg font-extrabold font-mono text-white mt-1">{result.money_management.slots_used}/{result.money_management.max_slots}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider">Modal Terpakai</p>
+                    <p className="text-sm font-mono text-white mt-1">{result.money_management.deployed_pct}%</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider">Cash Tersisa</p>
+                    <p className="text-sm font-mono text-white mt-1">Rp{result.money_management.cash_available.toLocaleString('id-ID')}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider">Amunisi Posisi Baru</p>
+                    <p className="text-sm font-mono text-accent mt-1">Rp{result.money_management.next_position_ammo.toLocaleString('id-ID')}</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="glow-border rounded-2xl bg-card border border-border p-6">
               <h3 className="text-sm font-bold text-white tracking-tight mb-6">Event Timeline — 7 Hari Ke Depan</h3>
