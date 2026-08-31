@@ -1189,7 +1189,20 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     kuota), volume-weighted dari transaksi yang beneran match buyer=broker itu
     di hari-hari sample. SENGAJA GAK nyoba nebak sisa modal bandar buat
     memprediksi average-down/up — gak ada cara tau itu dari data publik
-    manapun (permintaan eksplisit user), ini cuma info posisi doang."""
+    manapun (permintaan eksplisit user), ini cuma info posisi doang.
+
+    TODO (nunggu Invezgo aktif, data mentah beneran buat validasi): mentor
+    user kasih insight baru (contoh CARE & BANK) — SIDEWAYS LAMA + akumulasi
+    STEADY/naik terus (cumulative net value broker naik konsisten walau
+    harga sideways, bukan naik-turun) itu sign BAGUS, artinya barang lagi
+    "dikeringin"/dipegang bandar makin banyak, jadi lebih RINGAN naiknya
+    pas breakout beneran kejadian. Sekarang `_detect_bandar` cuma liat
+    "broker paling akumulasi" + "trend 5 hari terakhir vs 5 hari sebelumnya"
+    doang, BELUM eksplisit nangkep pola "durasi akumulasi steady vs harga
+    sideways" ini. Kalau mau ditambahin: butuh window lebih panjang
+    (nyambung ke `sideways_days_before` dari scoring.py::compression_setup)
+    + cek konsistensi arah cumulative net value (bukan cuma total/trend
+    pendek) selama periode sideways itu."""
     if not invezgo_client.is_configured():
         return None
     try:
