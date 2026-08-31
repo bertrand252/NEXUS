@@ -27,6 +27,38 @@ const SENTIMENT_CLASS = {
   mixed: 'bg-moderate/10 text-moderate border-moderate/30',
 };
 
+// Struktur field RRG asli belum diverifikasi lawan API (lihat invezgo_client.py::
+// get_sector_rotation) — coba beberapa nama field yang lazim dipake RRG (JdK
+// methodology: RS-Ratio/RS-Momentum, biasanya berpusat di 100/100). Kuadran:
+// kanan-atas Leading, kanan-bawah Weakening, kiri-bawah Lagging, kiri-atas Improving.
+function parseRRG(raw) {
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : null;
+  if (!rows || !rows.length) return null;
+  const xKey = ['rs_ratio', 'rsRatio', 'x'].find((k) => typeof rows[0][k] === 'number');
+  const yKey = ['rs_momentum', 'rsMomentum', 'y'].find((k) => typeof rows[0][k] === 'number');
+  const labelKey = ['label', 'name', 'sector', 'code'].find((k) => rows[0][k] != null);
+  if (!xKey || !yKey) return null;
+  return rows.map((r) => ({ x: r[xKey], y: r[yKey], label: labelKey ? r[labelKey] : '' }));
+}
+
+function rrgChartConfig(points) {
+  if (!points) return null;
+  return {
+    type: 'scatter',
+    data: { datasets: [{ data: points, backgroundColor: '#06B6D4', pointRadius: 5 }] },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${points[ctx.dataIndex].label} (${ctx.raw.x.toFixed(1)}, ${ctx.raw.y.toFixed(1)})` } },
+      },
+      scales: {
+        x: { title: { display: true, text: 'RS-Ratio', color: '#64748B' }, grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 10 } } },
+        y: { title: { display: true, text: 'RS-Momentum', color: '#64748B' }, grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 10 } } },
+      },
+    },
+  };
+}
+
 const HEATMAP_CLASS = (avgScore) => {
   if (avgScore >= 60) return 'bg-strong/20 border-strong/40 text-strong';
   if (avgScore >= 45) return 'bg-moderate/20 border-moderate/40 text-moderate';
@@ -106,6 +138,8 @@ export default function Dashboard() {
   }, []);
 
   const ihsgRef = useChart(ihsgChartConfig(ihsg?.spark));
+  const rrgPoints = sectorRRG?.configured ? parseRRG(sectorRRG.data) : null;
+  const rrgRef = useChart(rrgChartConfig(rrgPoints));
   const top5 = scanner ? [...scanner].sort((a, b) => b.total_score - a.total_score).slice(0, 5) : [];
   const watchlistRows = scanner && watchlist
     ? scanner.filter((s) => watchlist.includes(s.ticker)).sort((a, b) => b.total_score - a.total_score)
@@ -175,9 +209,21 @@ export default function Dashboard() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white tracking-tight">Sector Rotation</h3>
             <span className="text-[11px] text-slate-500 font-mono">
-              {sectorRRG?.configured ? 'RRG asli ada, tampilan quadrant belum dibuat — masih heatmap manual di bawah' : 'Sektor mana lagi rame Strong signal'}
+              {sectorRRG?.configured ? 'RRG asli (Invezgo)' : 'Sektor mana lagi rame Strong signal'}
             </span>
           </div>
+          {sectorRRG?.configured && rrgPoints && (
+            <div className="mb-4 pb-4 border-b border-border">
+              <canvas ref={rrgRef} height="180"></canvas>
+              <p className="text-[10px] text-slate-500 mt-1">Kuadran: kanan-atas Leading · kanan-bawah Weakening · kiri-bawah Lagging · kiri-atas Improving</p>
+            </div>
+          )}
+          {sectorRRG?.configured && sectorRRG.data && !rrgPoints && (
+            <div className="mb-4 pb-4 border-b border-border">
+              <p className="text-[11px] text-slate-500 mb-2">Struktur field RRG belum ketebak otomatis — data mentah di bawah.</p>
+              <pre className="text-[10px] text-slate-400 bg-black/30 rounded-lg p-3 overflow-auto max-h-40 font-mono">{JSON.stringify(sectorRRG.data, null, 2)}</pre>
+            </div>
+          )}
           {sectorHeatmap?.length === 0 && <p className="text-sm text-slate-500 py-2">Cache scanner kosong — refresh dulu di Scanner.</p>}
           {sectorHeatmap?.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

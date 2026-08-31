@@ -5,6 +5,55 @@ import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
 
+// Struktur field laporan keuangan Invezgo belum diverifikasi lawan API asli —
+// render tabel generik dari kolom apapun yang ada di data, daripada nebak nama
+// field (revenue/laba/dst) yang bisa aja salah.
+function GenericTable({ raw }) {
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : null;
+  if (!rows || !rows.length) {
+    return <pre className="text-[10px] text-slate-400 bg-black/30 rounded-lg p-3 overflow-auto max-h-40 font-mono">{JSON.stringify(raw, null, 2)}</pre>;
+  }
+  const cols = Object.keys(rows[0]).slice(0, 7);
+  return (
+    <div className="overflow-x-auto">
+      <table className="text-[11px] text-slate-300 w-full">
+        <thead>
+          <tr className="text-slate-500 uppercase text-[9px]">
+            {cols.map((c) => <th key={c} className="text-left pr-3 pb-1 font-semibold">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 8).map((r, i) => (
+            <tr key={i} className="border-t border-border/50">
+              {cols.map((c) => <td key={c} className="pr-3 py-1 font-mono">{typeof r[c] === 'number' ? r[c].toLocaleString('id-ID') : String(r[c] ?? '—')}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const STATEMENT_TABS = { BS: 'Neraca', IS: 'Laba Rugi', CF: 'Arus Kas' };
+
+function FinancialStatementTable({ data }) {
+  const [tab, setTab] = useState('BS');
+  const raw = data?.[tab];
+  return (
+    <div>
+      <div className="flex items-center gap-1 mb-2">
+        {Object.entries(STATEMENT_TABS).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition ${tab === key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {raw ? <GenericTable raw={raw} /> : <p className="text-xs text-slate-500">Gak ada data {STATEMENT_TABS[tab]} buat ticker ini.</p>}
+    </div>
+  );
+}
+
 function CompanyInfo({ company, ticker, financialStatement }) {
   const [lang, setLang] = useState('en');
   const [translated, setTranslated] = useState(null);
@@ -61,10 +110,12 @@ function CompanyInfo({ company, ticker, financialStatement }) {
       </div>
       {company.summary && <p className="text-sm text-slate-400 leading-relaxed text-justify">{lang === 'id' && translated ? translated : company.summary}</p>}
       <div className="mt-3 pt-3 border-t border-border">
-        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Laporan Keuangan (Invezgo)</p>
-        <p className="text-xs text-slate-500">
-          {financialStatement ? 'Ada data — tampilan detail belum dibuat.' : 'Belum tersedia — nunggu Invezgo API aktif.'}
-        </p>
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Laporan Keuangan (Invezgo, per quarter)</p>
+        {financialStatement ? (
+          <FinancialStatementTable data={financialStatement} />
+        ) : (
+          <p className="text-xs text-slate-500">Belum tersedia — nunggu Invezgo API aktif.</p>
+        )}
       </div>
     </div>
   );
@@ -158,6 +209,155 @@ function ScoreCard({ label, value, max, barClass }) {
       <div className="w-full h-1.5 rounded-full bg-white/5 mt-2 overflow-hidden">
         <div className={`h-full rounded-full ${barClass}`} style={{ width: value != null ? `${(value / max) * 100}%` : '0%' }}></div>
       </div>
+    </div>
+  );
+}
+
+// Struktur response Invezgo belum diverifikasi lawan API asli buat endpoint ini
+// (lihat invezgo_client.py::get_sankey_chart) — daripada nebak field yang salah,
+// dump JSON mentahnya biar minimal keliatan APAKAH datanya berguna. Chart Sankey
+// beneran nunggu struktur node/link asli begitu key aktif.
+function RawJsonPreview({ raw, note }) {
+  return (
+    <div>
+      <p className="text-[11px] text-slate-500 mb-2">{note}</p>
+      <pre className="text-[10px] text-slate-400 bg-black/30 rounded-lg p-3 overflow-auto max-h-40 font-mono">{JSON.stringify(raw, null, 2)}</pre>
+    </div>
+  );
+}
+
+// Field CONFIRMED lawan OpenAPI spec asli Invezgo: [{month, start_price,
+// end_price, percentage_change}]. percentage_change balik sebagai number
+// (bukan string) di contoh spec, tapi tetep dijaga Number() jaga-jaga.
+function parseSeasonality(raw) {
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : null;
+  if (!rows || !rows.length) return null;
+  const labelKey = ['month', 'label', 'period', 'name'].find((k) => rows[0][k] != null);
+  const valueKey = ['percentage_change', 'avg_return', 'avg_return_pct', 'return', 'return_pct', 'avg', 'value'].find((k) => rows[0][k] != null && !isNaN(Number(rows[0][k])));
+  if (!labelKey || !valueKey) return null;
+  return { labels: rows.map((r) => String(r[labelKey])), values: rows.map((r) => Number(r[valueKey])) };
+}
+
+function SeasonalityChart({ raw }) {
+  const parsed = parseSeasonality(raw);
+  const config = parsed ? {
+    type: 'bar',
+    data: { labels: parsed.labels, datasets: [{ data: parsed.values, backgroundColor: (ctx) => (ctx.raw >= 0 ? '#10B981' : '#EF4444'), borderRadius: 3 }] },
+    options: { plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#94A3B8', font: { size: 9 } } }, y: { grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 9 } } } } },
+  } : null;
+  const chartRef = useChart(config);
+  if (!parsed) return <RawJsonPreview raw={raw} note="Struktur field belum ketebak otomatis — data mentah di bawah, chart nyusul begitu bentuknya jelas." />;
+  return <canvas ref={chartRef} height="90"></canvas>;
+}
+
+// Format CONFIRMED lawan OpenAPI spec asli Invezgo: {"nodes":[{"name"}],
+// "links":[{"source","target","value"}]} — standar D3 Sankey. Belum ada lib
+// diagram Sankey di stack (chart.js gak native support), jadi ditampilin
+// sebagai tabel flow terurut (paling gede duluan) — jujur & berguna tanpa
+// nambah dependency baru buat 1 chart. Upgrade ke diagram visual beneran
+// kalau nanti worth-nya kelihatan pas data asli.
+function SankeyFlowTable({ raw }) {
+  const links = raw?.links;
+  if (!Array.isArray(links) || !links.length) return <RawJsonPreview raw={raw} note="Belum ada arus tercatat." />;
+  const sorted = [...links].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 8);
+  return (
+    <ul className="space-y-1 text-slate-300 font-mono">
+      {sorted.map((l, i) => (
+        <li key={i}>{String(l.source).trim()} → {String(l.target).trim()}: Rp{Number(l.value).toLocaleString('id-ID')}</li>
+      ))}
+    </ul>
+  );
+}
+
+// Format CONFIRMED lawan OpenAPI spec asli: {"price":[{date,open,high,low,close,
+// volume}], "broker":[{"broker","data":[{"date","value"}]}]} — akumulasi/
+// distribusi broker dari waktu ke waktu (BEDA dari broker_summary yang cuma
+// snapshot 1 rentang tanggal). Chart net value kumulatif per broker, top 5
+// broker paling aktif (biar gak numpuk garis).
+function InventoryChart({ raw }) {
+  const brokers = raw?.broker;
+  const config = Array.isArray(brokers) && brokers.length ? (() => {
+    const top = [...brokers].sort((a, b) => {
+      const sumA = (a.data || []).reduce((s, d) => s + Math.abs(d.value), 0);
+      const sumB = (b.data || []).reduce((s, d) => s + Math.abs(d.value), 0);
+      return sumB - sumA;
+    }).slice(0, 5);
+    const dates = [...new Set(top.flatMap((b) => (b.data || []).map((d) => d.date)))].sort();
+    const colors = ['#06B6D4', '#8B5CF6', '#F59E0B', '#10B981', '#EF4444'];
+    return {
+      type: 'line',
+      data: {
+        labels: dates,
+        datasets: top.map((b, i) => {
+          let cum = 0;
+          const byDate = Object.fromEntries((b.data || []).map((d) => [d.date, d.value]));
+          return {
+            label: b.broker,
+            data: dates.map((d) => { cum += byDate[d] || 0; return cum; }),
+            borderColor: colors[i % colors.length], borderWidth: 1.5, pointRadius: 0, tension: 0.2,
+          };
+        }),
+      },
+      options: {
+        plugins: { legend: { display: true, labels: { color: '#94A3B8', boxWidth: 10, font: { size: 9 } } } },
+        scales: { x: { display: false }, y: { grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 9 } } } },
+      },
+    };
+  })() : null;
+  const chartRef = useChart(config);
+  if (!config) return <p className="text-slate-500">Gak ada data inventory tercatat.</p>;
+  return (
+    <>
+      <canvas ref={chartRef} height="100"></canvas>
+      <p className="text-[10px] text-slate-500 mt-1">Net value kumulatif, top 5 broker paling aktif (7 hari)</p>
+    </>
+  );
+}
+
+function OrderQueueWidget({ ticker, defaultPrice }) {
+  const [price, setPrice] = useState(defaultPrice ?? '');
+  const [side, setSide] = useState('BUY');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function fetchQueue(e) {
+    e.preventDefault();
+    if (!price) return;
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/scanner/${ticker}/order-queue?price=${price}&side=${side}`);
+      setResult(await res.json());
+    } catch {
+      setResult({ configured: true, data: null });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Order Queue</p>
+      <form onSubmit={fetchQueue} className="flex items-center gap-2 mb-2">
+        <input type="number" step="any" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Harga"
+          className="w-20 bg-black/30 border border-border rounded-lg px-2 py-1 text-xs text-white font-mono" />
+        <select value={side} onChange={(e) => setSide(e.target.value)} className="bg-black/30 border border-border rounded-lg px-2 py-1 text-xs text-white">
+          <option value="BUY">BUY</option>
+          <option value="SELL">SELL</option>
+        </select>
+        <button type="submit" disabled={loading} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition disabled:opacity-50">
+          {loading ? '...' : 'Cek'}
+        </button>
+      </form>
+      {result && !result.configured && <p className="text-slate-500">Belum tersedia — nunggu Invezgo API aktif.</p>}
+      {result?.configured && !result.data?.length && <p className="text-slate-500">Gak ada antrian di level harga ini.</p>}
+      {result?.configured && result.data?.length > 0 && (
+        <ul className="space-y-1 text-slate-300 font-mono max-h-32 overflow-auto">
+          {result.data.slice(0, 8).map((q, i) => (
+            <li key={i}>{q.time ?? '—'} · order {Number(q.order_volume ?? 0).toLocaleString('id-ID')} · sisa {Number(q.open_volume ?? 0).toLocaleString('id-ID')}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -455,7 +655,7 @@ export default function StockDetail() {
                 </div>
                 <div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Seasonality</p>
-                  <p className="text-slate-500">{brokerFlow.price_seasonality ? 'Ada data — tampilan belum dibuat.' : 'Belum tersedia.'}</p>
+                  {brokerFlow.price_seasonality ? <SeasonalityChart raw={brokerFlow.price_seasonality} /> : <p className="text-slate-500">Belum tersedia.</p>}
                 </div>
                 <div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Tape Reading</p>
@@ -471,7 +671,14 @@ export default function StockDetail() {
                 </div>
                 <div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Money Flow (Sankey)</p>
-                  <p className="text-slate-500">{brokerFlow.sankey_chart ? 'Ada data — tampilan belum dibuat.' : 'Belum tersedia.'}</p>
+                  {brokerFlow.sankey_chart ? <SankeyFlowTable raw={brokerFlow.sankey_chart} /> : <p className="text-slate-500">Belum tersedia.</p>}
+                </div>
+                <div>
+                  <OrderQueueWidget ticker={data.ticker} defaultPrice={data.price} />
+                </div>
+                <div className="col-span-2">
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Inventory Chart (akumulasi/distribusi broker, 7 hari)</p>
+                  {brokerFlow.inventory_chart ? <InventoryChart raw={brokerFlow.inventory_chart} /> : <p className="text-slate-500">Belum tersedia.</p>}
                 </div>
                 <div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Kepemilikan &gt;5% (90 hari)</p>

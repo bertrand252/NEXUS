@@ -6,11 +6,13 @@ from config import supabase
 from groq_client import ask_json
 from forex_factory import get_forex_events
 from rate_limit import limiter
+import invezgo_client
 
 router = APIRouter()
 
 SIMULATE_SYSTEM_PROMPT = """Kamu adalah AI analyst StockSense. Analisa dampak kondisi market terkini terhadap portofolio user.
 Gunakan HANYA data yang diberikan di bawah, jangan mengarang data harga/berita yang tidak ada.
+Kalau ada laporan keuangan (Income Statement per quarter, RAW dari API, bentuk field bisa macem-macem — baca sendiri apa yang kepake) buat salah satu saham, jadiin konteks fundamental TAMBAHAN pas nilai risk_level saham itu (misal tren laba lagi turun = risk lebih tinggi) — JANGAN mengarang angka yang gak ada di datanya.
 Jawaban harus JSON, tidak ada teks bebas di luar JSON.
 
 Format output:
@@ -111,8 +113,23 @@ def _simulate(holdings: list[dict]) -> dict:
     # kirim yang high/medium impact aja ke prompt biar hemat token — low impact jarang ngaruh ke portofolio
     relevant_events = [e for e in forex_events if e["impact"] in ("High", "Medium")]
 
+    # laporan keuangan (Income Statement per quarter) per saham di portofolio —
+    # konteks fundamental TAMBAHAN buat Groq nilai risk_level (lihat prompt).
+    # Diem total kalau Invezgo belum aktif. RAW dict apa adanya, gak di-parsing
+    # manual (struktur field belum diverifikasi lawan API asli).
+    financials = {}
+    if invezgo_client.is_configured():
+        for h in holdings:
+            try:
+                financials[h["kode"]] = invezgo_client.get_financial_statement(h["kode"], statement="IS")
+            except Exception:
+                financials[h["kode"]] = None
+
     user_prompt = f"""=== PORTOFOLIO USER ===
 {holdings_text}
+
+=== LAPORAN KEUANGAN (Income Statement per quarter, per saham) ===
+{json.dumps(financials, ensure_ascii=False) if financials else "Belum tersedia — nunggu Invezgo API aktif."}
 
 === EVENT FOREX FACTORY (minggu ini) ===
 {json.dumps(relevant_events, ensure_ascii=False) if relevant_events else "Tidak ada event high/medium impact minggu ini."}

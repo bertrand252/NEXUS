@@ -6,10 +6,15 @@ router = APIRouter()
 
 DEFAULTS = {
     "alert_threshold": 50,
-    "notif_strong_signal": True,
-    "notif_daily_recap": True,
+    "notif_strong_signal": True,   # Swing (breakout+volume, 1-2/minggu)
+    "notif_daily_recap": True,     # night recap + running positions update
     "notif_economic_events": True,
     "notif_portfolio_risk": True,
+    "notif_watchlist": True,       # dulu nyambung ke notif_strong_signal, sekarang independen
+    "notif_bsjp": True,
+    "notif_bpjs": True,
+    "notif_weekly_postmortem": True,
+    "notif_whale_alert": True,     # transaksi abnormal gede (running-trade) — kerangka, nunggu Invezgo aktif
 }
 
 
@@ -19,6 +24,11 @@ class SettingsInput(BaseModel):
     notif_daily_recap: bool
     notif_economic_events: bool
     notif_portfolio_risk: bool
+    notif_watchlist: bool = True
+    notif_bsjp: bool = True
+    notif_bpjs: bool = True
+    notif_weekly_postmortem: bool = True
+    notif_whale_alert: bool = True
 
 
 @router.get("")

@@ -423,22 +423,29 @@ def get_broker_flow(ticker: str):
             "configured": False,
             "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
             "notation": None, "price_table": None, "financial_statement": None, "price_seasonality": None,
-            "sankey_chart": None, "running_trade": None, "shareholder_above": None,
+            "sankey_chart": None, "running_trade": None, "shareholder_above": None, "inventory_chart": None,
         }
 
     today = today_wib().isoformat()
+    week_ago = (today_wib() - timedelta(days=7)).isoformat()
     result = {"configured": True}
     try:
-        result["broker_summary"] = invezgo_client.get_broker_summary(ticker)
+        # rentang 7 hari (bukan cuma hari ini) — broker summary Invezgo update
+        # 17:00-18:00 WIB, kalau di-buka pagi/siang sebelum update hari ini
+        # keluar, rentang 1 hari doang bisa kosong melulu
+        result["broker_summary"] = invezgo_client.get_broker_summary(ticker, week_ago, today)
     except Exception:
         result["broker_summary"] = None
 
-    # broker paling gede net-buy hari ini -> liat histori akumulasi dia
+    # broker paling gede net-buy 7 hari terakhir -> liat histori akumulasi dia
     # khusus di saham ini (broker stalker butuh 2 parameter: broker+stock,
-    # jadi harus tau broker MANA dulu dari broker_summary di atas)
+    # jadi harus tau broker MANA dulu dari broker_summary di atas). net_value
+    # balik sebagai STRING dari API (bukan number) — WAJIB di-cast float sebelum
+    # dibandingin, kalau enggak max() bakal sort leksikografis (salah: string
+    # "9000" > "150000" secara alfabet padahal angkanya lebih kecil)
     try:
-        top_broker = max(result["broker_summary"], key=lambda b: b.get("net_value", 0)) if result["broker_summary"] else None
-        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker) if top_broker else None
+        top_broker = max(result["broker_summary"], key=lambda b: float(b.get("net_value") or 0)) if result["broker_summary"] else None
+        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, week_ago, today) if top_broker else None
     except Exception:
         result["top_broker_stalker"] = None
 
@@ -465,14 +472,26 @@ def get_broker_flow(ticker: str):
         result["price_table"] = invezgo_client.get_price_table(ticker, today)
     except Exception:
         result["price_table"] = None
+    # BS/IS/CF ketiganya, per quarter (period_type default "Q") — user butuh
+    # ini juga buat konteks fundamental Groq (Swing pick + Portfolio Simulation,
+    # lihat groq_client.py::pick_alert_candidate & routers/portfolio.py)
+    result["financial_statement"] = {}
+    for stmt in ("BS", "IS", "CF"):
+        try:
+            result["financial_statement"][stmt] = invezgo_client.get_financial_statement(ticker, statement=stmt)
+        except Exception:
+            result["financial_statement"][stmt] = None
     try:
-        result["financial_statement"] = invezgo_client.get_financial_statement(ticker)
-    except Exception:
-        result["financial_statement"] = None
-    try:
-        result["sankey_chart"] = invezgo_client.get_sankey_chart(ticker)
+        result["sankey_chart"] = invezgo_client.get_sankey_chart(ticker, today)
     except Exception:
         result["sankey_chart"] = None
+    try:
+        # time series akumulasi/distribusi broker (BEDA dari broker_summary yang
+        # cuma snapshot digabung 1 angka) — jauh lebih cocok jadi Accumulation
+        # Score asli ketimbang yang sekarang masih mock
+        result["inventory_chart"] = invezgo_client.get_inventory_chart_stock(ticker, week_ago, today)
+    except Exception:
+        result["inventory_chart"] = None
     try:
         # tape reading — limit kecil (10) doang, ini ringkasan/preview,
         # bukan full replay (lihat diskusi soal "jangan niru fitur replay
@@ -485,6 +504,24 @@ def get_broker_flow(ticker: str):
     except Exception:
         result["price_seasonality"] = None
     return result
+
+
+@router.get("/{ticker}/order-queue")
+def get_order_queue(ticker: str, price: float, side: str):
+    """Kerangka Order Queue — antrian order institusi di 1 level harga. BEDA dari
+    field lain di broker-flow: butuh input harga+sisi (BUY/SELL) interaktif dari
+    user, gak cocok jadi card statis yang auto-fetch, jadi endpoint terpisah.
+    Struktur response BELUM diverifikasi lawan API asli (lihat invezgo_client.py::
+    get_order_queue)."""
+    if not invezgo_client.is_configured():
+        return {"configured": False, "data": None}
+    side = side.upper()
+    if side not in ("BUY", "SELL"):
+        raise HTTPException(status_code=422, detail="side harus BUY atau SELL")
+    try:
+        return {"configured": True, "data": invezgo_client.get_order_queue(ticker.upper(), price, side)}
+    except Exception:
+        return {"configured": True, "data": None}
 
 
 @router.get("/top/ritel")

@@ -18,6 +18,11 @@ const SETTINGS_DEFAULTS = {
   notif_daily_recap: true,
   notif_economic_events: true,
   notif_portfolio_risk: true,
+  notif_watchlist: true,
+  notif_bsjp: true,
+  notif_bpjs: true,
+  notif_weekly_postmortem: true,
+  notif_whale_alert: true,
 };
 
 function thresholdLabel(v) {
@@ -257,6 +262,11 @@ export default function Settings() {
             <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Daily night recap</span><Toggle checked={settings.notif_daily_recap} onChange={() => saveSettings({ ...settings, notif_daily_recap: !settings.notif_daily_recap })} /></div>
             <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Economic event reminders</span><Toggle checked={settings.notif_economic_events} onChange={() => saveSettings({ ...settings, notif_economic_events: !settings.notif_economic_events })} /></div>
             <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Portfolio risk warnings</span><Toggle checked={settings.notif_portfolio_risk} onChange={() => saveSettings({ ...settings, notif_portfolio_risk: !settings.notif_portfolio_risk })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Watchlist breakout alerts</span><Toggle checked={settings.notif_watchlist} onChange={() => saveSettings({ ...settings, notif_watchlist: !settings.notif_watchlist })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">BSJP screener</span><Toggle checked={settings.notif_bsjp} onChange={() => saveSettings({ ...settings, notif_bsjp: !settings.notif_bsjp })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">BPJS Day Trade</span><Toggle checked={settings.notif_bpjs} onChange={() => saveSettings({ ...settings, notif_bpjs: !settings.notif_bpjs })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Weekly postmortem</span><Toggle checked={settings.notif_weekly_postmortem} onChange={() => saveSettings({ ...settings, notif_weekly_postmortem: !settings.notif_weekly_postmortem })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Whale/Block Trade alert <span className="text-slate-500">(nunggu Invezgo)</span></span><Toggle checked={settings.notif_whale_alert} onChange={() => saveSettings({ ...settings, notif_whale_alert: !settings.notif_whale_alert })} /></div>
           </div>
         </div>
 

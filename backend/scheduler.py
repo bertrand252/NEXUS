@@ -26,6 +26,7 @@ from routers.settings import DEFAULTS as SETTINGS_DEFAULTS
 from market_calendar import is_trading_day, upcoming_holidays
 from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
 from logger import get_logger
+import invezgo_client
 
 log = get_logger("scheduler")
 
@@ -392,6 +393,17 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             and volume_dry_up(hist, c["sideways_days_before"] or 0)
         )
         _levels_cache[c["ticker"]] = lv
+        # laporan keuangan (Income Statement, per quarter) — konteks fundamental
+        # TAMBAHAN buat keputusan Groq (lihat pick_alert_candidate), bukan syarat
+        # wajib. Diem total kalau Invezgo belum aktif (is_configured()). RAW dict
+        # dikirim apa adanya (bukan di-parsing manual di sini) — struktur field
+        # BELUM diverifikasi lawan API asli, biar Groq sendiri yang baca apa yang
+        # kepake, kita gak ikut nebak nama field yang bisa aja salah.
+        if invezgo_client.is_configured():
+            try:
+                c["financial_statement"] = invezgo_client.get_financial_statement(c["ticker"], statement="IS")
+            except Exception:
+                pass
         filtered.append(c)
     return filtered
 
@@ -724,6 +736,64 @@ def _check_watchlist_alerts() -> None:
                 pass
 
 
+WHALE_MIN_VALUE = 500_000_000  # Rp500 juta/transaksi — ASUMSI heuristik kasar, BUKAN dari
+                                 # riset/data broker beneran (belum ada API key buat liat sebaran
+                                 # value_traded transaksi normal per saham). Sesuaikan begitu udah
+                                 # keliatan distribusi asli, mungkin perlu beda ambang per saham
+                                 # (saham gede vs kecil) bukan 1 angka flat.
+
+
+def _check_whale_alerts() -> None:
+    """Kerangka Whale/Block Trade Alert — deteksi 1 transaksi ABNORMAL gede dari
+    running-trade Invezgo, cuma buat ticker di watchlist (BUKAN semua 951 saham,
+    biar hemat kuota — ide awal user: "bisa gak sih deteksi market maker makan
+    barang dari ritel"). Diem total kalau Invezgo belum aktif (is_configured()),
+    biar loop ini gak ngapa-ngapain sampe API key beneran keisi.
+
+    Dedup per (ticker, time, price, volume) — running_trade gak punya trade id
+    eksplisit di struktur dugaan yang ada di invezgo_client.py, jadi composite
+    key ini yang paling deterministik buat "transaksi yang sama"."""
+    settings = _load_settings()
+    if not settings["notif_whale_alert"]:
+        return
+    if not invezgo_client.is_configured():
+        return
+
+    try:
+        watch_res = supabase.table("watchlist").select("ticker").execute()
+        tickers = [r["ticker"] for r in watch_res.data]
+    except Exception:
+        return
+    if not tickers:
+        return
+
+    today = today_wib().isoformat()
+    for ticker in tickers:
+        try:
+            resp = invezgo_client.get_running_trade(ticker, today, limit=50)
+            trades = resp.get("data") or []
+        except Exception:
+            continue
+        for t in trades:
+            try:
+                value = float(t["price"]) * float(t["volume"])
+            except Exception:
+                continue
+            if value < WHALE_MIN_VALUE:
+                continue
+            key = f"{ticker}:{t.get('time')}:{t.get('price')}:{t.get('volume')}"
+            if _dedup_seen("whale", key):
+                continue
+            side = t.get("type", "—")
+            text = (
+                f"🐋 <b>WHALE ALERT — {_esc(ticker)}</b>\n\n"
+                f"{side} {int(t['volume']):,} lembar @ Rp{t['price']:,.0f} "
+                f"(nilai ~Rp{value:,.0f}) jam {t.get('time', '—')}"
+            )
+            if send_alert(text):
+                _dedup_mark("whale", key)
+
+
 def _check_economic_reminders() -> None:
     """Gated `notif_economic_events` di Settings. Event High impact hari ini
     (dari Forex Factory, udah di-cache 5 menit di forex_factory.py), dedup
@@ -881,7 +951,7 @@ async def run_scheduler() -> None:
         # ke-bungkus sama sekali — kalau salah satu raise exception gak
         # terduga, SELURUH loop ini mati diem-diem, gak ada lagi Swing/
         # watchlist/econ/BPJS check sampe Railway di-restart manual)
-        for check in (check_and_alert, _check_watchlist_alerts, _check_economic_reminders, _check_bpjs):
+        for check in (check_and_alert, _check_watchlist_alerts, _check_economic_reminders, _check_bpjs, _check_whale_alerts):
             try:
                 check()
             except Exception:

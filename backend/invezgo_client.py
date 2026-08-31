@@ -47,21 +47,31 @@ def get_top_foreign(date: str) -> dict:
     return res.json()
 
 
-def get_broker_summary(code: str) -> list[dict]:
+def get_broker_summary(code: str, from_date: str, to_date: str, investor: str = "all", market: str = "RG") -> list[dict]:
     """[{code, buy_freq, buy_volume, buy_value, sell_freq, sell_volume, sell_value,
-    net_value, net_volume, net_freq, name}, ...] — semua broker yang transaksi di
-    saham ini hari itu. FIX: sebelumnya nembak /analysis/summary/stock/{code} yang
-    ternyata endpoint SALAH (general stock summary, bukan broker) — ketauan pas
-    baca ulang OpenAPI spec asli mereka."""
-    res = httpx.get(f"{BASE_URL}/analysis/summary/broker/{code}", headers=_headers(), timeout=30)
+    buy_avg, sell_avg, net_value, net_volume, net_freq, name}, ...] — semua broker
+    yang transaksi di saham ini dalam rentang from_date-to_date. FIX #2 (sesi
+    sebelumnya kebalik-balik 2x): endpoint BENER itu /analysis/summary/stock/{code}
+    (bukan /summary/broker/{code}, yang itu buat 1 BROKER lintas semua saham,
+    parameter code-nya kode broker bukan kode saham) — diverifikasi lawan OpenAPI
+    spec ASLI (api-1.json). from/to/investor/market SEMUA wajib diisi API mereka,
+    versi sebelumnya sama sekali gak ngirim ini (bakal 422 kalau API udah aktif).
+    CATATAN: field angka (buy_volume dkk) balik sebagai STRING dari API, bukan
+    number — cast sendiri kalau mau itung/sort (contoh: routers/scanner.py)."""
+    res = httpx.get(f"{BASE_URL}/analysis/summary/stock/{code}", headers=_headers(),
+                     params={"from": from_date, "to": to_date, "investor": investor, "market": market}, timeout=30)
     res.raise_for_status()
     return res.json()
 
 
-def get_broker_stalker(broker: str, stock: str) -> dict:
+def get_broker_stalker(broker: str, stock: str, from_date: str, to_date: str,
+                        investor: str = "all", market: str = "RG") -> dict:
     """{"broker", "stock", "summary": {"active","total","avg","peak"}, "calendar": [...]}
-    — histori akumulasi 1 broker di 1 saham dari waktu ke waktu ("siapa numpuk barang")."""
-    res = httpx.get(f"{BASE_URL}/analysis/stalker/broker/{broker}/{stock}", headers=_headers(), timeout=30)
+    — histori akumulasi 1 broker di 1 saham dari waktu ke waktu ("siapa numpuk
+    barang"). from/to/investor/market wajib diisi (verifikasi lawan OpenAPI spec
+    asli — versi sebelumnya gak ngirim sama sekali, bakal 422)."""
+    res = httpx.get(f"{BASE_URL}/analysis/stalker/broker/{broker}/{stock}", headers=_headers(),
+                     params={"from": from_date, "to": to_date, "investor": investor, "market": market}, timeout=30)
     res.raise_for_status()
     return res.json()
 
@@ -105,18 +115,41 @@ def get_financial_statement(code: str, statement: str = "BS", period_type: str =
     return res.json()
 
 
-def get_price_seasonality(code: str) -> dict:
-    """Pola musiman historis harga (bulan apa biasanya naik/turun) — belum
-    diverifikasi struktur field-nya lawan API asli, cuma dari nama endpoint."""
-    res = httpx.get(f"{BASE_URL}/analysis/price-seasonality/{code}", headers=_headers(), timeout=30)
+def get_price_seasonality(code: str, range_years: str = "3") -> dict:
+    """[{month, start_price, end_price, percentage_change}, ...] — pola musiman
+    historis harga per bulan. DIVERIFIKASI lawan OpenAPI spec asli (api-1.json)
+    — field-nya PERSIS di atas, bukan dugaan lagi. range_years wajib diisi API
+    mereka (versi sebelumnya gak ngirim sama sekali, bakal 422)."""
+    res = httpx.get(f"{BASE_URL}/analysis/price-seasonality/{code}", headers=_headers(),
+                     params={"range": range_years}, timeout=30)
     res.raise_for_status()
     return res.json()
 
 
-def get_sankey_chart(code: str) -> dict:
-    """Visualisasi arus dana masuk/keluar saham — belum diverifikasi struktur
-    field-nya lawan API asli, cuma dari nama endpoint."""
-    res = httpx.get(f"{BASE_URL}/analysis/sankey-chart/{code}", headers=_headers(), timeout=30)
+def get_sankey_chart(code: str, date: str, chart_type: str = "value", buyer: str = "ALL",
+                      seller: str = "ALL", market: str = "RG") -> dict:
+    """{"nodes": [{"name"}], "links": [{"source","target","value"}]} — format
+    standar D3 Sankey (arus dana antar broker). DIVERIFIKASI lawan OpenAPI spec
+    asli. date/type/buyer/seller/market SEMUA wajib diisi API mereka (versi
+    sebelumnya gak ngirim sama sekali, bakal 422). chart_type: value/volume."""
+    res = httpx.get(f"{BASE_URL}/analysis/sankey-chart/{code}", headers=_headers(), params={
+        "date": date, "type": chart_type, "buyer": buyer, "seller": seller, "market": market,
+    }, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def get_inventory_chart_stock(code: str, from_date: str, to_date: str, scope: str = "val",
+                               investor: str = "all", market: str = "ALL", limit: int = 20) -> dict:
+    """{"price": [{code,date,open,high,low,close,volume}], "broker": [{"broker",
+    "data": [{"date","value"}]}]} — akumulasi/distribusi broker per saham dari
+    waktu ke waktu, chart-ready (BEDA dari get_broker_summary yang cuma snapshot
+    1 rentang tanggal digabung jadi 1 angka — ini time series per hari, jauh
+    lebih cocok buat "apakah smart money akumulasi saham ini belakangan" ketimbang
+    Accumulation Score yang sekarang masih mock). scope: vol/val/freq."""
+    res = httpx.get(f"{BASE_URL}/analysis/inventory-chart/stock/{code}", headers=_headers(), params={
+        "from": from_date, "to": to_date, "scope": scope, "investor": investor, "market": market, "limit": limit,
+    }, timeout=30)
     res.raise_for_status()
     return res.json()
 
@@ -195,13 +228,3 @@ def run_screener(formula: str) -> list[dict]:
     return res.json()
 
 
-def get_stock_chart(code: str) -> dict:
-    res = httpx.get(f"{BASE_URL}/analysis/chart/stock/{code}", headers=_headers(), timeout=30)
-    res.raise_for_status()
-    return res.json()
-
-
-def get_index_chart(code: str) -> dict:
-    res = httpx.get(f"{BASE_URL}/analysis/chart/index/{code}", headers=_headers(), timeout=30)
-    res.raise_for_status()
-    return res.json()
