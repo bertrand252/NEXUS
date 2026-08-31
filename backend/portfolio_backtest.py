@@ -60,10 +60,15 @@ def _gather_all_trades(tickers: list[str]) -> list[dict]:
     return all_trades
 
 
-def simulate_portfolio(trades: list[dict]) -> dict:
+def simulate_portfolio(trades: list[dict], initial_capital: float = INITIAL_CAPITAL,
+                        max_concurrent_positions: int = MAX_CONCURRENT_POSITIONS) -> dict:
     """Jalanin trade-trade (dari SEMUA ticker, dicampur kronologis) lewat 1
     modal bersama — position sizing + batas posisi konkuren beneran diterapin,
-    bukan tiap ticker independen kayak backtest.py."""
+    bukan tiap ticker independen kayak backtest.py.
+
+    initial_capital/max_concurrent_positions diparameterin (bukan langsung
+    pake konstanta) — buat eksperimen "modal segini cukup gak buat ngambil
+    mayoritas sinyal" TANPA ngubah default produksi."""
     for i, t in enumerate(trades):
         t["_id"] = i
 
@@ -78,7 +83,7 @@ def simulate_portfolio(trades: list[dict]) -> dict:
         e["order"] = 0 if e["type"] == "exit" else 1
     events.sort(key=lambda e: (e["date"], e["order"]))
 
-    cash = float(INITIAL_CAPITAL)
+    cash = float(initial_capital)
     open_positions: dict[int, dict] = {}
     equity_curve = []  # [{"date", "equity"}]
     taken = skipped_capacity = skipped_capital = skipped_bad_risk = 0
@@ -97,14 +102,14 @@ def simulate_portfolio(trades: list[dict]) -> dict:
             continue
 
         # entry
-        if len(open_positions) >= MAX_CONCURRENT_POSITIONS:
+        if len(open_positions) >= max_concurrent_positions:
             skipped_capacity += 1
             continue
         risk_per_share = t["entry_price"] - t["stop_loss"]
         if risk_per_share <= 0:
             skipped_bad_risk += 1
             continue
-        risk_amount = INITIAL_CAPITAL * (RISK_PCT_PER_TRADE / 100)
+        risk_amount = initial_capital * (RISK_PCT_PER_TRADE / 100)
         shares = int(risk_amount / risk_per_share)
         shares = (shares // LOT_SIZE) * LOT_SIZE
         if shares < LOT_SIZE:
@@ -120,9 +125,9 @@ def simulate_portfolio(trades: list[dict]) -> dict:
         equity_curve.append({"date": e["date"], "equity": round(_current_equity(), 2)})
 
     final_equity = _current_equity()
-    total_return_pct = round((final_equity - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100, 2)
+    total_return_pct = round((final_equity - initial_capital) / initial_capital * 100, 2)
 
-    peak = INITIAL_CAPITAL
+    peak = initial_capital
     max_dd_pct = 0.0
     for pt in equity_curve:
         peak = max(peak, pt["equity"])
@@ -130,7 +135,7 @@ def simulate_portfolio(trades: list[dict]) -> dict:
         max_dd_pct = max(max_dd_pct, dd)
 
     return {
-        "initial_capital": INITIAL_CAPITAL,
+        "initial_capital": initial_capital,
         "final_equity": round(final_equity, 2),
         "total_return_pct": total_return_pct,
         "max_drawdown_pct": round(max_dd_pct, 2),
@@ -155,19 +160,23 @@ def _ihsg_benchmark(start_date: str, end_date: str) -> float | None:
         return None
 
 
-def run(tickers: list[str] | None = None) -> None:
-    if tickers is None:
-        res = supabase.table("scanner_cache").select("ticker").execute()
-        tickers = [r["ticker"] for r in res.data]
-
-    print(f"portfolio backtest pake {len(tickers)} ticker, modal awal Rp{INITIAL_CAPITAL:,.0f}, "
-          f"risk {RISK_PCT_PER_TRADE}%/trade, max {MAX_CONCURRENT_POSITIONS} posisi konkuren...")
-    trades = _gather_all_trades(tickers)
+def run(tickers: list[str] | None = None, initial_capital: float = INITIAL_CAPITAL,
+        max_concurrent_positions: int = MAX_CONCURRENT_POSITIONS, trades: list[dict] | None = None) -> list[dict]:
+    """trades bisa di-passing langsung (hasil _gather_all_trades sebelumnya)
+    biar eksperimen ganti-ganti modal gak perlu fetch ulang 937 ticker tiap
+    kali — return trades-nya biar caller bisa reuse buat run() berikutnya."""
+    if trades is None:
+        if tickers is None:
+            res = supabase.table("scanner_cache").select("ticker").execute()
+            tickers = [r["ticker"] for r in res.data]
+        print(f"portfolio backtest pake {len(tickers)} ticker...")
+        trades = _gather_all_trades(tickers)
     if not trades:
         print("GAGAL — gak ada trade sinyal yang kesimulasi sama sekali.")
-        return
+        return trades
 
-    result = simulate_portfolio(trades)
+    print(f"\n=== Modal Rp{initial_capital:,.0f}, risk {RISK_PCT_PER_TRADE}%/trade, max {max_concurrent_positions} posisi konkuren ===")
+    result = simulate_portfolio(trades, initial_capital, max_concurrent_positions)
 
     dates = sorted(set(t["entry_date"] for t in trades) | set(t["exit_date"] for t in trades))
     ihsg_return = _ihsg_benchmark(dates[0], dates[-1]) if dates else None
@@ -187,7 +196,8 @@ def run(tickers: list[str] | None = None) -> None:
 
     with open(RESULTS_PATH, "w", encoding="utf-8") as f:
         json.dump({**result, "run_at": datetime.now(timezone.utc).isoformat()}, f, indent=2, ensure_ascii=False)
-    print(f"\nHasil tersimpen: {RESULTS_PATH}")
+    print(f"Hasil tersimpen: {RESULTS_PATH}")
+    return trades
 
 
 if __name__ == "__main__":
