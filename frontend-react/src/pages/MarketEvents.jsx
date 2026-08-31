@@ -2,6 +2,56 @@ import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
 import { IMPACT_BADGE_CLASS } from '../lib/events';
 
+// Shape CONFIRMED lawan API asli (2026-09-01): {"data":[{code, type, payload:
+// {Date/ExDate, DateStr, Venue, Remark, DividenPerShare, ...}]}. Endpoint balikin
+// SEMUA saham IDX (bukan cuma watchlist), jadi difilter ke yang mendatang aja +
+// diurutin tanggal terdekat, biar gak numpuk ratusan baris.
+function CorporateActionsList({ corporate }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const rups = (corporate?.rups?.data || [])
+    .filter((r) => r.payload?.Date >= today)
+    .sort((a, b) => (a.payload.Date > b.payload.Date ? 1 : -1))
+    .slice(0, 6);
+  const dividend = (corporate?.dividend?.data || [])
+    .filter((r) => r.payload?.ExDate >= today)
+    .sort((a, b) => (a.payload.ExDate > b.payload.ExDate ? 1 : -1))
+    .slice(0, 6);
+
+  if (!rups.length && !dividend.length) {
+    return <p className="text-sm text-slate-500 py-6 text-center">Gak ada jadwal RUPS/dividen mendatang tercatat.</p>;
+  }
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+      <div>
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">RUPS Mendatang</p>
+        {rups.length ? (
+          <ul className="space-y-1.5 text-slate-300">
+            {rups.map((r, i) => (
+              <li key={i}>
+                <span className="font-mono font-semibold text-white">{r.code}</span> — {r.payload.DateStr || r.payload.Date?.slice(0, 10)}
+                {r.payload.Remark && <span className="text-slate-500"> ({r.payload.Remark})</span>}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-slate-500">Gak ada jadwal RUPS mendatang.</p>}
+      </div>
+      <div>
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Dividen Mendatang</p>
+        {dividend.length ? (
+          <ul className="space-y-1.5 text-slate-300">
+            {dividend.map((r, i) => (
+              <li key={i}>
+                <span className="font-mono font-semibold text-white">{r.code}</span> — Cum-date {r.payload.CumDate?.slice(0, 10)}, {r.payload.DividenPerShare || '—'}/lembar
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-slate-500">Gak ada jadwal dividen mendatang.</p>}
+      </div>
+    </div>
+  );
+}
+
 function EventRow({ e }) {
   return (
     <tr className="hover:bg-white/[0.03] transition">
@@ -127,7 +177,7 @@ export default function MarketEvents() {
               Jadwal RUPS/dividen resmi (bukan ekstrak dari teks berita) bakal muncul di sini begitu Invezgo aktif.
             </p>
           ) : (
-            <p className="text-sm text-slate-500 py-6 text-center">Data ada, tampilan detail belum dibuat.</p>
+            <CorporateActionsList corporate={corporate} />
           )}
         </div>
       </div>

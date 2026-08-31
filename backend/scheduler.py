@@ -998,11 +998,14 @@ def _check_whale_alerts() -> None:
        pola akumulasi institusi yang sengaja dipecah biar gak keliatan 1
        transaksi gede di tape). Dedup per (ticker, buyer, menit) biar gak
        ke-alert ulang tiap loop.
-    Diem total kalau Invezgo belum aktif (is_configured())."""
+    Diem total kalau Invezgo belum aktif (is_configured()) ATAU market lagi
+    tutup — run_scheduler manggil ini TIAP JAM 24/7, tapi transaksi whale cuma
+    relevan pas market beneran buka (di luar itu gak ada transaksi baru sama
+    sekali, cuma buang kuota Invezgo re-fetch data hari itu yang udah final)."""
     settings = _load_settings()
     if not settings["notif_whale_alert"]:
         return
-    if not invezgo_client.is_configured():
+    if not invezgo_client.is_configured() or not _in_market_hours():
         return
 
     try:

@@ -4,10 +4,11 @@ Semua fungsi butuh INVEZGO_API_KEY di .env. Kalau key belum diisi, is_configured
 balikin False dan caller (scoring.py/scanner.py) fallback ke yfinance/mock — NEXUS
 gak ikut down cuma karena belum subscribe.
 
-CATATAN JUJUR: bentuk response di bawah ini based on contoh yang nempel di OpenAPI
-spec resmi mereka (api.invezgo.com/openapi.json), BUKAN hasil tes lawan API asli
-(belum ada API key aktif pas kode ini ditulis). Kemungkinan ada penyesuaian kecil
-field/struktur begitu dites pertama kali pake key beneran.
+STATUS: API key AKTIF (2026-09-01). Fungsi paling sering dipanggil (running_trade,
+broker_summary, inventory_chart_stock, sankey_chart, order_queue, price_table,
+get_calendar) UDAH dites lawan API asli, shape cocok docstring masing-masing.
+Sisanya masih based on contoh OpenAPI spec (belum pernah ke-exercise beneran),
+kemungkinan ada penyesuaian kecil kalau ternyata field-nya meleset.
 """
 import httpx
 from config import INVEZGO_API_KEY

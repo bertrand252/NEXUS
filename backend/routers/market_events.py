@@ -16,12 +16,14 @@ def list_market_events():
 
 @router.get("/corporate")
 def list_corporate_actions():
-    """Kerangka "Special Events asli" — corporate action (RUPS/dividen) dari
-    Invezgo, gantiin ekstraksi dari teks berita (Groq) yang sekarang masih
-    ⚠️ Parsial (gak ada crosscheck ke sumber resmi). configured=False + data
-    kosong kalau INVEZGO_API_KEY belum diisi — jujur, bukan placeholder karangan.
-    BELUM pernah dites lawan API asli, struktur payload per-type (RUPS vs
-    DIVIDEND) kemungkinan beda-beda, belum di-normalize di sini."""
+    """"Special Events asli" — corporate action (RUPS/dividen) dari Invezgo,
+    gantiin ekstraksi dari teks berita (Groq) yang sekarang masih ⚠️ Parsial
+    (gak ada crosscheck ke sumber resmi). configured=False + data kosong kalau
+    INVEZGO_API_KEY belum diisi. Shape payload DIVERIFIKASI lawan API asli
+    (2026-09-01): RUPS_SCHEDULE {Date,Venue,Remark,Result,DateStr,RecDate,TimeStr},
+    DIVIDEND {ExDate,Status,CumDate,RecDate,DistDate,PaymentType,TotalDividen,
+    DividenPerShare} — beda struktur per-type, jangan disamain. Limit 20/page,
+    API gak dukung filter tanggal, jadi frontend yang sort+filter ke mendatang."""
     if not invezgo_client.is_configured():
         return {"configured": False, "rups": None, "dividend": None}
 
