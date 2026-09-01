@@ -1227,7 +1227,17 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     (broker net-buy KONSISTEN mayoritas hari, bukan cuma total net-buy gede)
     itu sign bagus — barang lagi "dikeringin", breakout jadi lebih ringan.
     Dicek dari `inv["price"]` (udah kebawa 1x fetch bareng, gak nambah request)
-    buat sideways + % hari net-buy positif broker top buat konsistensi."""
+    buat sideways + % hari net-buy positif broker top buat konsistensi.
+
+    PENTING (ketemu 2026-09-01, bug beneran sebelum fix ini): `data[].value`
+    per broker dari API itu KUMULATIF sejak `from_date` (dikonfirmasi lawan
+    API asli — hari pertama window nilainya ratusan juta, hari terakhir udah
+    triliunan, growth curve, BUKAN oscillating kayak net-flow harian).
+    Nge-sum langsung across dates (kode versi lama) itu SALAH — double
+    counting parah, angka `cumulative_net_value` bisa berlipat-lipat lebih
+    gede dari kenyataan. WAJIB di-diff() (delta hari-ke-hari) dulu sebelum
+    diapa-apain: total periode = value TERAKHIR (bukan sum), trend/consistency
+    pake delta harian (bukan raw cumulative value)."""
     if not invezgo_client.is_configured():
         return None
     try:
@@ -1238,22 +1248,36 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     if not brokers:
         return None
 
+    def _daily_deltas(data: list[dict]) -> list[dict]:
+        prev = 0.0
+        out = []
+        for d in sorted(data, key=lambda x: x["date"]):
+            v = d.get("value", 0) or 0
+            out.append({"date": d["date"], "delta": v - prev})
+            prev = v
+        return out
+
     ranked = []
     for b in brokers:
-        data = b.get("data") or []
-        total = sum(d.get("value", 0) for d in data)
-        ranked.append((b.get("broker"), total, data))
+        data = sorted(b.get("data") or [], key=lambda d: d["date"])
+        if not data:
+            continue
+        total = data[-1].get("value", 0) or 0  # cumulative TERAKHIR = net value SELURUH periode, bukan di-sum lagi
+        ranked.append((b.get("broker"), total, _daily_deltas(data)))
+    if not ranked:
+        return None
     ranked.sort(key=lambda r: r[1], reverse=True)
-    top_broker, top_total, top_data = ranked[0]
+    top_broker, top_total, top_deltas = ranked[0]
     if top_total <= 0:
         return None  # gak ada broker yang net-BUY sepanjang periode, jangan nunjuk "bandar" ngasal
 
     # trend BELAKANGAN (5 hari terakhir vs 5 hari sebelumnya, semua broker
-    # digabung) — ini yang jawab "market maker mulai buang atau nambah barang"
+    # digabung) — ini yang jawab "market maker mulai buang atau nambah barang".
+    # Pake DELTA harian (bukan raw cumulative value, lihat catatan di atas).
     daily_totals: dict[str, float] = {}
     for b in brokers:
-        for d in (b.get("data") or []):
-            daily_totals[d["date"]] = daily_totals.get(d["date"], 0) + d.get("value", 0)
+        for d in _daily_deltas(b.get("data") or []):
+            daily_totals[d["date"]] = daily_totals.get(d["date"], 0) + d["delta"]
     dates_sorted = sorted(daily_totals)
     recent_sum = sum(daily_totals[d] for d in dates_sorted[-5:])
     prior_sum = sum(daily_totals[d] for d in dates_sorted[-10:-5])
@@ -1266,7 +1290,7 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     else:
         trend = "netral"
 
-    top_days = sorted([d for d in top_data if d.get("value", 0) > 0], key=lambda d: d["value"], reverse=True)[:2]
+    top_days = sorted([d for d in top_deltas if d["delta"] > 0], key=lambda d: d["delta"], reverse=True)[:2]
     weighted_sum = weighted_vol = 0.0
     for d in top_days:
         try:
@@ -1285,8 +1309,10 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     avg_price = round(weighted_sum / weighted_vol, 2) if weighted_vol > 0 else None
 
     # ponytail: threshold sideways 12% & konsistensi 70% heuristik arbitrer
-    # (belum divalidasi statistik), tuning kalau kebanyakan false positive/negative
-    consistency_pct = round(sum(1 for d in top_data if d.get("value", 0) > 0) / len(top_data) * 100, 1) if top_data else None
+    # (belum divalidasi statistik), tuning kalau kebanyakan false positive/negative.
+    # Pake delta harian (top_deltas) — raw cumulative value SELALU > 0 abis
+    # nyebrang positif sekali, itu bukan "konsisten net-buy tiap hari".
+    consistency_pct = round(sum(1 for d in top_deltas if d["delta"] > 0) / len(top_deltas) * 100, 1) if top_deltas else None
     closes = [p["close"] for p in (inv.get("price") or []) if p.get("close")]
     sideways = len(closes) >= 5 and (max(closes) - min(closes)) / (sum(closes) / len(closes)) * 100 <= 12
     steady_accumulation_sideways = bool(sideways and consistency_pct is not None and consistency_pct >= 70)
@@ -1489,7 +1515,16 @@ def _check_bsjp_screener() -> None:
         value_traded_idr = price_now * days[-1]["s2_volume"]
         score = bsjp_intraday_score(takeoff, value_traded_idr)
         if score > 0:
-            scored.append({"ticker": ticker, "price": price_now, "takeoff": takeoff, "score": score})
+            # takeoff["price_change_pct"] itu SESI 2 DOANG (open sesi 2 jam
+            # 13:30 vs sekarang) — kejadian nyata: user komplain caption
+            # "harga +1.68%" padahal saham beneran udah +17% hari itu (dari
+            # closing kemarin), gara-gara measuring window-nya beda jauh
+            # (mulai jam 13:30, bukan dari kemarin). full_day_pct di sini
+            # itung dari closing KEMARIN (days[-2]) biar caption gak
+            # menyesatkan soal seberapa kuat momentumnya beneran.
+            prev_close = (days[-2].get("s2_close") or days[-2].get("s1_close")) if len(days) >= 2 else None
+            full_day_pct = round((price_now - prev_close) / prev_close * 100, 2) if prev_close else None
+            scored.append({"ticker": ticker, "price": price_now, "takeoff": takeoff, "score": score, "full_day_pct": full_day_pct})
 
     if not scored:
         return  # sesi 2 gak ada yang "terbang" beneran — diam, jangan maksain
@@ -1501,9 +1536,10 @@ def _check_bsjp_screener() -> None:
     for c in scored:
         t = c["takeoff"]
         support_note = " (+ sesi 1 juga spike, pendukung)" if t.get("s1_spike_supporting") else ""
+        day_pct_txt = f", harga hari ini {c['full_day_pct']:+g}%" if c["full_day_pct"] is not None else ""
         lines.append(
             f"✅ <b>{_esc(c['ticker'])}</b> — Rp{c['price']:,.0f} "
-            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, harga +{t['price_change_pct']}%){support_note}"
+            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}"
         )
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.</b>")
