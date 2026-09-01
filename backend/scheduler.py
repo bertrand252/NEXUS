@@ -41,6 +41,10 @@ MORNING_ROUTINE_HOUR = 6  # 06:00 waktu lokal server, sebelum market IDX buka ja
 
 CHECK_INTERVAL_SECONDS = 60 * 60  # 1 jam — dedup per-ticker jadi gak ngaruh ke spam, cuma ke seberapa cepet nyampe
 
+ENTRY_ZONE_WATCH_INTERVAL_SECONDS = 15 * 60  # user eksplisit minta — jangan nunggu run_morning_routine
+                                               # besok pagi buat notif ENTRY ZONE, pool-nya kecil (cuma
+                                               # yang status='waiting_entry', max ~5-10 row) jadi murah
+
 # Swing/Invest/BSJP itu gak urgent (gak butuh real-time siang hari) — alert-nya
 # sengaja dibatesin ke jam market TUTUP, biar gak nge-ganggu pas lagi mantau
 # market beneran (kalau nanti Scalping/BPJS dibangun, itu baru butuh real-time
@@ -497,7 +501,15 @@ def _check_entry_zone_touches() -> None:
     ditrack TP/SL/timeout dari sini) + notif excited "ENTRY ZONE!" biar user
     tau sekarang saatnya masuk. Kalau udah >5 hari gak pernah overlap:
     status 'missed' (bukan 'invalid' — panggilannya belum tentu salah, cuma
-    harganya udah lari duluan sebelum sempet dikoreksi)."""
+    harganya udah lari duluan sebelum sempet dikoreksi).
+
+    Dipanggil 2 tempat: run_morning_routine (1x/hari, safety net + ngurusin
+    'missed') DAN run_entry_zone_watcher (tiap 15 menit pas market buka, biar
+    notif ENTRY ZONE gak nunggu besok pagi). Pas market buka, day_low/day_high
+    diambil dari bar 15-menit INTRADAY hari ini (live, ke-update tiap loop),
+    bukan candle harian _get_history yang cuma final abis market tutup —
+    fallback ke situ kalau intraday gagal/belum ada bar hari ini (misal
+    dipanggil pas market masih tutup)."""
     try:
         res = supabase.table("signal_alerts").select("*").eq("status", "waiting_entry").execute()
     except Exception:
@@ -505,9 +517,19 @@ def _check_entry_zone_touches() -> None:
     now = datetime.now(timezone.utc)
     for row in res.data:
         try:
-            hist = _get_history(row["ticker"])
-            day_low = float(hist["Low"].iloc[-1])
-            day_high = float(hist["High"].iloc[-1])
+            day_low = day_high = None
+            try:
+                hist_15m = _get_history_intraday(row["ticker"])
+                today_bars = hist_15m[hist_15m.index.date == today_wib()]
+                if not today_bars.empty:
+                    day_low = float(today_bars["Low"].min())
+                    day_high = float(today_bars["High"].max())
+            except Exception:
+                pass
+            if day_low is None:
+                hist = _get_history(row["ticker"])
+                day_low = float(hist["Low"].iloc[-1])
+                day_high = float(hist["High"].iloc[-1])
         except Exception:
             continue
 
@@ -1443,6 +1465,23 @@ def _send_running_positions_update() -> None:
         if bandar:
             lines.append(_format_bandar_line(bandar))
     send_alert("\n".join(lines))
+
+
+async def run_entry_zone_watcher() -> None:
+    """Cek zona entry TIAP 15 MENIT pas market buka (bukan nunggu
+    run_morning_routine besok pagi) — biar notif "ENTRY ZONE!" nyampe deket
+    real-time pas harga beneran kesentuh. Diem total di luar jam market (gak
+    ada transaksi baru buat dicek, cuma buang resource). Reuse
+    _check_entry_zone_touches yang sama (udah dites market-hours-aware:
+    pake intraday 15m kalau ada bar hari ini, fallback EOD kalau enggak)."""
+    while True:
+        await asyncio.sleep(ENTRY_ZONE_WATCH_INTERVAL_SECONDS)
+        if not _in_market_hours():
+            continue
+        try:
+            _check_entry_zone_touches()
+        except Exception:
+            log.exception("_check_entry_zone_touches gagal (entry zone watcher)")
 
 
 async def run_scheduler() -> None:
