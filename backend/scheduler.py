@@ -1656,6 +1656,11 @@ def _check_bpjs() -> None:
         return
     if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
         return  # SL/TP kejauhan dari harga sekarang, sama sanity check kayak Swing — jangan kirim angka ngaco
+    if levels["rr_ratio"] < MIN_RR_RATIO:
+        return  # kejadian nyata: PGAS TP +0.65% (RR "Buruk") lolos kirim — biaya beli+jual
+        # broker retail Indonesia aja udah ~0.5-0.7% roundtrip, TP situ abis kegerus fee doang.
+        # Groq milih ticker SEBELUM levels dihitung (gak pernah liat RR), jadi guard Python di
+        # sini WAJIB, bukan optional — sama pola kayak MAX_RISK/MAX_REWARD di atas.
 
     caption = _build_bpjs_caption(ticker, candidate, pick, levels)
     message_id = send_alert(caption)
