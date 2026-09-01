@@ -299,6 +299,15 @@ def _macro_sector_set(macro_events: list[dict]) -> set[str]:
     return sectors
 
 
+def _pct_change_nday(hist, n: int) -> float | None:
+    """% perubahan Close dari N hari trading lalu ke sekarang. None kalau histori
+    kurang dari N+1 baris (ticker baru IPO / data gak lengkap)."""
+    if len(hist) < n + 1:
+        return None
+    old, new = float(hist["Close"].iloc[-(n + 1)]), float(hist["Close"].iloc[-1])
+    return (new - old) / old * 100
+
+
 BREAKOUT_TECHNICAL_THRESHOLD = 12  # technical_score minimal (dari 20) buat dianggap "breakout+volume kekonfirmasi"
 MIN_RR_RATIO = 1.5  # riset: 1:1.5-1:2 standar minimum umum, Swing spesifik idealnya 1:3+ — mulai
                      # dari 1.5 (gak terlalu ketat dulu), bisa dinaikin kalau kandidat kebanyakan lolos
@@ -413,8 +422,10 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     try:
         ihsg_hist = yf.Ticker("^JKSE").history(period="3mo", auto_adjust=False).dropna(subset=["Close"])
         market_uptrend = is_market_uptrend(ihsg_hist)
+        ihsg_20d_pct = _pct_change_nday(ihsg_hist, 20)
     except Exception:
         market_uptrend = False
+        ihsg_20d_pct = None
 
     _levels_cache.clear()
     filtered = []
@@ -430,6 +441,17 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
         if lv["risk_pct"] > MAX_RISK_PCT or lv["reward_pct"] > MAX_REWARD_PCT:
             continue  # SL/TP kejauhan dari harga sekarang buat swing beneran (lihat komentar MAX_RISK_PCT) — skip, jangan kirim angka ngaco
         c["rr_ratio"] = lv["rr_ratio"]
+        # relative strength vs IHSG 20 hari — bedain breakout yang beneran kuat
+        # SENDIRIAN dari breakout yang cuma numpang market lagi rally luas
+        # (market_uptrend di atas itu boolean SATU angka buat semua kandidat,
+        # gak bedain saham mana yang beneran outperform). Konteks tambahan
+        # buat Groq (bukan gate keras — threshold "berapa % dianggap kuat"
+        # belum divalidasi backtest, jangan sok tau angka pastinya).
+        stock_20d_pct = _pct_change_nday(hist, 20)
+        c["relative_strength_vs_ihsg_20d"] = (
+            round(stock_20d_pct - ihsg_20d_pct, 2)
+            if stock_20d_pct is not None and ihsg_20d_pct is not None else None
+        )
         # VCP lengkap (compression + volume dry-up + market uptrend) — backtest
         # (data harga yang udah bener) BUKTIIN versi ini ngalahin breakout biasa
         # (+0.75% vs +0.57% expectancy), beda dari compression longgar doang
