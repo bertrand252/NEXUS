@@ -17,7 +17,7 @@ from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_l
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend
 from intraday import daily_session_stats, session_takeoff
-from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation
+from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit
 from forex_factory import get_forex_events
 from telegram_bot import (
     send_alert_photo, send_alert, get_channel_updates, delete_message,
@@ -1532,20 +1532,142 @@ def _check_bsjp_screener() -> None:
     scored.sort(key=lambda c: c["score"], reverse=True)
     scored = scored[:MAX_BSJP_PER_DAY]
 
+    # BSJP dulu GAK PUNYA target/SL sama sekali — gak ke-track di signal_alerts
+    # (gak muncul di History NEXUS, gak bisa dievaluasi "kejemput atau enggak").
+    # Beli LANGSUNG di harga alert (bukan nunggu entry zone kayak Swing/BPJS),
+    # jadi entry_low=entry_high=harga sekarang, status langsung "open".
+    for c in scored:
+        try:
+            hist_daily = _get_history(c["ticker"])
+            lv = support_resistance(hist_daily)
+        except Exception:
+            c["levels"] = None
+            continue
+        if lv["rr_ratio"] < MIN_RR_RATIO or lv["risk_pct"] > MAX_RISK_PCT or lv["reward_pct"] > MAX_REWARD_PCT:
+            c["levels"] = None  # RR/levels gak masuk akal — tetep tampil alert momentumnya, TAPI gak dikasih TP/SL ngaco
+            continue
+        c["levels"] = lv
+
     lines = ["🌆 <b>BSJP — Beli Sore Jual Pagi</b>\n", "Terkonfirmasi \"terbang\" di sesi 2 hari ini:"]
     for c in scored:
         t = c["takeoff"]
         support_note = " (+ sesi 1 juga spike, pendukung)" if t.get("s1_spike_supporting") else ""
         day_pct_txt = f", harga hari ini {c['full_day_pct']:+g}%" if c["full_day_pct"] is not None else ""
+        level_txt = f"\n   🎯 Target Rp{c['levels']['resistance']:,.0f} · ⛔ SL Rp{c['levels']['stop_loss']:,.0f}" if c["levels"] else ""
         lines.append(
             f"✅ <b>{_esc(c['ticker'])}</b> — Rp{c['price']:,.0f} "
-            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}"
+            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}{level_txt}"
         )
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
-    lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini.</b>")
+    lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini — jual PAGI besok, jangan dipegang kelamaan.</b>")
 
     if send_alert("\n".join(lines)):
         _dedup_mark("bsjp", "screener")
+        for c in scored:
+            if not c["levels"]:
+                continue
+            try:
+                supabase.table("signal_alerts").insert({
+                    "ticker": c["ticker"],
+                    "entry_price": c["price"],
+                    "entry_low": c["price"],
+                    "entry_high": c["price"],
+                    "target": c["levels"]["resistance"],
+                    "stop_loss": c["levels"]["stop_loss"],
+                    "status": "open",
+                    "source": "bsjp",
+                }).execute()
+            except Exception:
+                pass
+
+
+def _advise_hold_or_exit(row: dict) -> None:
+    """Pertimbangan HOLD/EXIT buat 1 posisi 'open' (row signal_alerts) yang TP/SL-nya
+    belum kena tapi deadline exit strategi-nya (BSJP: pagi, BPJS: sore) udah deket.
+    Insight user: broker paling banyak akumulasi = paling banyak PEGANG barang —
+    volume hari ini jauh di atas rata-rata TAPI harga gak ikutan naik kuat = indikasi
+    DIA yang jual. Diem total kalau Invezgo gak configured/gagal fetch broker summary
+    (jangan kasih rekomendasi asal tanpa data pendukung — insight dari user sendiri:
+    lebih baik gak ngasih sinyal daripada ngasih sinyal ngasal)."""
+    ticker = row["ticker"]
+    try:
+        hist = _get_history(ticker)
+        price_now = float(hist["Close"].iloc[-1])
+        volume_today = float(hist["Volume"].iloc[-1])
+        volume_avg20 = float(hist["Volume"].iloc[-21:-1].mean()) if len(hist) >= 21 else None
+    except Exception:
+        return
+    if not volume_avg20 or not invezgo_client.is_configured():
+        return
+
+    today = today_wib().isoformat()
+    week_ago = (today_wib() - timedelta(days=7)).isoformat()
+    try:
+        bs = invezgo_client.get_broker_summary(ticker, week_ago, today)
+        top_broker = max(bs, key=lambda b: float(b.get("net_value") or 0)) if bs else None
+    except Exception:
+        top_broker = None
+    if not top_broker or float(top_broker.get("net_value") or 0) <= 0:
+        return  # gak ada broker yang jelas paling akumulasi, jangan nebak siapa yang "jual"
+
+    context = {
+        "ticker": ticker,
+        "entry_price": row["entry_price"],
+        "target": row["target"],
+        "stop_loss": row["stop_loss"],
+        "price_now": price_now,
+        "pnl_pct": round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2),
+        "top_broker_code": top_broker.get("code"),
+        "top_broker_name": top_broker.get("name"),
+        "top_broker_net_lot": round(float(top_broker.get("net_volume") or 0) / 100),
+        "volume_today": volume_today,
+        "volume_avg20": round(volume_avg20),
+        "volume_ratio_today": round(volume_today / volume_avg20, 2),
+    }
+    try:
+        advice = ask_hold_or_exit(context)
+    except Exception:
+        return
+    if not advice or advice.get("rekomendasi") not in ("hold", "exit"):
+        return
+
+    emoji = "🟢" if advice["rekomendasi"] == "hold" else "🔴"
+    label = "HOLD" if advice["rekomendasi"] == "hold" else "PERTIMBANGKAN EXIT"
+    sign = "+" if context["pnl_pct"] >= 0 else ""
+    caption = (
+        f"{emoji} <b>{label} — {_esc(ticker)}</b> ({SOURCE_LABEL_ID.get(row.get('source'), row.get('source'))})\n\n"
+        f"PnL sekarang: {sign}{context['pnl_pct']}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f})\n\n"
+        f"{_esc(advice['alasan'])}"
+    )
+    send_alert(caption)
+
+
+SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing"}
+
+
+def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
+    """Kirim pertimbangan HOLD/EXIT ke SEMUA posisi 'open' dari 1 source yang
+    TP/SL-nya belum kena. `only_before_today`: buat BSJP doang (dientry KEMARIN
+    sore, dicek besok siang — posisi yang di-entry HARI INI sendiri belum
+    relevan buat dicek, masih baru beberapa jam)."""
+    if _dedup_seen("hold_advisory", source):
+        return
+    try:
+        res = supabase.table("signal_alerts").select("*").eq("status", "open").eq("source", source).execute()
+    except Exception:
+        return
+    rows = res.data or []
+    if only_before_today:
+        today_s = today_wib().isoformat()
+        rows = [r for r in rows if str(r.get("alerted_at") or "") < today_s]
+    if not rows:
+        return
+    for row in rows:
+        try:
+            _advise_hold_or_exit(row)
+        except Exception:
+            continue
+    _dedup_mark("hold_advisory", source)
 
 
 async def run_bsjp_screener() -> None:
@@ -1559,6 +1681,32 @@ async def run_bsjp_screener() -> None:
             _check_bsjp_screener()
         except Exception:
             log.exception("_check_bsjp_screener gagal")
+        # BPJS deadline-nya SAMA jam ini (15:30, sebelum market tutup, "harus
+        # dijual sore ini") — panggilan TERPISAH dari _check_bsjp_screener()
+        # (fungsi itu banyak early-return kalau BSJP sendiri gak nemu apa-apa
+        # hari itu — "diam lebih baik daripada maksain" — BPJS hold-check
+        # harus tetep jalan walau BSJP-nya gak nemu apa-apa).
+        try:
+            _check_hold_advisory("bpjs")
+        except Exception:
+            log.exception("_check_hold_advisory(bpjs) gagal")
+
+
+BSJP_HOLD_CHECK_HOUR = 12  # midday break IDX (12:00-13:30) — BSJP HARUSNYA
+BSJP_HOLD_CHECK_MINUTE = 5  # udah dijual PAGI, kalau siang gini masih 'open' berarti belum resolve
+
+
+async def run_bsjp_hold_check() -> None:
+    while True:
+        now = _now_wib()
+        target = now.replace(hour=BSJP_HOLD_CHECK_HOUR, minute=BSJP_HOLD_CHECK_MINUTE, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            _check_hold_advisory("bsjp", only_before_today=True)
+        except Exception:
+            log.exception("run_bsjp_hold_check gagal")
 
 
 MARKET_OPEN = time(9, 0)

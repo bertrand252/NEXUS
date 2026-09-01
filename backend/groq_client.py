@@ -342,3 +342,38 @@ def generate_postmortem(summary: dict) -> dict:
     )
     user_prompt = json.dumps(summary, ensure_ascii=False)
     return ask_json(system_prompt, user_prompt)
+
+
+def ask_hold_or_exit(context: dict) -> dict:
+    """Pertimbangan HOLD atau EXIT buat posisi yang UDAH ke-entry (BSJP/BPJS/
+    Swing), TP belum kena tapi deadline exit strategi itu udah deket (BSJP:
+    harus dijual PAGI besoknya, BPJS: harus dijual SORE ini/sebelum tutup).
+    User eksplisit kasih logika intinya: broker paling banyak AKUMULASI itu
+    paling banyak PEGANG barang — kalau volume HARI INI jauh di atas
+    rata-rata TAPI harga gak ikutan naik kuat, kemungkinan broker itu yang
+    lagi JUALAN (dia yang paling banyak punya barang buat dijual).
+    Return: {"rekomendasi": "hold"|"exit", "alasan": "penjelasan detail"}."""
+    system_prompt = (
+        "Kamu analis saham IDX yang bantuin user mutusin HOLD atau EXIT posisi yang "
+        "udah dibeli (BSJP/BPJS/Swing), TP belum kena tapi deadline exit strategi ini "
+        "udah deket (BSJP: harus jual besok pagi, BPJS: harus jual sore ini sebelum "
+        "market tutup). Logika utama: broker yang paling banyak AKUMULASI (net-buy "
+        "terbesar, field top_broker_net_lot) itu yang paling banyak PEGANG barang "
+        "saham ini sekarang. Kalau volume transaksi HARI INI (volume_today) jauh di "
+        "atas rata-rata 20 hari (volume_avg20, lihat volume_ratio_today — misal "
+        "2-3x lipat) TAPI harga (price_now vs entry_price) gak ikutan naik kuat/malah "
+        "turun, itu indikasi KUAT broker itu lagi JUALAN barangnya — DISARANIN EXIT "
+        "(cut loss kalau pnl_pct negatif, stop profit kalau masih untung dikit). "
+        "Kalau volume hari ini masih kecil/normal (deket rata-rata, volume_ratio_today "
+        "di bawah ~1.5x), itu kemungkinan cuma KOREKSI SEHAT (retail profit taking "
+        "kecil-kecilan), BUKAN distribusi bandar beneran — DISARANIN HOLD. Jangan "
+        "mengarang angka yang gak ada di context. Alasan HARUS spesifik pake angka "
+        "asli dari context (nama/kode broker, lot, rasio volume) — contoh gaya: "
+        "'Broker HP paling banyak akumulasi (100rb lot). Volume hari ini 30rb lot vs "
+        "rata-rata 10rb lot (3x lipat) — kemungkinan HP yang jual karena dia paling "
+        "banyak pegang barang, pertimbangkan keluar.' Bahasa Indonesia santai. "
+        'Balikin JSON persis: {"rekomendasi": "hold" atau "exit", "alasan": '
+        '"penjelasan detail 2-3 kalimat"}'
+    )
+    user_prompt = json.dumps(context, ensure_ascii=False)
+    return ask_json(system_prompt, user_prompt)

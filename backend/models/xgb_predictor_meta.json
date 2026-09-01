@@ -1,8 +1,8 @@
 {
-  "accuracy": 0.698,
-  "baseline_accuracy": 0.6972,
-  "trained_at": "2026-08-31T11:24:19.647683+00:00",
-  "n_samples": 908263,
+  "accuracy": 0.673,
+  "baseline_accuracy": 0.6729,
+  "trained_at": "2026-09-01T09:15:23.852560+00:00",
+  "n_samples": 368406,
   "n_tickers": 937,
   "future_days": 5,
   "up_threshold_pct": 2.0

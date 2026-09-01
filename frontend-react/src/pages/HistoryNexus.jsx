@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { API_BASE } from '../lib/api';
 
-const SOURCE_LABEL = { swing: 'Swing', bpjs: 'BPJS' };
+const SOURCE_LABEL = { swing: 'Swing', bpjs: 'BPJS', bsjp: 'BSJP' };
 const STATUS_META = {
   waiting_entry: { label: 'Nunggu Entry', cls: 'bg-white/5 text-slate-400 border-border' },
   open: { label: 'Jalan', cls: 'bg-cyan/10 text-cyan border-cyan/30' },
@@ -26,11 +26,19 @@ export default function HistoryNexus() {
   const [sourceFilter, setSourceFilter] = useState('all');
 
   useEffect(() => {
-    fetch(`${API_BASE}/signal-track/history`)
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(({ data, warning }) => { if (warning) setError(warning); else setRows(data); })
-      .catch(() => setError('Gak bisa konek ke backend.'));
-    fetch(`${API_BASE}/signal-track/stats`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setStats).catch(() => setStats(null));
+    function load() {
+      fetch(`${API_BASE}/signal-track/history`)
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then(({ data, warning }) => { if (warning) setError(warning); else { setError(null); setRows(data); } })
+        .catch(() => setError('Gak bisa konek ke backend.'));
+      fetch(`${API_BASE}/signal-track/stats`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setStats).catch(() => setStats(null));
+    }
+    load();
+    // polling 60 detik — call baru (Swing/BPJS/BSJP) langsung ke-insert signal_alerts
+    // bareng pas Telegram kekirim, halaman ini tinggal narik ulang biar user gak
+    // perlu reload manual tiap kali ada call baru masuk
+    const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
   }, []);
 
   const filtered = rows ? rows.filter((r) => sourceFilter === 'all' || r.source === sourceFilter) : null;
@@ -74,7 +82,7 @@ export default function HistoryNexus() {
 
         <div className="glow-border rounded-2xl bg-card border border-border overflow-hidden">
           <div className="flex items-center gap-1 p-4 border-b border-border">
-            {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS']].map(([key, label]) => (
+            {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS'], ['bsjp', 'BSJP']].map(([key, label]) => (
               <button key={key} onClick={() => setSourceFilter(key)}
                 className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition ${sourceFilter === key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
                 {label}

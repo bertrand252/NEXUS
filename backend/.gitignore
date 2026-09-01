@@ -9,3 +9,5 @@ news_backtest_results.json
 portfolio_backtest_results.json
 portfolio_backtest_mentor_results.json
 portfolio_backtest_hybrid4_results.json
+models/_train_dataset_cache.pkl
+train_log.txt
