@@ -278,6 +278,7 @@ def refresh_scanner(request: Request):
         row = _score_from_history(ticker, _get_history(ticker), accum_lookup)
         row["sector"] = SECTOR_BY_TICKER.get(ticker, "—")
         row["name"] = NAME_BY_TICKER.get(ticker, ticker)
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
         return row
 
     def _fetch_batch(tickers: list[str], max_workers: int) -> tuple[list[dict], list[dict]]:
