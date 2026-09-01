@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { API_BASE } from '../lib/api';
 import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
-import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
 
 // Shape CONFIRMED lawan API asli (2026-09-01): {"rows":[{id, name, level,
@@ -156,7 +155,7 @@ function FinancialStatementTable({ data }) {
   );
 }
 
-function CompanyInfo({ company, ticker, financialStatement }) {
+function CompanyInfo({ company, ticker, financialStatement, notation }) {
   const [lang, setLang] = useState('en');
   const [translated, setTranslated] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -189,7 +188,14 @@ function CompanyInfo({ company, ticker, financialStatement }) {
   return (
     <div className="glow-border rounded-2xl bg-card border border-border p-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-bold text-white tracking-tight">{company.name || ticker}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-bold text-white tracking-tight">{company.name || ticker}</h3>
+          {notation?.list?.length > 0 && (
+            <span title="Notasi khusus BEI (UMA/suspend/dst) — sinyal hati-hati sebelum masuk/nambah posisi" className="text-[10px] font-bold text-strong bg-strong/10 border border-strong/30 rounded-full px-2 py-0.5 cursor-help">
+              ⚠ {notation.list.map((n) => n.notation).join(', ')}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {company.website && (
             <a href={company.website} target="_blank" rel="noreferrer" className="text-[11px] text-cyan hover:text-accent font-medium">{company.website.replace(/^https?:\/\//, '')} ↗</a>
@@ -317,64 +323,6 @@ function ScoreCard({ label, value, max, barClass }) {
 
 // Struktur response Invezgo belum diverifikasi lawan API asli buat endpoint ini
 // (lihat invezgo_client.py::get_sankey_chart) — daripada nebak field yang salah,
-// dump JSON mentahnya biar minimal keliatan APAKAH datanya berguna. Chart Sankey
-// beneran nunggu struktur node/link asli begitu key aktif.
-function RawJsonPreview({ raw, note }) {
-  return (
-    <div>
-      <p className="text-[11px] text-slate-500 mb-2">{note}</p>
-      <pre className="text-[10px] text-slate-400 bg-black/30 rounded-lg p-3 overflow-auto max-h-40 font-mono">{JSON.stringify(raw, null, 2)}</pre>
-    </div>
-  );
-}
-
-// Field CONFIRMED lawan OpenAPI spec asli Invezgo: [{month, start_price,
-// end_price, percentage_change}]. percentage_change balik sebagai number
-// (bukan string) di contoh spec, tapi tetep dijaga Number() jaga-jaga.
-function parseSeasonality(raw) {
-  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : null;
-  if (rows && !rows.length) return { empty: true };
-  if (!rows) return { malformed: true };
-  const labelKey = ['month', 'label', 'period', 'name'].find((k) => rows[0][k] != null);
-  const valueKey = ['percentage_change', 'avg_return', 'avg_return_pct', 'return', 'return_pct', 'avg', 'value'].find((k) => rows[0][k] != null && !isNaN(Number(rows[0][k])));
-  if (!labelKey || !valueKey) return { malformed: true };
-  return { labels: rows.map((r) => String(r[labelKey])), values: rows.map((r) => Number(r[valueKey])) };
-}
-
-function SeasonalityChart({ raw }) {
-  const parsed = parseSeasonality(raw);
-  const config = parsed.labels ? {
-    type: 'bar',
-    data: { labels: parsed.labels, datasets: [{ data: parsed.values, backgroundColor: (ctx) => (ctx.raw >= 0 ? '#10B981' : '#EF4444'), borderRadius: 3 }] },
-    options: { plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#94A3B8', font: { size: 9 } } }, y: { grid: { color: '#1F2937' }, ticks: { color: '#64748B', font: { size: 9 } } } } },
-  } : null;
-  const chartRef = useChart(config);
-  if (parsed.empty) return <p className="text-slate-500 text-[11px]">Belum ada data seasonality.</p>;
-  if (parsed.malformed) return <RawJsonPreview raw={raw} note="Struktur field belum ketebak otomatis — data mentah di bawah, chart nyusul begitu bentuknya jelas." />;
-  return <canvas ref={chartRef} height="90"></canvas>;
-}
-
-// Format CONFIRMED lawan OpenAPI spec asli Invezgo: {"nodes":[{"name"}],
-// "links":[{"source","target","value"}]} — standar D3 Sankey. Belum ada lib
-// diagram Sankey di stack (chart.js gak native support), jadi ditampilin
-// sebagai tabel flow terurut (paling gede duluan) — jujur & berguna tanpa
-// nambah dependency baru buat 1 chart. Upgrade ke diagram visual beneran
-// kalau nanti worth-nya kelihatan pas data asli.
-function SankeyFlowTable({ raw }) {
-  const links = raw?.links;
-  if (!Array.isArray(links)) return <RawJsonPreview raw={raw} note="Struktur field belum sesuai — data mentah di bawah." />;
-  if (!links.length) return <p className="text-slate-500 text-[11px]">Belum ada arus tercatat.</p>;
-  const sorted = [...links].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 8);
-  return (
-    <ul className="space-y-1 text-slate-300 font-mono">
-      {sorted.map((l, i) => (
-        <li key={i}>{String(l.source).trim()} → {String(l.target).trim()}: Rp{Number(l.value).toLocaleString('id-ID')}</li>
-      ))}
-    </ul>
-  );
-}
-
-
 const DATE_RANGES = [
   { key: 7, label: '1 Minggu' },
   { key: 14, label: '2 Minggu' },
@@ -389,36 +337,55 @@ const DATE_RANGES = [
 // bilang "ribet, kebanyakan API" — versi ini cukup 1 endpoint, get_broker_summary,
 // range-nya dari `days` di StockDetail). net_value/buy_avg/sell_avg SEMUA
 // balik STRING dari API, WAJIB Number() dulu.
-function BrokerSummaryTable({ brokers }) {
-  const withNet = brokers.map((b) => ({ ...b, netNum: Number(b.net_value) }));
+function BrokerSummaryTable({ brokers, topAkumulator }) {
+  const withNet = brokers.map((b) => ({ ...b, netNum: Number(b.net_value), lotNum: Number(b.net_volume) / 100 }));
   const buyers = withNet.filter((b) => b.netNum > 0).sort((a, b) => b.netNum - a.netNum).slice(0, 8);
   const sellers = withNet.filter((b) => b.netNum < 0).sort((a, b) => a.netNum - b.netNum).slice(0, 8);
 
-  const Row = ({ b, positive }) => {
-    const rawAvg = positive ? b.buy_avg : b.sell_avg;
-    const avg = rawAvg != null ? Number(rawAvg) : null;
-    return (
-      <div className="flex items-center gap-2 py-1 border-b border-border/30 last:border-0">
-        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${positive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{b.code}</span>
-        <span className="text-[11px] text-slate-400 truncate flex-1">{b.name}</span>
-        {avg != null && !isNaN(avg) && <span className="text-[10px] text-slate-500 font-mono shrink-0">avg Rp{Math.round(avg).toLocaleString('id-ID')}</span>}
-        <span className={`text-[11px] font-mono font-semibold shrink-0 ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-          {fmtRupiahCompact(Math.abs(b.netNum))}
-        </span>
-      </div>
-    );
-  };
+  const Table = ({ rows, positive }) => (
+    <table className="w-full text-[11px]">
+      <thead>
+        <tr className="text-slate-500 text-[9px] uppercase tracking-wider">
+          <th className="text-left font-semibold pb-1">Broker</th>
+          <th className="text-right font-semibold pb-1">Nlot</th>
+          <th className="text-right font-semibold pb-1">Nval</th>
+          <th className="text-right font-semibold pb-1">Bavg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((b) => {
+          const rawAvg = positive ? b.buy_avg : b.sell_avg;
+          const avg = rawAvg != null ? Number(rawAvg) : null;
+          return (
+            <tr key={b.code} title={b.name} className="border-b border-border/30 last:border-0 cursor-help">
+              <td className={`py-1 font-mono font-bold ${positive ? 'text-emerald-400' : 'text-red-400'}`}>{b.code}</td>
+              <td className="text-right text-slate-400 font-mono">{Math.abs(b.lotNum).toLocaleString('id-ID')}</td>
+              <td className={`text-right font-mono font-semibold ${positive ? 'text-emerald-400' : 'text-red-400'}`}>{fmtRupiahCompact(Math.abs(b.netNum))}</td>
+              <td className="text-right text-slate-500 font-mono">{avg != null && !isNaN(avg) ? Math.round(avg).toLocaleString('id-ID') : '—'}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
 
   return (
-    <div className="grid grid-cols-2 gap-4 text-xs">
-      <div>
-        <p className="text-[10px] text-emerald-400 uppercase tracking-wider mb-2 font-semibold">Net Buy</p>
-        {buyers.length ? buyers.map((b) => <Row key={b.code} b={b} positive />) : <p className="text-slate-500">Gak ada.</p>}
+    <div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-[10px] text-emerald-400 uppercase tracking-wider mb-1 font-semibold">Net Buy</p>
+          {buyers.length ? <Table rows={buyers} positive /> : <p className="text-slate-500 text-xs">Gak ada.</p>}
+        </div>
+        <div>
+          <p className="text-[10px] text-red-400 uppercase tracking-wider mb-1 font-semibold">Net Sell</p>
+          {sellers.length ? <Table rows={sellers} positive={false} /> : <p className="text-slate-500 text-xs">Gak ada.</p>}
+        </div>
       </div>
-      <div>
-        <p className="text-[10px] text-red-400 uppercase tracking-wider mb-2 font-semibold">Net Sell</p>
-        {sellers.length ? sellers.map((b) => <Row key={b.code} b={b} positive={false} />) : <p className="text-slate-500">Gak ada.</p>}
-      </div>
+      {topAkumulator && (
+        <p className="text-[11px] text-slate-400 mt-3 pt-3 border-t border-border/30">
+          Top akumulator: <span className="font-mono font-bold text-white">{topAkumulator.broker}</span> — {topAkumulator.active} hari aktif, total {fmtRupiahCompact(topAkumulator.total)}
+        </p>
+      )}
     </div>
   );
 }
@@ -622,7 +589,7 @@ export default function StockDetail() {
 
         {data && <GayaTradingCard data={data} />}
 
-        {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} financialStatement={brokerFlow?.financial_statement} />}
+        {data?.company && <CompanyInfo company={data.company} ticker={data.ticker} financialStatement={brokerFlow?.financial_statement} notation={brokerFlow?.notation} />}
         {data?.mentor_call && <MentorCallCard call={data.mentor_call} />}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -677,17 +644,16 @@ export default function StockDetail() {
                   ))}
                 </div>
               </div>
-              {brokerFlow.broker_summary?.length ? <BrokerSummaryTable brokers={brokerFlow.broker_summary} /> : <p className="text-sm text-slate-500 py-4 text-center">Gagal ambil data broker summary buat rentang ini — coba lagi nanti.</p>}
-            </div>
-
-            <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Top Akumulator</h3>
-              {brokerFlow.top_broker_stalker?.summary ? (
-                <p className="text-sm text-slate-300">
-                  Broker <span className="font-mono font-bold text-white">{brokerFlow.top_broker_stalker.broker}</span> — {brokerFlow.top_broker_stalker.summary.active} hari aktif,
-                  total Rp{Number(brokerFlow.top_broker_stalker.summary.total).toLocaleString('id-ID')}
-                </p>
-              ) : <p className="text-sm text-slate-500">Belum ada data histori broker.</p>}
+              {brokerFlow.broker_summary?.length ? (
+                <BrokerSummaryTable
+                  brokers={brokerFlow.broker_summary}
+                  topAkumulator={brokerFlow.top_broker_stalker?.summary ? {
+                    broker: brokerFlow.top_broker_stalker.brokers,
+                    active: brokerFlow.top_broker_stalker.summary.active,
+                    total: brokerFlow.top_broker_stalker.summary.total,
+                  } : null}
+                />
+              ) : <p className="text-sm text-slate-500 py-4 text-center">Gagal ambil data broker summary buat rentang ini — coba lagi nanti.</p>}
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
@@ -719,21 +685,6 @@ export default function StockDetail() {
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-white tracking-tight">Notasi Khusus</h3>
-                <span title="Kode 'perhatian' resmi dari BEI yang nempel di 1 saham — misal UMA (Unusual Market Activity, harga/volume gerak gak wajar), suspend (saham distop sementara), atau notasi masalah laporan keuangan. Bukan larangan mutlak, tapi sinyal hati-hati sebelum masuk/nambah posisi" className="text-slate-500 cursor-help text-xs">ⓘ apa ini?</span>
-              </div>
-              {brokerFlow.notation?.list?.length ? (
-                <p className="text-sm text-strong font-semibold">⚠ {brokerFlow.notation.list.map((n) => n.notation).join(', ')}</p>
-              ) : <p className="text-sm text-slate-500">Gak ada notasi aktif.</p>}
-            </div>
-
-            <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Money Flow (Sankey)</h3>
-              {brokerFlow.sankey_chart ? <SankeyFlowTable raw={brokerFlow.sankey_chart} /> : <p className="text-sm text-slate-500">Belum tersedia.</p>}
-            </div>
-
-            <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <h3 className="text-sm font-bold text-white tracking-tight mb-3">Kepemilikan &gt;5% (90 hari)</h3>
               {brokerFlow.shareholder_above?.data?.length ? (
                 <ul className="space-y-1.5 text-sm text-slate-300">
@@ -742,14 +693,6 @@ export default function StockDetail() {
                   ))}
                 </ul>
               ) : <p className="text-sm text-slate-500">Gak ada perubahan &gt;5% tercatat.</p>}
-            </div>
-
-            <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-white tracking-tight">Price Seasonality</h3>
-                <span title="Rata-rata perubahan harga per bulan, dari histori beberapa tahun terakhir — pola musiman (misal: saham komoditas suka naik pas laporan Q tertentu), BUKAN prediksi, cuma konteks statistik historis" className="text-slate-500 cursor-help text-xs">ⓘ apa ini?</span>
-              </div>
-              {brokerFlow.price_seasonality ? <SeasonalityChart raw={brokerFlow.price_seasonality} /> : <p className="text-sm text-slate-500">Belum tersedia.</p>}
             </div>
 
             </>

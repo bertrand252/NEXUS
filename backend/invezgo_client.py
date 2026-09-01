@@ -103,8 +103,10 @@ def get_broker_summary(code: str, from_date: str, to_date: str, investor: str = 
 
 def get_broker_stalker(broker: str, stock: str, from_date: str, to_date: str,
                         investor: str = "all", market: str = "RG") -> dict:
-    """{"broker", "stock", "summary": {"active","total","avg","peak"}, "calendar": [...]}
-    — histori akumulasi 1 broker di 1 saham dari waktu ke waktu ("siapa numpuk barang")."""
+    """{"brokers" (KODE broker, BUKAN "broker" singular — field asli API beda dari
+    OpenAPI spec, ketauan pas UI-nya kosong terus), "stock", "summary":
+    {"active","total","avg","peak"}, "calendar": [...]} — histori akumulasi 1
+    broker di 1 saham dari waktu ke waktu ("siapa numpuk barang")."""
     return _get(f"/analysis/stalker/broker/{broker}/{stock}", {"from": from_date, "to": to_date, "investor": investor, "market": market})
 
 

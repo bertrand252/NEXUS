@@ -344,7 +344,7 @@ export default function Dashboard() {
                   {briefing.tanggal_penting?.map((e, i) => (
                     <div key={i} className="text-xs">
                       <span className="font-mono font-semibold text-white">{e.saham}</span>
-                      <span className="text-slate-500"> — {e.jenis} · {e.tanggal}</span>
+                      <span className="text-slate-500"> — {e.jenis && e.jenis !== 'lainnya' ? `${e.jenis} · ` : ''}{e.tanggal}</span>
                       {e.detail && <p className="text-slate-500 mt-0.5 text-justify">{e.detail}</p>}
                     </div>
                   ))}

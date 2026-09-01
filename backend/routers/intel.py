@@ -10,13 +10,22 @@ SUMMARIZE_SYSTEM_PROMPT = """Kamu adalah analyst assistant. Ringkas teks market 
 Jangan menambah opini baru, hanya ekstrak dari teks yang diberikan. Kalau gak ada
 info buat suatu field, isi array kosong — JANGAN ngarang.
 
+PENTING soal trade_calls vs poin_penting: kalau teks berisi CALL TRADING SPESIFIK
+(rekomendasi beli/jual dengan angka entry/target/stop-loss/cutloss eksplisit —
+biasa dari channel sekuritas, bukan analisa umum), JANGAN dimasukin ke
+poin_penting. Ekstrak call kayak gitu ke field terpisah "trade_calls" —
+poin_penting cuma buat berita/analisa umum TANPA angka entry/target/SL eksplisit
+per saham (biar gak nyasar jadi rekomendasi trading pas disintesis jadi daily
+briefing — itu bukan tugas kamu, ditangani sistem NEXUS sendiri).
+
 Output HARUS JSON valid, format:
 {
   "sentiment": "bullish" | "bearish" | "neutral",
   "sektor_terkait": ["sektor1", "sektor2"],
   "poin_penting": ["poin 1", "poin 2", "poin 3"],
   "saham_disebut": ["BBCA", "TLKM"],
-  "event_penting": [{"saham": "BBCA", "jenis": "RUPS" | "dividen" | "stock split" | "lainnya", "tanggal": "YYYY-MM-DD atau teks aslinya kalau tanggal gak pasti", "detail": "ringkasan singkat event-nya"}]
+  "event_penting": [{"saham": "BBCA", "jenis": "RUPS" | "dividen" | "stock split" | "lainnya", "tanggal": "YYYY-MM-DD atau teks aslinya kalau tanggal gak pasti", "detail": "ringkasan singkat event-nya"}],
+  "trade_calls": [{"saham": "BBCA", "entry": 9500, "target": 9800, "stop_loss": 9300, "alasan": "1 kalimat pendek"}]
 }"""
 
 
