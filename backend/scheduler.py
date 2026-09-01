@@ -944,7 +944,35 @@ def _handle_rotation_callback(callback: dict) -> None:
             edit_message_text(message_id, "❌ <b>Rotasi ditolak</b> — posisi lama tetep dipegang.")
         return
 
-    # rot_yes: tutup posisi lama SEKARANG (realisasi P&L saat ini, BUKAN nunggu TP/SL asli)
+    # rot_yes: levels di payload itu SNAPSHOT pas ditawarin — kalau user baru klik
+    # sekarang (bisa berjam-jam/berhari kemudian), harga udah gerak, entry_low/
+    # entry_high/target/stop_loss lama bisa udah gak nyambung sama harga sekarang.
+    # WAJIB recompute fresh + re-cek gate RR (pola sama kayak _gather_candidates),
+    # SEBELUM nutup posisi lama — biar kalau dibatalin, slot lama gak ke-drop
+    # sia-sia (dulu ketutup duluan tanpa validasi, resiko ninggalin slot bolong).
+    new_ticker = payload["new_ticker"]
+    try:
+        hist_new = _get_history(new_ticker)
+        levels = support_resistance(hist_new)
+        _apply_smart_tp(levels, new_ticker, hist_new)
+    except Exception:
+        log.exception("gagal recompute levels abis rotasi diterima")
+        if callback_id:
+            answer_callback_query(callback_id, "Gagal ambil data harga terbaru, coba lagi.")
+        return
+    if levels["rr_ratio"] < MIN_RR_RATIO or levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
+        supabase.table("pending_rotations").update({"status": "expired"}).eq("id", row["id"]).execute()
+        if callback_id:
+            answer_callback_query(callback_id, "Batal — harga udah gerak jauh, RR gak masuk akal lagi.")
+        if message_id:
+            edit_message_text(
+                message_id,
+                f"⚠️ <b>Rotasi dibatalkan</b> — harga {_esc(new_ticker)} udah gerak sejak ditawarin, "
+                f"RR gak masuk akal lagi. {_esc(payload['drop_ticker'])} tetep dipegang.",
+            )
+        return
+
+    # tutup posisi lama SEKARANG (realisasi P&L saat ini, BUKAN nunggu TP/SL asli)
     try:
         old_res = supabase.table("signal_alerts").select("*").eq("id", payload["drop_signal_alert_id"]).limit(1).execute()
         old_row = old_res.data[0] if old_res.data else None
@@ -969,7 +997,7 @@ def _handle_rotation_callback(callback: dict) -> None:
 
     try:
         _send_swing_alert(
-            payload["new_ticker"], _get_history(payload["new_ticker"]), payload["new_levels"],
+            new_ticker, hist_new, levels,
             payload["new_score_row"], payload["new_pick"], payload["new_candidate"],
             payload.get("macro_events", []),
         )
