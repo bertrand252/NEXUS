@@ -321,14 +321,10 @@ function ScoreCard({ label, value, max, barClass }) {
   );
 }
 
-// Struktur response Invezgo belum diverifikasi lawan API asli buat endpoint ini
-// (lihat invezgo_client.py::get_sankey_chart) — daripada nebak field yang salah,
-const DATE_RANGES = [
-  { key: 7, label: '1 Minggu' },
-  { key: 14, label: '2 Minggu' },
-  { key: 30, label: '1 Bulan' },
-  { key: 90, label: '3 Bulan' },
-];
+// Batas histori MAKSIMAL yang Invezgo simpen itu 2 tahun (dikonfirmasi owner,
+// lihat CLAUDE.md) — dari IPO cuma kepake beneran kalau IPO-nya <= 2 tahun lalu.
+const BROKER_FLOW_MIN_DATE = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
+const BROKER_FLOW_MAX_DATE = new Date().toISOString().slice(0, 10);
 
 // Dulu bar chart net_value — user minta angka+badge doang (contoh: NeoBDM),
 // gak usah chart. Sekarang juga tampilin avg harga (buy_avg buat yang net
@@ -445,16 +441,17 @@ export default function StockDetail() {
   const candleRef = useCandlestickChart(candles, data?.levels, data?.ai_zones);
 
   const [brokerFlow, setBrokerFlow] = useState(null);
-  const [brokerFlowDays, setBrokerFlowDays] = useState(7);
+  const [brokerFlowFrom, setBrokerFlowFrom] = useState(new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
+  const [brokerFlowTo, setBrokerFlowTo] = useState(BROKER_FLOW_MAX_DATE);
   useEffect(() => {
     let cancelled = false;
     setBrokerFlow(null);
-    fetch(`${API_BASE}/scanner/${ticker}/broker-flow?days=${brokerFlowDays}`)
+    fetch(`${API_BASE}/scanner/${ticker}/broker-flow?from_date=${brokerFlowFrom}&to_date=${brokerFlowTo}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((json) => { if (!cancelled) setBrokerFlow(json); })
       .catch(() => { if (!cancelled) setBrokerFlow(null); });
     return () => { cancelled = true; };
-  }, [ticker, brokerFlowDays]);
+  }, [ticker, brokerFlowFrom, brokerFlowTo]);
 
   const m = signalMeta(data?.signal);
   const needleDeg = data ? (data.total_score / 100) * 180 - 90 : -90;
@@ -635,13 +632,14 @@ export default function StockDetail() {
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <h3 className="text-sm font-bold text-white tracking-tight">Broker Summary (Net Value)</h3>
-                <div className="flex items-center gap-1">
-                  {DATE_RANGES.map((r) => (
-                    <button key={r.key} onClick={() => setBrokerFlowDays(r.key)}
-                      className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition ${brokerFlowDays === r.key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
-                      {r.label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-1.5">
+                  <input type="date" value={brokerFlowFrom} min={BROKER_FLOW_MIN_DATE} max={brokerFlowTo}
+                    onChange={(e) => setBrokerFlowFrom(e.target.value)}
+                    className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-white/5 text-slate-300 border border-border" />
+                  <span className="text-slate-600 text-[10px]">—</span>
+                  <input type="date" value={brokerFlowTo} min={brokerFlowFrom} max={BROKER_FLOW_MAX_DATE}
+                    onChange={(e) => setBrokerFlowTo(e.target.value)}
+                    className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-white/5 text-slate-300 border border-border" />
                 </div>
               </div>
               {brokerFlow.broker_summary?.length ? (

@@ -423,19 +423,19 @@ def annotate_chart(ticker: str):
 
 
 @router.get("/{ticker}/broker-flow")
-def get_broker_flow(ticker: str, days: int = 7):
+def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to_date: str | None = None):
     """Tab "Broker Flow" (StockDetail) — broker summary, broker stalker (top
     broker net buy/sell), insider activity, notation, volume profile. SEMUA
     field None + configured=False kalau INVEZGO_API_KEY belum diisi. Tiap
     field independen (1 gagal gak nge-block yang lain). Order Queue & Tape
     Reading DIHAPUS (user: gak kepake buat analisa).
 
-    `days`: rentang broker_summary/broker_stalker — DULU chart candlestick+
-    net-flow overlay (Inventory Chart) fixed 7 hari, user komplain labelnya
-    numpuk gak kebaca + user sendiri usul lebih simpel: pilihan rentang
-    tanggal (preset, bukan custom) + tabel net buy/sell + avg harga per
-    broker SELAMA rentang itu (persis output get_broker_summary). Inventory
-    Chart DIHAPUS, diganti parameter ini di BrokerSummaryTable (frontend)."""
+    `days`: preset cepat (dari sekarang mundur N hari). `from_date`/`to_date`
+    (YYYY-MM-DD): custom range eksplisit, dipake buat rentang bebas (misal
+    dari IPO), override `days` kalau dikasih. Diclamp maksimal 2 tahun ke
+    belakang — batas histori MAKSIMAL yang Invezgo simpen (dikonfirmasi
+    langsung ke owner, lihat CLAUDE.md), minta lebih dari itu Invezgo-nya
+    sendiri gak punya datanya."""
     ticker = ticker.upper()
     if not invezgo_client.is_configured():
         return {
@@ -446,10 +446,13 @@ def get_broker_flow(ticker: str, days: int = 7):
         }
 
     today = today_wib().isoformat()
-    from_date = (today_wib() - timedelta(days=days)).isoformat()
+    oldest_allowed = (today_wib() - timedelta(days=730)).isoformat()
+    from_date = from_date or (today_wib() - timedelta(days=days)).isoformat()
+    from_date = max(from_date, oldest_allowed)
+    to_date = min(to_date or today, today)
     result = {"configured": True}
     try:
-        result["broker_summary"] = invezgo_client.get_broker_summary(ticker, from_date, today)
+        result["broker_summary"] = invezgo_client.get_broker_summary(ticker, from_date, to_date)
     except Exception:
         result["broker_summary"] = None
 
@@ -461,7 +464,7 @@ def get_broker_flow(ticker: str, days: int = 7):
     # "9000" > "150000" secara alfabet padahal angkanya lebih kecil)
     try:
         top_broker = max(result["broker_summary"], key=lambda b: float(b.get("net_value") or 0)) if result["broker_summary"] else None
-        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, from_date, today) if top_broker else None
+        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, from_date, to_date) if top_broker else None
     except Exception:
         result["top_broker_stalker"] = None
 
