@@ -352,13 +352,16 @@ export default function Dashboard() {
               </div>
 
               <div>
-                <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Rekomendasi</p>
-                {(!briefing.rekomendasi || briefing.rekomendasi.length === 0) && <p className="text-xs text-slate-500">Belum cukup data buat rekomendasi solid.</p>}
+                <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Rekomendasi (call NEXUS aktif)</p>
+                {(!briefing.rekomendasi || briefing.rekomendasi.length === 0) && <p className="text-xs text-slate-500">Gak ada call NEXUS yang lagi aktif.</p>}
                 <div className="space-y-2">
                   {briefing.rekomendasi?.map((r, i) => (
-                    <div key={i} className="text-xs">
-                      <span className="font-mono font-semibold text-white">{r.saham}</span>
-                      <p className="text-slate-500 mt-0.5 text-justify">{r.alasan}</p>
+                    <div key={i} className="text-xs flex items-center justify-between gap-2">
+                      <div>
+                        <span className="font-mono font-semibold text-white">{r.ticker}</span>
+                        <span className="text-slate-500"> — Entry Rp{Number(r.entry_price).toLocaleString('id-ID')} · TP Rp{Number(r.target).toLocaleString('id-ID')}</span>
+                      </div>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/30 shrink-0">{r.call_oleh}</span>
                     </div>
                   ))}
                 </div>

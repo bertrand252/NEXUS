@@ -30,13 +30,18 @@ def is_configured() -> bool:
     return _model is not None
 
 
-def predict_direction(hist) -> dict | None:
+def predict_direction(hist, broker_features: dict | None = None) -> dict | None:
     """None kalau model belum di-training ATAU data historis ticker ini
     kurang buat ngitung fitur — biar caller gampang: null = tampilin
-    placeholder, gak perlu bedain alasannya di frontend."""
+    placeholder, gak perlu bedain alasannya di frontend.
+    broker_features: snapshot HARI INI dari fitur broker (lihat
+    prediction_features.py::compute_broker_features_series) — kalau None,
+    compute_features() fallback ke nilai netral (dulu SELALU None, artinya
+    prediksi live gak pernah liat kondisi broker asli walau modelnya
+    dilatih pake itu — caller (routers/scanner.py) sekarang fetch ini beneran)."""
     if _model is None:
         return None
-    features = compute_features(hist)
+    features = compute_features(hist, broker_features)
     if features is None:
         return None
 

@@ -9,6 +9,7 @@ from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
 from config import supabase, today_wib
 from levels import support_resistance, detect_pivot_zones
 from prediction import predict_direction
+from prediction_features import compute_broker_features_series
 from groq_client import translate_to_indonesian, explain_levels
 from rate_limit import limiter
 from forex_factory import get_forex_events
@@ -563,6 +564,31 @@ def _candles_from_hist(hist) -> list[dict]:
     ]
 
 
+def _fetch_broker_features_today(ticker: str, hist) -> dict | None:
+    """Snapshot HARI INI dari broker_net_5d_norm/broker_consistency_20d — SAMA
+    fitur yang dipake pas training model (prediction_features.py::
+    compute_broker_features_series), dipake AI Prediction LIVE biar prediksi
+    beneran liat kondisi broker asli (dulu selalu None/netral, train-serve
+    mismatch — user komplain "harus sesuai data broker dong"). None kalau
+    Invezgo gak configured/gagal fetch, predict_direction fallback netral,
+    JANGAN gagalin seluruh Stock Detail gara-gara ini."""
+    if not invezgo_client.is_configured():
+        return None
+    try:
+        from_date = (today_wib() - timedelta(days=40)).isoformat()
+        to_date = today_wib().isoformat()
+        inv = invezgo_client.get_inventory_chart_stock(ticker, from_date, to_date)
+        value_traded = hist["Close"] * hist["Volume"]
+        bf = compute_broker_features_series(inv, value_traded)
+        if bf.empty:
+            return None
+        bf.index = bf.index.tz_localize(hist.index.tz)
+        last = bf.iloc[-1]
+        return None if last.isna().any() else last.to_dict()
+    except Exception:
+        return None
+
+
 @router.get("/{ticker}")
 def get_stock_detail(ticker: str):
     """Detail 1 saham: skor + level support/resistance (selalu dari window 2 bulan,
@@ -574,7 +600,7 @@ def get_stock_detail(ticker: str):
         result = _score_from_history(ticker, hist, _build_accum_lookup())
         result["levels"] = support_resistance(hist)
         result["ai_zones"] = detect_pivot_zones(hist)
-        result["ai_prediction"] = predict_direction(hist)
+        result["ai_prediction"] = predict_direction(hist, _fetch_broker_features_today(ticker, hist))
     except Exception:
         raise HTTPException(status_code=404, detail=f"Data untuk {ticker} gak ketemu di yfinance")
 

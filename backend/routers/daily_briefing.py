@@ -31,10 +31,12 @@ kumpulan ringkasan berita/intel market beberapa hari terakhir (masing-masing uda
 ada sentiment, poin penting, saham yang disebut, dan event penting kayak
 RUPS/dividen/stock split kalau ada). Sintesis jadi 1 daily briefing.
 
-ATURAN PENTING: JANGAN ngarang data yang gak ada di input. Kalau gak ada cukup
-info buat rekomendasi solid, bilang jujur di ringkasan dan biarin rekomendasi
-kosong — jangan maksa. Tiap rekomendasi HARUS nyebutin alasan spesifik yang
-merujuk ke data yang diberikan, bukan opini baru.
+ATURAN PENTING: JANGAN ngarang data yang gak ada di input. JANGAN kasih
+rekomendasi/saran beli-jual saham apapun di ringkasan atau berita — tugas kamu
+CUMA laporin & sintesis berita apa adanya, BUKAN nyaranin trading. Rekomendasi
+call saham (kalau ada) ditangani TERPISAH oleh sistem NEXUS sendiri
+(signal_alerts, bukan dari kamu/berita) — jangan tulis kalimat yang kebaca
+kayak ajakan beli/jual ("saham X worth dibeli", "pertimbangkan masuk", dst).
 
 KONTEKS GLOBAL: kalau ada baris "[Konteks global semalam]" di input, itu
 perubahan real index AS (S&P 500/Dow/Nasdaq) semalem — boleh disebut di
@@ -42,17 +44,18 @@ ringkasan KALAU relevan (IHSG suka kebawa arah global pas buka), tapi JANGAN
 nge-klaim hubungan sebab-akibat yang pasti ("IHSG PASTI naik karena..") —
 cukup sebut sebagai KONTEKS, bukan prediksi pasti.
 
-BAHASA: SEMUA teks di output (ringkasan, tiap item berita, detail tanggal_penting,
-alasan rekomendasi) WAJIB dalam Bahasa Indonesia — walau sumber berita aslinya
-bahasa Inggris, TERJEMAHIN/tulis ulang dalam Bahasa Indonesia informal, JANGAN
-biarin ada teks bahasa Inggris nyempil atau campur bahasa.
+BAHASA: SEMUA teks di output (ringkasan, tiap item berita, detail tanggal_penting)
+WAJIB dalam Bahasa Indonesia — walau sumber berita aslinya bahasa Inggris,
+TERJEMAHIN/tulis ulang dalam Bahasa Indonesia informal, JANGAN biarin ada teks
+bahasa Inggris nyempil atau campur bahasa.
 
 FORMAT BERITA: JANGAN digabung jadi paragraf panjang (males dibaca) — PECAH per
 poin berita jadi 1 kalimat pendek per item, dikelompokin ke 3 kategori sentiment
 (positive/negative/netral), tiap item nyebutin saham yang kena dampak (kalau
 gak spesifik 1 saham, boleh nama sektor/"Market" umum).
 
-Output HARUS JSON valid, format:
+Output HARUS JSON valid, format (JANGAN nambahin field "rekomendasi" — itu
+ditempelin backend dari data asli, bukan dari kamu):
 {
   "market_sentiment": "bullish" | "bearish" | "neutral" | "mixed",
   "ringkasan": "1 kalimat pendek doang, overview umum kondisi market hari ini",
@@ -61,9 +64,38 @@ Output HARUS JSON valid, format:
     "negative": [{"saham": "BBCA", "berita": "1 kalimat pendek"}],
     "netral": [{"saham": "BBCA", "berita": "1 kalimat pendek"}]
   },
-  "tanggal_penting": [{"saham": "BBCA", "jenis": "RUPS", "tanggal": "2026-09-05", "detail": "ringkasan singkat"}],
-  "rekomendasi": [{"saham": "BBCA", "alasan": "kenapa direkomendasiin, berdasarkan data mana"}]
+  "tanggal_penting": [{"saham": "BBCA", "jenis": "RUPS", "tanggal": "2026-09-05", "detail": "ringkasan singkat"}]
 }"""
+
+CALL_SOURCE_LABEL = {"swing": "Swing", "bpjs": "BPJS", "bsjp": "BSJP"}
+
+
+def _active_nexus_calls() -> list[dict]:
+    """Call NEXUS yang lagi aktif (waiting_entry/open) — DIPISAH dari teks
+    ringkasan/berita (user: jangan campur ke daily briefing AI, taruh di
+    "rekomendasi" doang, format nama emiten/harga entry-TP/call oleh).
+    Backend yang susun LANGSUNG dari signal_alerts (BUKAN Groq nebak dari
+    teks berita) — harga entry/TP-nya REAL data trading, bukan karangan."""
+    try:
+        res = (
+            supabase.table("signal_alerts")
+            .select("ticker,source,entry_price,target,stop_loss")
+            .in_("status", ["waiting_entry", "open"])
+            .order("alerted_at", desc=True)
+            .execute()
+        )
+    except Exception:
+        return []
+    return [
+        {
+            "ticker": r["ticker"],
+            "entry_price": r["entry_price"],
+            "target": r["target"],
+            "stop_loss": r["stop_loss"],
+            "call_oleh": CALL_SOURCE_LABEL.get(r["source"], r["source"]),
+        }
+        for r in res.data
+    ]
 
 
 MAX_ENTRIES = 15  # cap biar gak kena limit TPM Groq (8000 token/menit) kalau intel numpuk banyak
@@ -87,7 +119,6 @@ def _generate_briefing(days: int = 3) -> dict:
             "market_sentiment": "neutral",
             "ringkasan": "Belum ada intel yang masuk beberapa hari terakhir — belum bisa disintesis.",
             "tanggal_penting": [],
-            "rekomendasi": [],
         }
     else:
         lines = [
@@ -103,6 +134,7 @@ def _generate_briefing(days: int = 3) -> dict:
 
     briefing["global_context"] = global_context or None
     briefing["tanggal"] = today_wib().isoformat()
+    briefing["rekomendasi"] = _active_nexus_calls()  # ditempelin backend, BUKAN dari Groq (lihat CALL_SOURCE_LABEL di atas)
     supabase.table("daily_briefing").upsert(briefing, on_conflict="tanggal").execute()
     return briefing
 
