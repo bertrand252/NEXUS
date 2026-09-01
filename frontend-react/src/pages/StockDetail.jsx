@@ -85,12 +85,25 @@ function DeltaBadge({ pct, label }) {
   return <span className={pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>{label} {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%</span>;
 }
 
+// Angka laporan keuangan bisa belasan digit (Rp62.714.280.000.000) — gak
+// kebaca sekali liat. Singkat jadi T/M/Jt (Triliun/Miliar/Juta), pola sama
+// kayak laporan sekuritas beneran (contoh referensi user: "dalam jutaan Rupiah").
+function fmtRupiahCompact(v) {
+  const n = Number(v);
+  if (isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return `Rp${(n / 1e12).toLocaleString('id-ID', { maximumFractionDigits: 2 })} T`;
+  if (abs >= 1e9) return `Rp${(n / 1e9).toLocaleString('id-ID', { maximumFractionDigits: 2 })} M`;
+  if (abs >= 1e6) return `Rp${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 2 })} Jt`;
+  return `Rp${n.toLocaleString('id-ID')}`;
+}
+
 function FinancialMetric({ m, title }) {
   if (!m) return <p className="text-slate-500 text-[11px]">{title}: gak nemu baris standar di data ini.</p>;
   return (
     <div>
       <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{title} ({m.col})</p>
-      <p className="text-lg font-mono font-bold text-white">Rp{Number(m.amount).toLocaleString('id-ID')}</p>
+      <p className="text-lg font-mono font-bold text-white">{fmtRupiahCompact(m.amount)}</p>
       <div className="flex gap-3 mt-1 text-[11px]">
         <DeltaBadge pct={m.qoqPct} label="QoQ" />
         <DeltaBadge pct={m.yoyPct} label="YoY" />
