@@ -10,7 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from html import escape as _esc
 import yfinance as yf
 from config import supabase, WIB, today_wib
-from routers.scanner import _get_history, _get_history_intraday
+from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
@@ -1869,6 +1869,32 @@ async def run_bsjp_hold_check() -> None:
 
 MARKET_OPEN = time(9, 0)
 MARKET_CLOSE = time(15, 50)
+
+SCANNER_REFRESH_HOUR = 16  # 10 menit abis market tutup — cukup buffer settlement,
+SCANNER_REFRESH_MINUTE = 0  # tapi masih hari ini biar breakout hari ini kepake off-hours malam ini
+
+
+async def run_scanner_refresh() -> None:
+    """scanner_cache SEBELUMNYA cuma di-refresh manual (tombol Scanner) — ketauan
+    pernah basi 7 HARI gara-gara gak ada yang klik, padahal ini SUMBER pool
+    kandidat Swing/BPJS (_gather_candidates query technical_score/
+    breakout_confirmed dari sini) — breakout minggu ini gak pernah kedeteksi
+    selama itu. Sekarang auto-refresh 1x/hari abis market tutup (reuse
+    refresh_scanner_data yang udah ada throttle 5-worker + retry rate-limit,
+    sama logic kayak tombol manual, cuma dipanggil otomatis)."""
+    while True:
+        now = _now_wib()
+        target = now.replace(hour=SCANNER_REFRESH_HOUR, minute=SCANNER_REFRESH_MINUTE, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        if not is_trading_day(_now_wib().date()):
+            continue
+        try:
+            result = refresh_scanner_data()
+            log.info(f"scanner_cache auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
+        except Exception:
+            log.exception("run_scanner_refresh gagal")
 
 BPJS_POOL_LIMIT = 15  # lebih kecil dari pool Swing (20) — dipanggil berkali-kali/hari
                         # (tiap jam pas market buka), bukan 1x/hari kayak Swing/BSJP

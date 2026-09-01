@@ -20,12 +20,13 @@ from scheduler import (
     run_telegram_channel_listener,
     run_telegram_scrape_listener,
     run_entry_zone_watcher,
+    run_scanner_refresh,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """10 task background (lihat scheduler.py buat detail tiap fungsi):
+    """11 task background (lihat scheduler.py buat detail tiap fungsi):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
     (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:30, screener BSJP +
     pertimbangan hold/exit BPJS yang masih open), run_bsjp_hold_check (12:00,
@@ -34,8 +35,10 @@ async def lifespan(app: FastAPI):
     run_telegram_channel_listener (channel yang bot-nya admin),
     run_telegram_scrape_listener (channel yang cuma di-subscribe biasa, di-scrape
     dari preview publik), run_entry_zone_watcher (tiap 15 menit pas market buka,
-    notif ENTRY ZONE real-time — bukan nunggu run_morning_routine besok pagi).
-    Semua skip diem-diem kalau config/setting terkait kosong/off."""
+    notif ENTRY ZONE real-time — bukan nunggu run_morning_routine besok pagi),
+    run_scanner_refresh (16:00 WIB abis market tutup, auto-refresh scanner_cache
+    — sebelumnya cuma manual, sempet basi 7 hari). Semua skip diem-diem kalau
+    config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
         asyncio.create_task(run_morning_routine()),
@@ -47,6 +50,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_telegram_channel_listener()),
         asyncio.create_task(run_telegram_scrape_listener()),
         asyncio.create_task(run_entry_zone_watcher()),
+        asyncio.create_task(run_scanner_refresh()),
     ]
     yield
     for t in tasks:

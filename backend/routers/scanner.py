@@ -261,17 +261,14 @@ def get_sector_rotation():
         return {"configured": True, "data": None}
 
 
-@router.post("/refresh")
-@limiter.limit("2/minute")
-def refresh_scanner(request: Request):
+def refresh_scanner_data() -> dict:
     """Live-fetch semua 951 ticker di data/idx_universe.json (paralel via thread pool,
     yfinance itu I/O-bound jadi ini bukan over-engineering — sequential bakal makan
-    berpuluh menit), hitung score, terus upsert ke scanner_cache. Manual trigger,
-    belum ada scheduler otomatis.
-
-    Rate limit KETAT (2/menit) — bukan cuma jaga backend NEXUS, tapi jaga-jaga
-    Yahoo Finance (951 request ke yfinance per panggilan, udah pernah kena
-    "Too Many Requests" gara-gara terlalu sering refresh, lihat insiden #8)."""
+    berpuluh menit), hitung score, terus upsert ke scanner_cache. Dipanggil route
+    /refresh (manual, tombol) DAN scheduler.py::run_scanner_refresh (otomatis
+    tiap hari abis market tutup — sebelumnya cuma manual, scanner_cache pernah
+    basi 7 HARI gara-gara gak ada yang klik tombol, itung dari data breakout
+    yang dipake seleksi Swing/BPJS jadi ikut basi juga)."""
     accum_lookup = _build_accum_lookup()
 
     def _fetch_one(ticker: str) -> dict:
@@ -311,6 +308,15 @@ def refresh_scanner(request: Request):
         supabase.table("scanner_cache").upsert(chunk, on_conflict="ticker").execute()
 
     return {"refreshed": len(results), "failed": len(errors), "errors": errors[:30]}
+
+
+@router.post("/refresh")
+@limiter.limit("2/minute")
+def refresh_scanner(request: Request):
+    """Rate limit KETAT (2/menit) — bukan cuma jaga backend NEXUS, tapi jaga-jaga
+    Yahoo Finance (951 request ke yfinance per panggilan, udah pernah kena
+    "Too Many Requests" gara-gara terlalu sering refresh, lihat insiden #8)."""
+    return refresh_scanner_data()
 
 
 @router.post("/refresh-fundamentals")
