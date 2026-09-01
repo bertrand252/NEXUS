@@ -337,6 +337,7 @@ const AKUM_PERIODS = [
   { key: 7, label: '1 Minggu' },
   { key: 14, label: '2 Minggu' },
   { key: 30, label: '1 Bulan' },
+  { key: 150, label: '5 Bulan' },
   { key: 365, label: '1 Tahun' },
 ];
 
@@ -463,7 +464,7 @@ export default function StockDetail() {
   const [brokerFlow, setBrokerFlow] = useState(null);
   const [brokerFlowFrom, setBrokerFlowFrom] = useState(new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
   const [brokerFlowTo, setBrokerFlowTo] = useState(BROKER_FLOW_MAX_DATE);
-  const [akumDays, setAkumDays] = useState(7);
+  const [akumDays, setAkumDays] = useState(150); // default 5 bulan
   useEffect(() => {
     let cancelled = false;
     setBrokerFlow(null);

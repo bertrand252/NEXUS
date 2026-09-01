@@ -435,7 +435,7 @@ def annotate_chart(ticker: str):
 
 
 @router.get("/{ticker}/broker-flow")
-def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to_date: str | None = None, akum_days: int = 7):
+def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to_date: str | None = None, akum_days: int = 150):
     """Tab "Broker Flow" (StockDetail) — broker summary, broker stalker (top
     broker net buy/sell), insider activity, notation, volume profile. SEMUA
     field None + configured=False kalau INVEZGO_API_KEY belum diisi. Tiap
