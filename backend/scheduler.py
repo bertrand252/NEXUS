@@ -179,7 +179,7 @@ def _source_note(sources: list[str] | None, timeframes: list[str] | None = None,
     return f" [{labels}{tf_note}{rr_note}]"
 
 
-def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str]) -> str:
+def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str], bandar: dict | None = None) -> str:
     """Format HTML (parse_mode diaktifin di telegram_bot.py) — desain terinspirasi
     channel signal yang biasa dipake user (bold header + emoji per section), TAPI
     bukan niru persis, cuma referensi visual biar gak "jadul". Semua teks dinamis
@@ -200,6 +200,7 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
         )
     trend = TREND_LABEL.get(levels.get("trend"), "")
     trend_line = f"📈 <b>Trend</b> (weekly): {trend}\n\n" if trend else "\n"
+    bandar_line = f"{_format_bandar_line(bandar)}\n" if bandar else ""
     return (
         f"🔥 <b>SWING SIGNAL — {_esc(ticker)}</b>\n"
         f"Score {total_score}/100 · 🎯 Gaya: Swing\n"
@@ -209,6 +210,7 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
         f"{tp2_line}"
         f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%){_esc(sl_note)}\n"
         f"⚖️ <b>Risk:Reward (TP1)</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
+        f"{bandar_line}"
         f"{faktor_line}"
         f"📊 <b>Kenapa kuat:</b>\n{_esc(reasoning.get('alasan_strong', '-'))}\n\n"
         f"⚠️ <b>Alasan Risk/TP:</b>\n{_esc(reasoning.get('alasan_risk', '-'))}"
@@ -440,6 +442,28 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
                     ]
                 except Exception:
                     pass
+                # insider/pengendali (wajib lapor OJK) — jauh lebih kuat dari broker_net_top
+                # biasa kalau kepemilikan naik konsisten (lihat sistem prompt pick_alert_candidate)
+                try:
+                    insider_from = (today_wib() - timedelta(days=90)).isoformat()
+                    ins = invezgo_client.get_insider_activity(c["ticker"], insider_from, today_s, limit=5)
+                    fields["insider_activity"] = [
+                        {
+                            "date": r.get("date"), "name": r.get("name"),
+                            "prev_percent": r.get("prev_percent"), "next_percent": r.get("next_percent"),
+                            "purpose": r.get("purpose"), "nationality": r.get("nationality"),
+                        }
+                        for r in (ins.get("data") or [])
+                    ]
+                except Exception:
+                    pass
+                # broker paling akumulasi dari time series beneran (bukan snapshot) + konsistensi
+                # harian — reuse _detect_bandar (udah dipake Nightly Portfolio Review)
+                try:
+                    bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+                    fields["bandar"] = _detect_bandar(c["ticker"], bandar_from, today_s)
+                except Exception:
+                    pass
                 _invezgo_enrich_cache[c["ticker"]] = {"date": today_s, "fields": fields}
                 c.update(fields)
         filtered.append(c)
@@ -658,9 +682,13 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
         "mentor_call": candidate.get("mentor_call"),
         "event_ekonomi_global": macro_events,
         "fundamental": _fetch_fundamental_summary(ticker),
+        "order_flow": candidate.get("order_flow"),
+        "broker_net_top": candidate.get("broker_net_top"),
+        "bandar": candidate.get("bandar"),
+        "insider_activity": candidate.get("insider_activity"),
     }
     reasoning = analyze_alert(ticker, score_breakdown, levels, context)
-    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []))
+    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []), candidate.get("bandar"))
     message_id = send_alert_photo(chart_png, caption)
     if not message_id:
         return None  # Telegram belum di-connect di Settings, atau gagal kirim
