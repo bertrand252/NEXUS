@@ -136,10 +136,25 @@ def _dedup_count_since(category: str, since: date) -> int:
 
 
 def _check_invalidated() -> None:
-    """Ticker yang tadinya di-alert Strong hari ini, cek ulang statusnya —
-    kalau udah gak Strong lagi, kirim 1 notif teks (bukan foto), sekali aja
-    per ticker per hari."""
-    pending = _dedup_seen_keys("alerted") - _dedup_seen_keys("invalidated")
+    """Ticker yang lagi ada posisi Swing AKTIF (waiting_entry/open di
+    signal_alerts — BUKAN cuma yang di-alert HARI INI, posisi bisa kepegang
+    sampe SIGNAL_TIMEOUT_DAYS hari), cek ulang statusnya — kalau udah gak
+    Strong lagi, kirim 1 notif teks (bukan foto), sekali aja per ticker per
+    hari. Dulu pake _dedup_seen_keys("alerted") buat nentuin "pending" —
+    BUG: dedup itu di-scope per HARI (dedup_date=hari ini), jadi abis hari
+    alert-nya lewat, ticker itu gak pernah dicek ulang lagi seumur posisinya
+    (posisi Swing bisa idle sampe 14 hari tanpa peringatan sinyal udah
+    melemah). Fix: query langsung ke signal_alerts, sumber kebenaran posisi
+    aktif yang sebenernya."""
+    try:
+        pos_res = (
+            supabase.table("signal_alerts").select("ticker")
+            .eq("source", "swing").in_("status", ["waiting_entry", "open"])
+            .execute()
+        )
+        pending = {r["ticker"] for r in pos_res.data} - _dedup_seen_keys("invalidated")
+    except Exception:
+        return
     if not pending:
         return
     try:

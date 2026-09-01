@@ -13,6 +13,7 @@ Approximation yang cukup akurat buat kebanyakan kasus, bukan 100% presis.
 from datetime import date, timedelta
 import time
 import requests
+from config import today_wib
 
 HOLIDAY_URL = "https://raw.githubusercontent.com/guangrei/APIHariLibur_V2/main/calendar.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60  # data taunan, jarang berubah — cache 1 hari cukup
@@ -48,7 +49,7 @@ def upcoming_holidays(within_days: int = 3, from_date: date | None = None) -> li
     """Hari libur/weekend dalam N hari ke depan (exclude hari ini sendiri) —
     dipake buat sinyal "wait and see" (rawan profit taking sebelum bursa
     tutup lama)."""
-    start = from_date or date.today()
+    start = from_date or today_wib()
     holidays = _get_holidays()
     result = []
     for i in range(1, within_days + 1):
