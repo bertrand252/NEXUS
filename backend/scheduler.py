@@ -727,6 +727,7 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
             "status": "waiting_entry",  # belum "open" beneran — nunggu harga kesentuh zona entry dulu
             "telegram_message_id": message_id,  # dipake buat unsend pas posisi ditutup
             "source": "swing",
+            "faktor_pendukung": pick.get("faktor_pendukung", []),  # buat korelasiin faktor->outcome nanti (Weekly Postmortem), dulu ilang abis kekirim caption
         }).execute()
     except Exception:
         pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
@@ -1643,6 +1644,12 @@ def _check_bsjp_screener() -> None:
                     "stop_loss": c["levels"]["stop_loss"],
                     "status": "open",
                     "source": "bsjp",
+                    "faktor_pendukung": {
+                        "volume_ratio_s2": c["takeoff"]["volume_ratio"],
+                        "price_change_pct_s2": c["takeoff"]["price_change_pct"],
+                        "s1_spike_supporting": c["takeoff"].get("s1_spike_supporting"),
+                        "full_day_pct": c.get("full_day_pct"),
+                    },
                 }).execute()
             except Exception:
                 pass
@@ -1931,6 +1938,7 @@ def _check_bpjs() -> None:
             "status": "waiting_entry",
             "telegram_message_id": message_id,
             "source": "bpjs",
+            "faktor_pendukung": pick.get("faktor_pendukung", []),
         }).execute()
     except Exception:
         pass
