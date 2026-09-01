@@ -21,18 +21,30 @@ def _build_accum_lookup() -> dict | None:
     """{ticker: "accum"|"dist"} dari top BDM flow + foreign flow Invezgo, 1x per
     refresh (bukan per-ticker call — endpoint-nya udah ngasih semua top mover
     market sekaligus). None kalau Invezgo belum di-subscribe atau lagi error
-    (biar refresh_scanner tetap jalan pake mock, gak ikut gagal total)."""
+    (biar refresh_scanner tetap jalan pake mock, gak ikut gagal total).
+
+    Invezgo update data accum/foreign HARI INI baru ~17:00-18:00 WIB (abis
+    market tutup) — kalau refresh dipanggil sebelum itu (siang/pagi, market
+    masih buka), list "hari ini" masih kosong, tiap ticker jatuh ke skor netral
+    (bukan salah, tapi jadi gak ada sinyal buat SEMUA 951 saham). Fallback ke
+    KEMARIN kalau hari ini kosong, biar Accumulation Score tetep berguna
+    sepanjang hari, bukan cuma abis jam 18."""
     if not invezgo_client.is_configured():
         return None
     today = today_wib().isoformat()
+    yday = (today_wib() - timedelta(days=1)).isoformat()
     lookup: dict = {}
     try:
         acc = invezgo_client.get_top_accumulation(today)
+        if not acc.get("accum") and not acc.get("dist"):
+            acc = invezgo_client.get_top_accumulation(yday)
         for row in acc.get("accum", []):
             lookup[row["code"]] = "accum"
         for row in acc.get("dist", []):
             lookup[row["code"]] = "dist"
         frn = invezgo_client.get_top_foreign(today)
+        if not frn.get("accum") and not frn.get("dist"):
+            frn = invezgo_client.get_top_foreign(yday)
         for row in frn.get("accum", []):
             lookup.setdefault(row["code"], "accum")
         for row in frn.get("dist", []):
