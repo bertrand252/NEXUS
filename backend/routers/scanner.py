@@ -423,7 +423,7 @@ def annotate_chart(ticker: str):
 
 
 @router.get("/{ticker}/broker-flow")
-def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to_date: str | None = None):
+def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to_date: str | None = None, akum_days: int = 7):
     """Tab "Broker Flow" (StockDetail) — broker summary, broker stalker (top
     broker net buy/sell), insider activity, notation, volume profile. SEMUA
     field None + configured=False kalau INVEZGO_API_KEY belum diisi. Tiap
@@ -435,7 +435,12 @@ def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to
     dari IPO), override `days` kalau dikasih. Diclamp maksimal 2 tahun ke
     belakang — batas histori MAKSIMAL yang Invezgo simpen (dikonfirmasi
     langsung ke owner, lihat CLAUDE.md), minta lebih dari itu Invezgo-nya
-    sendiri gak punya datanya."""
+    sendiri gak punya datanya.
+
+    `akum_days`: periode Top Akumulator, TERPISAH dari from_date/to_date
+    broker_summary (user: jangan digabung sama date-picker custom, kasih
+    preset sendiri 1 Minggu/2 Minggu/1 Bulan/1 Tahun) — dari sekarang mundur
+    N hari, diclamp sama kayak from_date."""
     ticker = ticker.upper()
     if not invezgo_client.is_configured():
         return {
@@ -456,15 +461,18 @@ def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to
     except Exception:
         result["broker_summary"] = None
 
-    # broker paling gede net-buy di rentang yang sama -> liat histori akumulasi
-    # dia khusus di saham ini (broker stalker butuh 2 parameter: broker+stock,
-    # jadi harus tau broker MANA dulu dari broker_summary di atas). net_value
-    # balik sebagai STRING dari API (bukan number) — WAJIB di-cast float sebelum
-    # dibandingin, kalau enggak max() bakal sort leksikografis (salah: string
-    # "9000" > "150000" secara alfabet padahal angkanya lebih kecil)
+    # broker paling gede net-buy di PERIODE akum_days-nya SENDIRI (bukan
+    # from_date/to_date broker_summary) -> liat histori akumulasi dia khusus
+    # di saham ini (broker stalker butuh 2 parameter: broker+stock, jadi
+    # harus tau broker MANA dulu). net_value balik sebagai STRING dari API
+    # (bukan number) — WAJIB di-cast float sebelum dibandingin, kalau enggak
+    # max() bakal sort leksikografis (salah: string "9000" > "150000" secara
+    # alfabet padahal angkanya lebih kecil)
     try:
-        top_broker = max(result["broker_summary"], key=lambda b: float(b.get("net_value") or 0)) if result["broker_summary"] else None
-        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, from_date, to_date) if top_broker else None
+        akum_from = max((today_wib() - timedelta(days=akum_days)).isoformat(), oldest_allowed)
+        akum_bs = invezgo_client.get_broker_summary(ticker, akum_from, today)
+        top_broker = max(akum_bs, key=lambda b: float(b.get("net_value") or 0)) if akum_bs else None
+        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, akum_from, today) if top_broker else None
     except Exception:
         result["top_broker_stalker"] = None
 

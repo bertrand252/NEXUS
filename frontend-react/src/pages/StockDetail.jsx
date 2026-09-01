@@ -85,15 +85,15 @@ function DeltaBadge({ pct, label }) {
 }
 
 // Angka laporan keuangan bisa belasan digit (Rp62.714.280.000.000) — gak
-// kebaca sekali liat. Singkat jadi T/M/Jt (Triliun/Miliar/Juta), pola sama
-// kayak laporan sekuritas beneran (contoh referensi user: "dalam jutaan Rupiah").
+// kebaca sekali liat. Singkat pake K/M/B (Thousand/Million/Billion) — user
+// minta satuan Inggris, bukan T/M/Jt Indonesia.
 function fmtRupiahCompact(v) {
   const n = Number(v);
   if (isNaN(n)) return '—';
   const abs = Math.abs(n);
-  if (abs >= 1e12) return `Rp${(n / 1e12).toLocaleString('id-ID', { maximumFractionDigits: 2 })} T`;
-  if (abs >= 1e9) return `Rp${(n / 1e9).toLocaleString('id-ID', { maximumFractionDigits: 2 })} M`;
-  if (abs >= 1e6) return `Rp${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 2 })} Jt`;
+  if (abs >= 1e9) return `Rp${(n / 1e9).toLocaleString('id-ID', { maximumFractionDigits: 2 })} B`;
+  if (abs >= 1e6) return `Rp${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 2 })} M`;
+  if (abs >= 1e3) return `Rp${(n / 1e3).toLocaleString('id-ID', { maximumFractionDigits: 2 })} K`;
   return `Rp${n.toLocaleString('id-ID')}`;
 }
 
@@ -333,7 +333,14 @@ const BROKER_FLOW_MAX_DATE = new Date().toISOString().slice(0, 10);
 // bilang "ribet, kebanyakan API" — versi ini cukup 1 endpoint, get_broker_summary,
 // range-nya dari `days` di StockDetail). net_value/buy_avg/sell_avg SEMUA
 // balik STRING dari API, WAJIB Number() dulu.
-function BrokerSummaryTable({ brokers, topAkumulator }) {
+const AKUM_PERIODS = [
+  { key: 7, label: '1 Minggu' },
+  { key: 14, label: '2 Minggu' },
+  { key: 30, label: '1 Bulan' },
+  { key: 365, label: '1 Tahun' },
+];
+
+function BrokerSummaryTable({ brokers, topAkumulator, akumPeriod, onAkumPeriodChange }) {
   const withNet = brokers.map((b) => ({ ...b, netNum: Number(b.net_value), lotNum: Number(b.net_volume) / 100 }));
   const buyers = withNet.filter((b) => b.netNum > 0).sort((a, b) => b.netNum - a.netNum).slice(0, 8);
   const sellers = withNet.filter((b) => b.netNum < 0).sort((a, b) => a.netNum - b.netNum).slice(0, 8);
@@ -353,8 +360,8 @@ function BrokerSummaryTable({ brokers, topAkumulator }) {
           const rawAvg = positive ? b.buy_avg : b.sell_avg;
           const avg = rawAvg != null ? Number(rawAvg) : null;
           return (
-            <tr key={b.code} title={b.name} className="border-b border-border/30 last:border-0 cursor-help">
-              <td className={`py-1 font-mono font-bold ${positive ? 'text-emerald-400' : 'text-red-400'}`}>{b.code}</td>
+            <tr key={b.code} className="border-b border-border/30 last:border-0">
+              <td title={b.name} className={`py-1 font-mono font-bold cursor-help ${positive ? 'text-emerald-400' : 'text-red-400'}`}>{b.code}</td>
               <td className="text-right text-slate-400 font-mono">{Math.abs(b.lotNum).toLocaleString('id-ID')}</td>
               <td className={`text-right font-mono font-semibold ${positive ? 'text-emerald-400' : 'text-red-400'}`}>{fmtRupiahCompact(Math.abs(b.netNum))}</td>
               <td className="text-right text-slate-500 font-mono">{avg != null && !isNaN(avg) ? Math.round(avg).toLocaleString('id-ID') : '—'}</td>
@@ -377,11 +384,24 @@ function BrokerSummaryTable({ brokers, topAkumulator }) {
           {sellers.length ? <Table rows={sellers} positive={false} /> : <p className="text-slate-500 text-xs">Gak ada.</p>}
         </div>
       </div>
-      {topAkumulator && (
-        <p className="text-[11px] text-slate-400 mt-3 pt-3 border-t border-border/30">
-          Top akumulator: <span className="font-mono font-bold text-white">{topAkumulator.broker}</span> — {topAkumulator.active} hari aktif, total {fmtRupiahCompact(topAkumulator.total)}
-        </p>
-      )}
+      <div className="mt-3 pt-3 border-t border-border/30">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-1.5">
+          <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Top Akumulator</p>
+          <div className="flex items-center gap-1">
+            {AKUM_PERIODS.map((p) => (
+              <button key={p.key} onClick={() => onAkumPeriodChange(p.key)}
+                className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition ${akumPeriod === p.key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {topAkumulator ? (
+          <p className="text-[11px] text-slate-400">
+            <span className="font-mono font-bold text-white">{topAkumulator.broker}</span> — {topAkumulator.active} hari aktif, total {fmtRupiahCompact(topAkumulator.total)}
+          </p>
+        ) : <p className="text-[11px] text-slate-500">Belum ada data histori broker.</p>}
+      </div>
     </div>
   );
 }
@@ -443,15 +463,16 @@ export default function StockDetail() {
   const [brokerFlow, setBrokerFlow] = useState(null);
   const [brokerFlowFrom, setBrokerFlowFrom] = useState(new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
   const [brokerFlowTo, setBrokerFlowTo] = useState(BROKER_FLOW_MAX_DATE);
+  const [akumDays, setAkumDays] = useState(7);
   useEffect(() => {
     let cancelled = false;
     setBrokerFlow(null);
-    fetch(`${API_BASE}/scanner/${ticker}/broker-flow?from_date=${brokerFlowFrom}&to_date=${brokerFlowTo}`)
+    fetch(`${API_BASE}/scanner/${ticker}/broker-flow?from_date=${brokerFlowFrom}&to_date=${brokerFlowTo}&akum_days=${akumDays}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((json) => { if (!cancelled) setBrokerFlow(json); })
       .catch(() => { if (!cancelled) setBrokerFlow(null); });
     return () => { cancelled = true; };
-  }, [ticker, brokerFlowFrom, brokerFlowTo]);
+  }, [ticker, brokerFlowFrom, brokerFlowTo, akumDays]);
 
   const m = signalMeta(data?.signal);
   const needleDeg = data ? (data.total_score / 100) * 180 - 90 : -90;
@@ -650,6 +671,8 @@ export default function StockDetail() {
                     active: brokerFlow.top_broker_stalker.summary.active,
                     total: brokerFlow.top_broker_stalker.summary.total,
                   } : null}
+                  akumPeriod={akumDays}
+                  onAkumPeriodChange={setAkumDays}
                 />
               ) : <p className="text-sm text-slate-500 py-4 text-center">Gagal ambil data broker summary buat rentang ini — coba lagi nanti.</p>}
             </div>
