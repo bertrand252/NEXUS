@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import MarketEvents from './pages/MarketEvents';
 import Analytics from './pages/Analytics';
 import Journal from './pages/Journal';
+import HistoryNexus from './pages/HistoryNexus';
 import Scanner from './pages/Scanner';
 import StockDetail from './pages/StockDetail';
 import Dashboard from './pages/Dashboard';
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/market-events" element={<MarketEvents />} />
           <Route path="/portfolio-simulation" element={<PortfolioSimulation />} />
           <Route path="/journal" element={<Journal />} />
+          <Route path="/history-nexus" element={<HistoryNexus />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

@@ -39,3 +39,24 @@ def get_signal_track_stats():
         "tp_hit": tp_hit, "sl_hit": sl_hit, "timeout": timeout,
         "win_rate_pct": win_rate_pct, "warning": None,
     }
+
+
+@router.get("/history")
+def get_signal_track_history():
+    """List LENGKAP tiap call NEXUS (Swing/BPJS, `source`) — beda dari /stats
+    yang cuma agregat, ini per-baris: entry/target/SL, status, harga close,
+    outcome_pct (PnL realized). Dipake halaman "History NEXUS" (sidebar) biar
+    user liat sendiri tiap call kejemput/enggak + akurasinya, bukan cuma
+    angka win-rate doang. Status kena update TIAP PAGI dari
+    scheduler.py::_check_signal_outcomes() (closing kemarin, sebelum market
+    buka) — bukan real-time, TAPI ngecek 1x/hari abis tutup pasar."""
+    try:
+        res = (
+            supabase.table("signal_alerts")
+            .select("ticker,source,status,entry_price,entry_low,entry_high,target,stop_loss,alerted_at,closed_at,close_price,outcome_pct")
+            .order("alerted_at", desc=True)
+            .execute()
+        )
+    except Exception:
+        return {"data": [], "warning": "Tabel signal_alerts belum ada / gak bisa diakses — jalanin SQL setup dulu di Supabase."}
+    return {"data": res.data, "warning": None}
