@@ -319,17 +319,17 @@ def refresh_scanner(request: Request):
     return refresh_scanner_data()
 
 
-@router.post("/refresh-fundamentals")
-@limiter.limit("2/minute")
-def refresh_fundamentals(request: Request):
+def refresh_fundamentals_data() -> dict:
     """Data fundamental (PER/PBV/dividend yield/market cap) buat Invest
-    criteria — TERPISAH dari POST /refresh (harga/volume) karena beda cadence
-    (fundamental jarang berubah harian, gak perlu di-refresh tiap kali harga
-    di-refresh) dan `.info` lebih berat ke yfinance dibanding `.history()`.
-    Manual trigger doang, belum ada scheduler otomatis (gak ada urgensi).
-    Cuma nyentuh ticker yang UDAH ada row-nya di scanner_cache — kalau upsert
-    dibiarin bikin row baru buat ticker yang belum pernah lolos refresh price
-    (`POST /refresh`), row itu bakal punya price/total_score/signal NULL, dan
+    criteria — TERPISAH dari refresh_scanner_data (harga/volume) karena beda
+    cadence (fundamental jarang berubah harian, gak perlu di-refresh tiap
+    kali harga di-refresh) dan `.info` lebih berat ke yfinance dibanding
+    `.history()`. Dipanggil route /refresh-fundamentals (manual) DAN
+    scheduler.py::run_fundamentals_refresh (otomatis MINGGUAN, bukan harian —
+    cadence-nya emang lambat, harian cuma boros .info call buat data yang
+    gak berubah). Cuma nyentuh ticker yang UDAH ada row-nya di scanner_cache —
+    kalau upsert dibiarin bikin row baru buat ticker yang belum pernah lolos
+    refresh price, row itu bakal punya price/total_score/signal NULL, dan
     frontend crash pas manggil `.toLocaleString()` di harga yang null."""
     try:
         existing = supabase.table("scanner_cache").select("ticker").execute()
@@ -370,6 +370,12 @@ def refresh_fundamentals(request: Request):
         supabase.table("scanner_cache").upsert(chunk, on_conflict="ticker").execute()
 
     return {"refreshed": len(results), "failed": len(errors), "errors": errors[:30]}
+
+
+@router.post("/refresh-fundamentals")
+@limiter.limit("2/minute")
+def refresh_fundamentals(request: Request):
+    return refresh_fundamentals_data()
 
 
 class TranslateInput(BaseModel):

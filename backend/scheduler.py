@@ -10,7 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from html import escape as _esc
 import yfinance as yf
 from config import supabase, WIB, today_wib
-from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data
+from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
@@ -1895,6 +1895,33 @@ async def run_scanner_refresh() -> None:
             log.info(f"scanner_cache auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
         except Exception:
             log.exception("run_scanner_refresh gagal")
+
+
+FUNDAMENTALS_REFRESH_HOUR = 16
+FUNDAMENTALS_REFRESH_MINUTE = 30  # 30 menit abis run_scanner_refresh — biar ticker BARU (baru
+                                   # ke-refresh price-nya jam 16:00) ikut ke-cover fundamentals-nya juga
+
+
+async def run_fundamentals_refresh() -> None:
+    """Sama gap kayak scanner_cache (manual-trigger doang) — tapi cadence-nya
+    MINGGUAN bukan harian, PER/PBV/dividend/market_cap emang jarang berubah
+    harian (beda dari breakout/harga yang harus fresh tiap hari), harian
+    cuma boros .info call (lebih berat dari .history()) buat data yang gak
+    berubah. Senin 16:30 WIB — abis weekend, mulai minggu baru."""
+    while True:
+        now = _now_wib()
+        days_until_monday = (0 - now.weekday()) % 7  # Python weekday(): Senin=0
+        target = (now + timedelta(days=days_until_monday)).replace(
+            hour=FUNDAMENTALS_REFRESH_HOUR, minute=FUNDAMENTALS_REFRESH_MINUTE, second=0, microsecond=0,
+        )
+        if target <= now:
+            target += timedelta(days=7)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            result = refresh_fundamentals_data()
+            log.info(f"fundamentals auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
+        except Exception:
+            log.exception("run_fundamentals_refresh gagal")
 
 BPJS_POOL_LIMIT = 15  # lebih kecil dari pool Swing (20) — dipanggil berkali-kali/hari
                         # (tiap jam pas market buka), bukan 1x/hari kayak Swing/BSJP
