@@ -234,13 +234,22 @@ def invest_criteria(per: float | None, pbv: float | None, dividend_yield: float 
     kemahalan. CATATAN: ini bukan angka baku dari 1 sumber tunggal, gue
     reconcile dari beberapa kriteria screener value-investing + catatan lama
     project ("big cap + dividend") — kalau ada acuan lebih spesifik (misal
-    dari mentor), tinggal di-tweak angkanya di sini, 1 tempat doang."""
+    dari mentor), tinggal di-tweak angkanya di sini, 1 tempat doang.
+
+    BUG ketemu 2026-09-01: pbv di-require non-None (nolak kalau kosong) tapi
+    NILAINYA gak pernah dicek — saham PBV segila apapun bisa lolos selama
+    PER/dividend/market_cap oke (kejadian nyata: PGAS PBV 13.290x dari data
+    live, kemungkinan besar distorsi buku, tetep bisa lolos tanpa cap ini).
+    Fix: tambah cap PBV <=3 — standar value-investing longgar (Graham klasik
+    malah <=1.5), cukup buat nolak outlier ekstrim tapi masih ngasih ruang
+    blue-chip IDX normal (BBRI/TLKM/ASII semua di bawah 2 dari data live)."""
     if per is None or pbv is None or dividend_yield is None or market_cap is None:
         return False
     return (
         market_cap >= 10_000_000_000_000  # Rp10 triliun ke atas
         and dividend_yield >= 3
         and 0 < per <= 25
+        and 0 < pbv <= 3
     )
 
 
