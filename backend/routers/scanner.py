@@ -421,49 +421,55 @@ def annotate_chart(ticker: str):
 
 
 @router.get("/{ticker}/broker-flow")
-def get_broker_flow(ticker: str):
-    """Kerangka tab "Broker Flow" (StockDetail) — broker summary, broker stalker
-    (top broker net buy/sell hari ini), insider activity, notation, order queue,
-    tape reading, volume profile. SEMUA field None + configured=False kalau
-    INVEZGO_API_KEY belum diisi — frontend nampilin "Belum tersedia" jujur,
-    BUKAN data ngarang. Dibuat sebelum key aktif, jadi tiap field independen
-    (1 gagal gak nge-block yang lain) karena struktur response REAL belum
-    pernah diverifikasi lawan API asli."""
+def get_broker_flow(ticker: str, days: int = 7):
+    """Tab "Broker Flow" (StockDetail) — broker summary, broker stalker (top
+    broker net buy/sell), insider activity, notation, volume profile. SEMUA
+    field None + configured=False kalau INVEZGO_API_KEY belum diisi. Tiap
+    field independen (1 gagal gak nge-block yang lain). Order Queue & Tape
+    Reading DIHAPUS (user: gak kepake buat analisa).
+
+    `days`: rentang broker_summary/broker_stalker — DULU chart candlestick+
+    net-flow overlay (Inventory Chart) fixed 7 hari, user komplain labelnya
+    numpuk gak kebaca + user sendiri usul lebih simpel: pilihan rentang
+    tanggal (preset, bukan custom) + tabel net buy/sell + avg harga per
+    broker SELAMA rentang itu (persis output get_broker_summary). Inventory
+    Chart DIHAPUS, diganti parameter ini di BrokerSummaryTable (frontend)."""
     ticker = ticker.upper()
     if not invezgo_client.is_configured():
         return {
             "configured": False,
             "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
             "notation": None, "price_table": None, "financial_statement": None, "price_seasonality": None,
-            "sankey_chart": None, "running_trade": None, "shareholder_above": None, "inventory_chart": None,
+            "sankey_chart": None, "shareholder_above": None,
         }
 
     today = today_wib().isoformat()
-    week_ago = (today_wib() - timedelta(days=7)).isoformat()
+    from_date = (today_wib() - timedelta(days=days)).isoformat()
     result = {"configured": True}
     try:
-        # rentang 7 hari (bukan cuma hari ini) — broker summary Invezgo update
-        # 17:00-18:00 WIB, kalau di-buka pagi/siang sebelum update hari ini
-        # keluar, rentang 1 hari doang bisa kosong melulu
-        result["broker_summary"] = invezgo_client.get_broker_summary(ticker, week_ago, today)
+        result["broker_summary"] = invezgo_client.get_broker_summary(ticker, from_date, today)
     except Exception:
         result["broker_summary"] = None
 
-    # broker paling gede net-buy 7 hari terakhir -> liat histori akumulasi dia
-    # khusus di saham ini (broker stalker butuh 2 parameter: broker+stock,
+    # broker paling gede net-buy di rentang yang sama -> liat histori akumulasi
+    # dia khusus di saham ini (broker stalker butuh 2 parameter: broker+stock,
     # jadi harus tau broker MANA dulu dari broker_summary di atas). net_value
     # balik sebagai STRING dari API (bukan number) — WAJIB di-cast float sebelum
     # dibandingin, kalau enggak max() bakal sort leksikografis (salah: string
     # "9000" > "150000" secara alfabet padahal angkanya lebih kecil)
     try:
         top_broker = max(result["broker_summary"], key=lambda b: float(b.get("net_value") or 0)) if result["broker_summary"] else None
-        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, week_ago, today) if top_broker else None
+        result["top_broker_stalker"] = invezgo_client.get_broker_stalker(top_broker["code"], ticker, from_date, today) if top_broker else None
     except Exception:
         result["top_broker_stalker"] = None
 
     try:
+        # 730 hari (2 tahun) — batas MAKSIMAL histori yang Invezgo simpen
+        # (dikonfirmasi owner langsung, lihat CLAUDE.md), user minta "fetch
+        # semua" bukan window pendek 90 hari kayak sebelumnya. limit dinaikin
+        # dari default 10 biar histori 2 tahun gak kepotong ke halaman 1 doang.
         result["insider_activity"] = invezgo_client.get_insider_activity(
-            ticker, (today_wib() - timedelta(days=90)).isoformat(), today,
+            ticker, (today_wib() - timedelta(days=730)).isoformat(), today, limit=50,
         )
     except Exception:
         result["insider_activity"] = None
@@ -498,42 +504,10 @@ def get_broker_flow(ticker: str):
     except Exception:
         result["sankey_chart"] = None
     try:
-        # time series akumulasi/distribusi broker (BEDA dari broker_summary yang
-        # cuma snapshot digabung 1 angka) — jauh lebih cocok jadi Accumulation
-        # Score asli ketimbang yang sekarang masih mock
-        result["inventory_chart"] = invezgo_client.get_inventory_chart_stock(ticker, week_ago, today)
-    except Exception:
-        result["inventory_chart"] = None
-    try:
-        # tape reading — limit kecil (10) doang, ini ringkasan/preview,
-        # bukan full replay (lihat diskusi soal "jangan niru fitur replay
-        # Invezgo, boros kuota" — cukup transaksi terakhir buat konteks)
-        result["running_trade"] = invezgo_client.get_running_trade(ticker, today, limit=10)
-    except Exception:
-        result["running_trade"] = None
-    try:
         result["price_seasonality"] = invezgo_client.get_price_seasonality(ticker)
     except Exception:
         result["price_seasonality"] = None
     return result
-
-
-@router.get("/{ticker}/order-queue")
-def get_order_queue(ticker: str, price: float, side: str):
-    """Kerangka Order Queue — antrian order institusi di 1 level harga. BEDA dari
-    field lain di broker-flow: butuh input harga+sisi (BUY/SELL) interaktif dari
-    user, gak cocok jadi card statis yang auto-fetch, jadi endpoint terpisah.
-    Struktur response BELUM diverifikasi lawan API asli (lihat invezgo_client.py::
-    get_order_queue)."""
-    if not invezgo_client.is_configured():
-        return {"configured": False, "data": None}
-    side = side.upper()
-    if side not in ("BUY", "SELL"):
-        raise HTTPException(status_code=422, detail="side harus BUY atau SELL")
-    try:
-        return {"configured": True, "data": invezgo_client.get_order_queue(ticker.upper(), price, side)}
-    except Exception:
-        return {"configured": True, "data": None}
 
 
 @router.get("/top/ritel")

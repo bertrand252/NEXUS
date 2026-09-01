@@ -4,7 +4,6 @@ import { API_BASE } from '../lib/api';
 import { signalMeta, zoneLabel, zoneColorClass } from '../lib/signal';
 import { useChart } from '../hooks/useChart';
 import { useCandlestickChart } from '../hooks/useCandlestickChart';
-import { useInventoryChart } from '../hooks/useInventoryChart';
 
 // Shape CONFIRMED lawan API asli (2026-09-01): {"rows":[{id, name, level,
 // values:[{col, year, amount, period}], is_abstract}]} — pivot table (baris =
@@ -362,72 +361,40 @@ function SankeyFlowTable({ raw }) {
   );
 }
 
-const INVENTORY_LINE_COLORS = ['#06B6D4', '#8B5CF6', '#F59E0B', '#10B981', '#EF4444'];
 
-// Format CONFIRMED lawan OpenAPI spec asli: {"price":[{date,open,high,low,close,
-// volume}], "broker":[{"broker","data":[{"date","value"}]}]} — akumulasi/
-// distribusi broker dari waktu ke waktu (BEDA dari broker_summary yang cuma
-// snapshot 1 rentang tanggal). Candlestick harga + net value kumulatif per
-// broker overlay (top 5 paling aktif) — biar keliatan broker akumulasi PAS
-// HARGA lagi ngapain, bukan garis polos tanpa konteks (feedback user).
-function InventoryChart({ raw }) {
-  const brokers = raw?.broker;
-  const prices = raw?.price;
-  const hasData = Array.isArray(brokers) && brokers.length && Array.isArray(prices) && prices.length;
-
-  const priceCandles = hasData
-    ? [...prices].sort((a, b) => a.date.localeCompare(b.date)).map((p) => ({ time: p.date, open: p.open, high: p.high, low: p.low, close: p.close }))
-    : null;
-
-  const brokerLines = hasData
-    ? (() => {
-        const top = [...brokers].sort((a, b) => {
-          const sumA = (a.data || []).reduce((s, d) => s + Math.abs(d.value), 0);
-          const sumB = (b.data || []).reduce((s, d) => s + Math.abs(d.value), 0);
-          return sumB - sumA;
-        }).slice(0, 5);
-        const dates = [...new Set(top.flatMap((b) => (b.data || []).map((d) => d.date)))].sort();
-        return top.map((b, i) => {
-          let cum = 0;
-          const byDate = Object.fromEntries((b.data || []).map((d) => [d.date, d.value]));
-          return { broker: b.broker, color: INVENTORY_LINE_COLORS[i % 5], data: dates.map((d) => { cum += byDate[d] || 0; return { time: d, value: cum }; }) };
-        });
-      })()
-    : null;
-
-  const chartRef = useInventoryChart(priceCandles, brokerLines);
-  if (!hasData) return <p className="text-slate-500">Gak ada data inventory tercatat.</p>;
-  return (
-    <>
-      <div ref={chartRef} style={{ height: 280 }}></div>
-      <div className="flex items-center gap-3 flex-wrap mt-2">
-        {brokerLines.map((b) => (
-          <span key={b.broker} className="flex items-center gap-1 text-[10px]" style={{ color: b.color }}>
-            <span className="w-2 h-2 rounded-full inline-block" style={{ background: 'currentColor' }}></span>{b.broker}
-          </span>
-        ))}
-      </div>
-      <p className="text-[10px] text-slate-500 mt-1">Candlestick harga (kanan) + net value kumulatif broker (kiri), top 5 paling aktif (7 hari)</p>
-    </>
-  );
-}
+const DATE_RANGES = [
+  { key: 7, label: '1 Minggu' },
+  { key: 14, label: '2 Minggu' },
+  { key: 30, label: '1 Bulan' },
+  { key: 90, label: '3 Bulan' },
+];
 
 // Dulu bar chart net_value — user minta angka+badge doang (contoh: NeoBDM),
-// gak usah chart. net_value balik STRING dari API, WAJIB Number() dulu.
+// gak usah chart. Sekarang juga tampilin avg harga (buy_avg buat yang net
+// buy, sell_avg buat yang net sell) — user minta "avg buy avg sell selama
+// range" (gantiin rencana Inventory Chart candlestick+overlay yang user
+// bilang "ribet, kebanyakan API" — versi ini cukup 1 endpoint, get_broker_summary,
+// range-nya dari `days` di StockDetail). net_value/buy_avg/sell_avg SEMUA
+// balik STRING dari API, WAJIB Number() dulu.
 function BrokerSummaryTable({ brokers }) {
   const withNet = brokers.map((b) => ({ ...b, netNum: Number(b.net_value) }));
   const buyers = withNet.filter((b) => b.netNum > 0).sort((a, b) => b.netNum - a.netNum).slice(0, 8);
   const sellers = withNet.filter((b) => b.netNum < 0).sort((a, b) => a.netNum - b.netNum).slice(0, 8);
 
-  const Row = ({ b, positive }) => (
-    <div className="flex items-center gap-2 py-1 border-b border-border/30 last:border-0">
-      <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${positive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{b.code}</span>
-      <span className="text-[11px] text-slate-400 truncate flex-1">{b.name}</span>
-      <span className={`text-[11px] font-mono font-semibold shrink-0 ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-        Rp{Math.abs(b.netNum).toLocaleString('id-ID')}
-      </span>
-    </div>
-  );
+  const Row = ({ b, positive }) => {
+    const rawAvg = positive ? b.buy_avg : b.sell_avg;
+    const avg = rawAvg != null ? Number(rawAvg) : null;
+    return (
+      <div className="flex items-center gap-2 py-1 border-b border-border/30 last:border-0">
+        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${positive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{b.code}</span>
+        <span className="text-[11px] text-slate-400 truncate flex-1">{b.name}</span>
+        {avg != null && !isNaN(avg) && <span className="text-[10px] text-slate-500 font-mono shrink-0">avg Rp{avg.toLocaleString('id-ID')}</span>}
+        <span className={`text-[11px] font-mono font-semibold shrink-0 ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+          Rp{Math.abs(b.netNum).toLocaleString('id-ID')}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div className="grid grid-cols-2 gap-4 text-xs">
@@ -439,54 +406,6 @@ function BrokerSummaryTable({ brokers }) {
         <p className="text-[10px] text-red-400 uppercase tracking-wider mb-2 font-semibold">Net Sell</p>
         {sellers.length ? sellers.map((b) => <Row key={b.code} b={b} positive={false} />) : <p className="text-slate-500">Gak ada.</p>}
       </div>
-    </div>
-  );
-}
-
-function OrderQueueWidget({ ticker, defaultPrice }) {
-  const [price, setPrice] = useState(defaultPrice ?? '');
-  const [side, setSide] = useState('BUY');
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  async function fetchQueue(e) {
-    e.preventDefault();
-    if (!price) return;
-    setLoading(true);
-    setResult(null);
-    try {
-      const res = await fetch(`${API_BASE}/scanner/${ticker}/order-queue?price=${price}&side=${side}`);
-      setResult(await res.json());
-    } catch {
-      setResult({ configured: true, data: null });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div>
-      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Order Queue</p>
-      <form onSubmit={fetchQueue} className="flex items-center gap-2 mb-2">
-        <input type="number" step="any" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Harga"
-          className="w-20 bg-black/30 border border-border rounded-lg px-2 py-1 text-xs text-white font-mono" />
-        <select value={side} onChange={(e) => setSide(e.target.value)} className="bg-black/30 border border-border rounded-lg px-2 py-1 text-xs text-white">
-          <option value="BUY">BUY</option>
-          <option value="SELL">SELL</option>
-        </select>
-        <button type="submit" disabled={loading} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition disabled:opacity-50">
-          {loading ? '...' : 'Cek'}
-        </button>
-      </form>
-      {result && !result.configured && <p className="text-slate-500">Data gak tersedia.</p>}
-      {result?.configured && !result.data?.length && <p className="text-slate-500">Gak ada antrian di level harga ini.</p>}
-      {result?.configured && result.data?.length > 0 && (
-        <ul className="space-y-1 text-slate-300 font-mono max-h-32 overflow-auto">
-          {result.data.slice(0, 8).map((q, i) => (
-            <li key={i}>{q.time ?? '—'} · order {Number(q.order_volume ?? 0).toLocaleString('id-ID')} · sisa {Number(q.open_volume ?? 0).toLocaleString('id-ID')}</li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }
@@ -546,15 +465,16 @@ export default function StockDetail() {
   const candleRef = useCandlestickChart(candles, data?.levels, data?.ai_zones);
 
   const [brokerFlow, setBrokerFlow] = useState(null);
+  const [brokerFlowDays, setBrokerFlowDays] = useState(7);
   useEffect(() => {
     let cancelled = false;
     setBrokerFlow(null);
-    fetch(`${API_BASE}/scanner/${ticker}/broker-flow`)
+    fetch(`${API_BASE}/scanner/${ticker}/broker-flow?days=${brokerFlowDays}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((json) => { if (!cancelled) setBrokerFlow(json); })
       .catch(() => { if (!cancelled) setBrokerFlow(null); });
     return () => { cancelled = true; };
-  }, [ticker]);
+  }, [ticker, brokerFlowDays]);
 
   const m = signalMeta(data?.signal);
   const needleDeg = data ? (data.total_score / 100) * 180 - 90 : -90;
@@ -733,8 +653,18 @@ export default function StockDetail() {
           {brokerFlow?.configured && (
             <>
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Broker Summary (Net Value)</h3>
-              {brokerFlow.broker_summary?.length ? <BrokerSummaryTable brokers={brokerFlow.broker_summary} /> : <p className="text-sm text-slate-500 py-4 text-center">Gagal ambil data broker summary hari ini — coba lagi nanti.</p>}
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <h3 className="text-sm font-bold text-white tracking-tight">Broker Summary (Net Value)</h3>
+                <div className="flex items-center gap-1">
+                  {DATE_RANGES.map((r) => (
+                    <button key={r.key} onClick={() => setBrokerFlowDays(r.key)}
+                      className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition ${brokerFlowDays === r.key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {brokerFlow.broker_summary?.length ? <BrokerSummaryTable brokers={brokerFlow.broker_summary} /> : <p className="text-sm text-slate-500 py-4 text-center">Gagal ambil data broker summary buat rentang ini — coba lagi nanti.</p>}
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
@@ -748,44 +678,46 @@ export default function StockDetail() {
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Insider Activity (90 hari)</h3>
+              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Insider Activity (2 tahun terakhir)</h3>
               {brokerFlow.insider_activity?.data?.length ? (
-                <ul className="space-y-1.5 text-sm text-slate-300">
-                  {brokerFlow.insider_activity.data.slice(0, 5).map((row, i) => (
-                    <li key={i}>{row.name} <span className={row.change >= 0 ? 'text-emerald-400' : 'text-red-400'}>{row.change >= 0 ? '+' : ''}{row.change}%</span></li>
-                  ))}
+                <ul className="space-y-2 text-sm text-slate-300">
+                  {brokerFlow.insider_activity.data.slice(0, 8).map((row, i) => {
+                    const isNew = row.date && (Date.now() - new Date(row.date).getTime()) < 30 * 86400000;
+                    const role = (row.badge || '').replace(/[{}]/g, '');
+                    const latest = row.subrow?.[0];
+                    return (
+                      <li key={i} className="flex items-start justify-between gap-2 border-b border-border/30 last:border-0 pb-2 last:pb-0">
+                        <div>
+                          <span className="font-semibold text-white">{row.name}</span>
+                          {role && <span className="text-[10px] text-slate-500 ml-1">({role})</span>}
+                          {latest && (
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              <span className={latest.status === 'Buy' ? 'text-emerald-400' : 'text-red-400'}>{latest.status}</span>
+                              {' '}{Number(latest.value ?? 0).toLocaleString('id-ID')} lembar @Rp{Number(latest.price ?? 0).toLocaleString('id-ID')}
+                            </p>
+                          )}
+                        </div>
+                        {isNew && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-cyan/20 text-cyan shrink-0">BARU</span>}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : <p className="text-sm text-slate-500">Gak ada aktivitas insider tercatat.</p>}
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Notasi Khusus</h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-white tracking-tight">Notasi Khusus</h3>
+                <span title="Kode 'perhatian' resmi dari BEI yang nempel di 1 saham — misal UMA (Unusual Market Activity, harga/volume gerak gak wajar), suspend (saham distop sementara), atau notasi masalah laporan keuangan. Bukan larangan mutlak, tapi sinyal hati-hati sebelum masuk/nambah posisi" className="text-slate-500 cursor-help text-xs">ⓘ apa ini?</span>
+              </div>
               {brokerFlow.notation?.list?.length ? (
                 <p className="text-sm text-strong font-semibold">⚠ {brokerFlow.notation.list.map((n) => n.notation).join(', ')}</p>
               ) : <p className="text-sm text-slate-500">Gak ada notasi aktif.</p>}
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Tape Reading</h3>
-              {brokerFlow.running_trade?.data?.length ? (
-                <ul className="space-y-1.5 text-sm text-slate-300 font-mono">
-                  {brokerFlow.running_trade.data.slice(0, 5).map((t, i) => (
-                    <li key={i} className={t.type === 'BUY' ? 'text-emerald-400' : 'text-red-400'}>
-                      {t.time} {t.type} {t.volume.toLocaleString('id-ID')} @{t.price}
-                    </li>
-                  ))}
-                </ul>
-              ) : <p className="text-sm text-slate-500">Belum ada transaksi tercatat.</p>}
-            </div>
-
-            <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <h3 className="text-sm font-bold text-white tracking-tight mb-3">Money Flow (Sankey)</h3>
               {brokerFlow.sankey_chart ? <SankeyFlowTable raw={brokerFlow.sankey_chart} /> : <p className="text-sm text-slate-500">Belum tersedia.</p>}
-            </div>
-
-            <div className="glow-border rounded-2xl bg-card border border-border p-5">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Order Queue</h3>
-              <OrderQueueWidget ticker={data.ticker} defaultPrice={data.price} />
             </div>
 
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
@@ -807,10 +739,6 @@ export default function StockDetail() {
               {brokerFlow.price_seasonality ? <SeasonalityChart raw={brokerFlow.price_seasonality} /> : <p className="text-sm text-slate-500">Belum tersedia.</p>}
             </div>
 
-            <div className="glow-border rounded-2xl bg-card border border-border p-5 md:col-span-2">
-              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Inventory Chart (akumulasi/distribusi broker, 7 hari)</h3>
-              {brokerFlow.inventory_chart ? <InventoryChart raw={brokerFlow.inventory_chart} /> : <p className="text-sm text-slate-500">Belum tersedia.</p>}
-            </div>
             </>
           )}
         </div>

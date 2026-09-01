@@ -5,12 +5,15 @@ balikin False dan caller (scoring.py/scanner.py) fallback ke yfinance/mock — N
 gak ikut down cuma karena belum subscribe.
 
 STATUS: API key AKTIF (2026-09-01). Fungsi paling sering dipanggil (running_trade,
-broker_summary, inventory_chart_stock, sankey_chart, order_queue, price_table,
-get_calendar, get_financial_statement, get_sector_rotation, get_top_ritel) UDAH
-dites lawan API asli. Sisanya masih based on contoh OpenAPI spec, kemungkinan
-ada penyesuaian kecil kalau ternyata field-nya meleset (kejadian 2x sesi ini:
-financial_statement & sector_rotation DUA-DUANYA ditandain "confirmed lawan
-spec" sebelumnya tapi shape ASLI beda — jangan percaya spec doang).
+broker_summary, inventory_chart_stock, sankey_chart, price_table, get_calendar,
+get_financial_statement, get_sector_rotation, get_top_ritel, get_insider_activity)
+UDAH dites lawan API asli. Sisanya masih based on contoh OpenAPI spec, kemungkinan
+ada penyesuaian kecil kalau ternyata field-nya meleset (kejadian beberapa kali sesi
+ini: financial_statement, sector_rotation, insider_activity DITANDAIN "confirmed
+lawan spec" sebelumnya tapi shape ASLI beda — jangan percaya spec doang).
+
+get_order_queue DIHAPUS (2026-09-01) — fitur Order Queue di StockDetail gak
+kepake buat analisa user, dicabut end-to-end (backend endpoint + frontend widget).
 
 BUDGET HARIAN (2026-09-01): Invezgo dashboard mereka gak punya fitur limit
 harian sendiri (cuma hard monthly quota 30.000, keliatan di dashboard mereka),
@@ -165,14 +168,6 @@ def get_top_ritel(date: str) -> dict:
     "dist": [...]} — top mover versi retail. DIVERIFIKASI lawan API asli — `change`
     UDAH dalam persen (BUKAN fraction dikali 100)."""
     return _get("/analysis/top/ritel", {"date": date})
-
-
-def get_order_queue(code: str, price: float, side: str, page: int = 0, limit: int = 50) -> list[dict]:
-    """[{time, order_id, order_volume, open_volume, done_volume, order_value,
-    open_value, done_value}, ...] — antrian order di 1 level harga. side: BUY/SELL.
-    Dipake buat deteksi order institusi gede yang ngantri. DIVERIFIKASI lawan API
-    asli (balikin [] kalau gak ada antrian di harga itu, bukan error)."""
-    return _get(f"/analysis/queue/{code}", {"price": price, "side": side, "page": page, "limit": limit})
 
 
 def get_running_trade(code: str, date: str, page: int = 1, limit: int = 50) -> dict:
