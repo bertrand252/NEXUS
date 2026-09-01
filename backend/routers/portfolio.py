@@ -118,8 +118,9 @@ def _simulate(holdings: list[dict]) -> dict:
 
     # laporan keuangan (Income Statement per quarter) per saham di portofolio —
     # konteks fundamental TAMBAHAN buat Groq nilai risk_level (lihat prompt).
-    # Diem total kalau Invezgo belum aktif. RAW dict apa adanya, gak di-parsing
-    # manual (struktur field belum diverifikasi lawan API asli).
+    # Diem total kalau Invezgo belum configured/gagal fetch. RAW dict apa adanya
+    # (shape {"rows":[{name,values:[{col,amount}]}]} DIVERIFIKASI lawan API asli,
+    # tapi tetep dikirim raw biar Groq baca sendiri, bukan di-parsing manual di sini).
     financials = {}
     if invezgo_client.is_configured():
         for h in holdings:
@@ -132,7 +133,7 @@ def _simulate(holdings: list[dict]) -> dict:
 {holdings_text}
 
 === LAPORAN KEUANGAN (Income Statement per quarter, per saham) ===
-{json.dumps(financials, ensure_ascii=False) if financials else "Belum tersedia — nunggu Invezgo API aktif."}
+{json.dumps(financials, ensure_ascii=False) if financials else "Gak ada data."}
 
 === EVENT FOREX FACTORY (minggu ini) ===
 {json.dumps(relevant_events, ensure_ascii=False) if relevant_events else "Tidak ada event high/medium impact minggu ini."}

@@ -385,12 +385,12 @@ class ScreenerInput(BaseModel):
 @router.post("/screener")
 @limiter.limit("3/15minute")  # sama persis rate limit Invezgo endpoint ini (3 request/15 menit) - JANGAN dinaikin
 def run_custom_screener(request: Request, payload: ScreenerInput):
-    """Kerangka "Advanced Filter" Scanner — formula custom (contoh: "prev < close"),
-    langsung diteruskan ke /screener/screen Invezgo. BELUM dites lawan API asli,
-    404 kalau belum configured (bukan array kosong — biar frontend gak nganggep
-    filter emang gak ada yang cocok, padahal fiturnya emang belum aktif)."""
+    """"Advanced Filter" Scanner — formula custom (contoh: "prev < close"), langsung
+    diteruskan ke /screener/screen Invezgo. DIVERIFIKASI lawan API asli (shape
+    [{code,matched,...}] cocok). 503 kalau Invezgo gak configured (bukan array
+    kosong — biar frontend gak nganggep filter emang gak ada yang cocok)."""
     if not invezgo_client.is_configured():
-        raise HTTPException(status_code=503, detail="Custom screener butuh Invezgo API key, belum aktif.")
+        raise HTTPException(status_code=503, detail="Custom screener butuh Invezgo API key, gak ke-detect di backend.")
     try:
         return {"data": invezgo_client.run_screener(payload.formula)}
     except Exception as e:

@@ -170,11 +170,11 @@ export default function MarketEvents() {
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white tracking-tight">Corporate Actions (RUPS/Dividen)</h3>
-            {!corporate?.configured && <span className="text-[10px] text-slate-500 font-mono">Belum tersedia — nunggu Invezgo API aktif</span>}
+            {!corporate?.configured && <span className="text-[10px] text-slate-500 font-mono">Data gak tersedia</span>}
           </div>
           {!corporate?.configured ? (
             <p className="text-sm text-slate-500 py-6 text-center">
-              Jadwal RUPS/dividen resmi (bukan ekstrak dari teks berita) bakal muncul di sini begitu Invezgo aktif.
+              Gagal ambil jadwal RUPS/dividen resmi — coba lagi nanti.
             </p>
           ) : (
             <CorporateActionsList corporate={corporate} />

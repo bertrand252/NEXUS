@@ -204,7 +204,7 @@ function CompanyInfo({ company, ticker, financialStatement }) {
         {financialStatement ? (
           <FinancialStatementTable data={financialStatement} />
         ) : (
-          <p className="text-xs text-slate-500">Belum tersedia — nunggu Invezgo API aktif.</p>
+          <p className="text-xs text-slate-500">Memuat...</p>
         )}
       </div>
     </div>
@@ -478,7 +478,7 @@ function OrderQueueWidget({ ticker, defaultPrice }) {
           {loading ? '...' : 'Cek'}
         </button>
       </form>
-      {result && !result.configured && <p className="text-slate-500">Belum tersedia — nunggu Invezgo API aktif.</p>}
+      {result && !result.configured && <p className="text-slate-500">Data gak tersedia.</p>}
       {result?.configured && !result.data?.length && <p className="text-slate-500">Gak ada antrian di level harga ini.</p>}
       {result?.configured && result.data?.length > 0 && (
         <ul className="space-y-1 text-slate-300 font-mono max-h-32 overflow-auto">
@@ -725,8 +725,7 @@ export default function StockDetail() {
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <h3 className="text-sm font-bold text-white tracking-tight mb-3">Broker Flow (Invezgo)</h3>
               <p className="text-sm text-slate-500 py-8 text-center">
-                Data broker flow asli belum aktif (nunggu langganan Invezgo). Broker summary, order flow, dll bakal
-                muncul di sini begitu API key-nya keisi — bukan data karangan.
+                Gagal ambil data broker flow (Invezgo) — coba lagi nanti.
               </p>
             </div>
           )}

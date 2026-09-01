@@ -1329,7 +1329,7 @@ def _send_running_positions_update() -> None:
     cuma angka harga doang), atau ada red flag baru yang lebih urgent dari
     stop-loss teknikal. Plus broker summary OTOMATIS tiap malam per posisi
     (lihat _detect_bandar) — jawab "market maker mulai buang atau nambah
-    barang", kerangka nunggu Invezgo aktif."""
+    barang", pake data Invezgo asli."""
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
         return

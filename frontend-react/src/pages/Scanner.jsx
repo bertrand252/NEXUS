@@ -80,7 +80,7 @@ export default function Scanner() {
         body: JSON.stringify({ formula: screenerFormula }),
       });
       if (res.status === 503) {
-        setScreenerError('Custom screener butuh Invezgo API key, belum aktif — nunggu langganan.');
+        setScreenerError('Custom screener butuh Invezgo API key — key gak ke-detect di backend, cek konfigurasi.');
         return;
       }
       if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);

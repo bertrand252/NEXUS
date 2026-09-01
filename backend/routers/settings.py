@@ -14,7 +14,7 @@ DEFAULTS = {
     "notif_bsjp": True,
     "notif_bpjs": True,
     "notif_weekly_postmortem": True,
-    "notif_whale_alert": True,     # transaksi abnormal gede (running-trade) — kerangka, nunggu Invezgo aktif
+    "notif_whale_alert": True,     # transaksi abnormal gede (running-trade), polling watchlist tiap jam pas market buka
 }
 
 

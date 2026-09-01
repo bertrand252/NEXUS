@@ -280,10 +280,10 @@ export default function Dashboard() {
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white tracking-tight">Top Retail Activity</h3>
-            {!topRitel?.configured && <span className="text-[11px] text-slate-500 font-mono">Belum tersedia — nunggu Invezgo API aktif</span>}
+            {!topRitel?.configured && <span className="text-[11px] text-slate-500 font-mono">Data gak tersedia</span>}
           </div>
           {!topRitel?.configured ? (
-            <p className="text-sm text-slate-500 py-4">Saham yang lagi rame ditransaksiin investor ritel hari ini bakal muncul di sini begitu Invezgo aktif.</p>
+            <p className="text-sm text-slate-500 py-4">Gagal ambil data top retail activity hari ini — coba lagi nanti.</p>
           ) : topRitel.data ? (
             <TopRitelList data={topRitel.data} />
           ) : (
