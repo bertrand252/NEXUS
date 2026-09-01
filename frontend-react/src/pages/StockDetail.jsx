@@ -401,9 +401,9 @@ function BrokerSummaryTable({ brokers }) {
       <div className="flex items-center gap-2 py-1 border-b border-border/30 last:border-0">
         <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${positive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{b.code}</span>
         <span className="text-[11px] text-slate-400 truncate flex-1">{b.name}</span>
-        {avg != null && !isNaN(avg) && <span className="text-[10px] text-slate-500 font-mono shrink-0">avg Rp{avg.toLocaleString('id-ID')}</span>}
+        {avg != null && !isNaN(avg) && <span className="text-[10px] text-slate-500 font-mono shrink-0">avg Rp{Math.round(avg).toLocaleString('id-ID')}</span>}
         <span className={`text-[11px] font-mono font-semibold shrink-0 ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-          Rp{Math.abs(b.netNum).toLocaleString('id-ID')}
+          {fmtRupiahCompact(Math.abs(b.netNum))}
         </span>
       </div>
     );
