@@ -573,9 +573,9 @@ export default function StockDetail() {
             )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-5">
           <div className="glow-border rounded-2xl bg-card border border-border p-5 flex flex-col items-center justify-center">
-            <h3 className="text-sm font-bold text-white tracking-tight self-start mb-2">Accumulation Score</h3>
+            <h3 className="text-sm font-bold text-white tracking-tight self-start mb-2">Total Score</h3>
             <svg viewBox="-18 -5 236 145" className="w-full max-w-[240px]">
               <path d="M 20.00 100.00 A 80 80 0 0 1 35.28 52.98" fill="none" stroke="#22C55E" strokeWidth="16" strokeLinecap="round" />
               <path d="M 35.28 52.98 A 80 80 0 0 1 75.28 23.92" fill="none" stroke="#84CC16" strokeWidth="16" strokeLinecap="round" />
@@ -602,6 +602,7 @@ export default function StockDetail() {
           </div>
           <ScoreCard label="Volume Score" value={data?.volume_score} max={25} barClass="bg-cyan" />
           <ScoreCard label="Price Score" value={data?.price_score} max={25} barClass="bg-accent" />
+          <ScoreCard label="Accumulation Score" value={data?.accumulation_score} max={30} barClass="bg-risklow" />
           <ScoreCard label="Technical Score" value={data?.technical_score} max={20} barClass="bg-moderate" />
         </div>
 
