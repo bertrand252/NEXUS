@@ -246,6 +246,34 @@ def _recent_news_by_ticker(days: int = 3) -> dict[str, list[dict]]:
     return by_ticker
 
 
+def _recent_trade_calls_by_ticker(days: int = 3) -> dict[str, list[dict]]:
+    """{ticker: [{tanggal, entry, target, stop_loss, alasan}]} — call harga
+    spesifik (entry/target/stop-loss) dari channel sekuritas yang dipantau,
+    DIPISAH dari poin_penting biar gak nyasar ke Daily Briefing (user: jangan
+    taro call saham apapun di kolom berita — bukan tugas Groq nyaranin beli/
+    jual dari teks berita, lihat intel.py::SUMMARIZE_SYSTEM_PROMPT). Dipake
+    buat BPJS doang (bukan Swing) — konsiderasi tambahan, bukan syarat wajib."""
+    since = (today_wib() - timedelta(days=days)).isoformat()
+    try:
+        res = supabase.table("daily_market_intel").select("tanggal,summary_ai").gte("tanggal", since).execute()
+    except Exception:
+        return {}
+
+    by_ticker: dict[str, list[dict]] = {}
+    for row in res.data:
+        summary = row.get("summary_ai") or {}
+        for call in summary.get("trade_calls", []):
+            t = (call.get("saham") or "").upper()
+            if not t:
+                continue
+            by_ticker.setdefault(t, []).append({
+                "tanggal": row["tanggal"], "entry": call.get("entry"),
+                "target": call.get("target"), "stop_loss": call.get("stop_loss"),
+                "alasan": call.get("alasan"),
+            })
+    return by_ticker
+
+
 def _active_mentor_calls() -> dict[str, dict]:
     """{ticker: row} buat mentor_calls yang status-nya masih "Running" (bukan
     yang udah closed/TP/CL)."""
@@ -274,6 +302,10 @@ def _macro_sector_set(macro_events: list[dict]) -> set[str]:
 BREAKOUT_TECHNICAL_THRESHOLD = 12  # technical_score minimal (dari 20) buat dianggap "breakout+volume kekonfirmasi"
 MIN_RR_RATIO = 1.5  # riset: 1:1.5-1:2 standar minimum umum, Swing spesifik idealnya 1:3+ — mulai
                      # dari 1.5 (gak terlalu ketat dulu), bisa dinaikin kalau kandidat kebanyakan lolos
+
+MIN_CONVICTION_SWING = 4  # 1-5 dari Groq sendiri (pick_alert_candidate) — dipegang berminggu-minggu,
+                           # gate lebih ketat dari BPJS. Mulai dari 4, turunin ke 3 kalau kebanyakan skip.
+MIN_CONVICTION_BPJS = 3  # day-trade, gate lebih longgar sesuai sifatnya (lihat docstring pick_bpjs_candidate)
 
 # Sanity bound TERAKHIR buat risk/reward — kejadian nyata (PACK): TP2 +275%,
 # SL -58.88% kekirim ke Telegram, user komplain "gamasuk akal". Root cause:
@@ -444,6 +476,33 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
                     fields["broker_net_top"] = [
                         {"code": b["code"], "net_value": float(b["net_value"])} for b in ranked[:3]
                     ]
+                except Exception:
+                    pass
+                # price_seasonality + sankey_chart — DULU cuma dipajang di UI StockDetail
+                # (dicabut, user: gak kepake buat baca), sekarang jadi bahan konteks Groq
+                # doang (pendukung sentimen, bukan syarat wajib) — lihat pick_alert_candidate.
+                try:
+                    season = invezgo_client.get_price_seasonality(c["ticker"])
+                    rows = season if isinstance(season, list) else (season or {}).get("data") or []
+                    month_now = today_wib().strftime("%B")
+                    match = next(
+                        (r for r in rows if str(r.get("month")).strip().lower() in (month_now.lower(), str(today_wib().month))),
+                        None,
+                    )
+                    if match and match.get("percentage_change") is not None:
+                        fields["seasonality_bulan_ini"] = round(float(match["percentage_change"]), 2)
+                except Exception:
+                    pass
+                try:
+                    sankey = invezgo_client.get_sankey_chart(c["ticker"], today_s)
+                    links = (sankey or {}).get("links") or []
+                    if links:
+                        top = max(links, key=lambda l: abs(float(l.get("value") or 0)))
+                        fields["money_flow_top"] = {
+                            "source": str(top.get("source")).strip(),
+                            "target": str(top.get("target")).strip(),
+                            "value": float(top.get("value") or 0),
+                        }
                 except Exception:
                     pass
                 # insider/pengendali (wajib lapor OJK) — jauh lebih kuat dari broker_net_top
@@ -727,7 +786,8 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
             "status": "waiting_entry",  # belum "open" beneran — nunggu harga kesentuh zona entry dulu
             "telegram_message_id": message_id,  # dipake buat unsend pas posisi ditutup
             "source": "swing",
-            "faktor_pendukung": pick.get("faktor_pendukung", []),  # buat korelasiin faktor->outcome nanti (Weekly Postmortem), dulu ilang abis kekirim caption
+            # buat korelasiin faktor+conviction->outcome nanti (Weekly Postmortem), dulu ilang abis kekirim caption
+            "faktor_pendukung": {"faktor": pick.get("faktor_pendukung", []), "conviction": pick.get("conviction")},
         }).execute()
     except Exception:
         pass  # tabel belum di-setup / gagal simpen — jangan gagalin alert-nya cuma gara-gara ini
@@ -931,6 +991,8 @@ def check_and_alert() -> None:
     ticker = pick.get("pilih")
     if not ticker:
         return  # sengaja gak ada yang meyakinkan — mending gak ada call daripada call asal
+    if (pick.get("conviction") or 0) < MIN_CONVICTION_SWING:
+        return  # Groq sendiri gak cukup yakin (conviction rendah) — mending skip daripada kirim call ragu-ragu
 
     candidate = next((c for c in candidates if c["ticker"] == ticker), None)
     if candidate is None or candidate.get("signal") not in ("Strong", "Moderate"):
@@ -1809,6 +1871,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
     intraday.py::session_takeoff, bar belum cukup ya None)."""
     mentor_by_ticker = _active_mentor_calls()
     news_by_ticker = _recent_news_by_ticker()
+    channel_calls_by_ticker = _recent_trade_calls_by_ticker()
 
     try:
         scan_res = (
@@ -1847,6 +1910,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             "session": session,
             "mentor_call": ({"status": mentor["status"], "buy_price": mentor["buy_price"]} if mentor else None),
             "berita": news_by_ticker.get(ticker),
+            "channel_calls": channel_calls_by_ticker.get(ticker),
         })
 
     candidates.sort(key=lambda c: c["momentum_score"], reverse=True)
@@ -1902,6 +1966,8 @@ def _check_bpjs() -> None:
     ticker = pick.get("pilih")
     if not ticker:
         return
+    if (pick.get("conviction") or 0) < MIN_CONVICTION_BPJS:
+        return  # Groq sendiri gak cukup yakin — skip daripada kirim call ragu-ragu
 
     candidate = next((c for c in candidates if c["ticker"] == ticker), None)
     if candidate is None or (candidate["momentum_score"] <= 0 and not candidate.get("mentor_call")):
@@ -1938,7 +2004,7 @@ def _check_bpjs() -> None:
             "status": "waiting_entry",
             "telegram_message_id": message_id,
             "source": "bpjs",
-            "faktor_pendukung": pick.get("faktor_pendukung", []),
+            "faktor_pendukung": {"faktor": pick.get("faktor_pendukung", []), "conviction": pick.get("conviction")},
         }).execute()
     except Exception:
         pass
@@ -1981,7 +2047,12 @@ def _send_morning_briefing() -> None:
     if tanggal_penting:
         lines.append("\n📅 <b>Tanggal Penting</b>")
         for e in tanggal_penting:
-            lines.append(f"• {_esc(e.get('saham'))} — {_esc(e.get('jenis'))} · {_esc(e.get('tanggal'))}")
+            jenis = e.get("jenis")
+            label = f" — {_esc(jenis)}" if jenis and jenis != "lainnya" else ""
+            line = f"• {_esc(e.get('saham'))}{label} · {_esc(e.get('tanggal'))}"
+            if e.get("detail"):
+                line += f"\n  {_esc(e['detail'])}"
+            lines.append(line)
 
     rekomendasi = briefing.get("rekomendasi") or []
     if rekomendasi:

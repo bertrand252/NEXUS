@@ -101,7 +101,7 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
     deket (weekend/tanggal merah — rawan profit taking sebelum bursa tutup
     lama). Groq milih PALING BANYAK 1 ticker yang layak di-alert, atau nolak
     semua kalau gak ada yang meyakinkan.
-    Return: {"pilih": str|None, "faktor_pendukung": [str], "alasan_singkat": str}."""
+    Return: {"pilih": str|None, "conviction": int, "faktor_pendukung": [str], "alasan_singkat": str}."""
     system_prompt = (
         "Kamu analis saham IDX yang pegang prinsip 'buy on breakout+volume, sell "
         "on news' — begitu suatu saham udah rame diberitakan/viral, biasanya udah "
@@ -147,6 +147,14 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
         "konsistensi tinggi, insight mentor user: pola ini bikin breakout lebih "
         "ringan/kuat), itu sinyal PENGUAT KUAT - WAJIB disebut di "
         "faktor_pendukung kalau steady_accumulation_sideways true. Kalau ada "
+        "Kalau ada field seasonality_bulan_ini (rata-rata perubahan harga "
+        "historis di bulan yang sama, beberapa tahun terakhir) atau "
+        "money_flow_top (arus dana antar broker terbesar hari ini, source ke "
+        "target), itu cuma PENDUKUNG SENTIMEN tambahan yang PALING LEMAH dari "
+        "semua sinyal di sini — statistik musiman/snapshot doang, BUKAN "
+        "katalis konkret kayak bandar/insider_activity, JANGAN jadi alasan "
+        "utama milih ticker, boleh disebut cuma kalau sejalan sama sinyal "
+        "lain yang lebih kuat. Kalau ada "
         "field insider_activity (histori perubahan kepemilikan pihak yang WAJIB "
         "lapor OJK - insider/direksi/komisaris/pemegang saham >5%, tiap entry "
         "punya prev_percent vs next_percent) dan next_percent NAIK TERUS dari "
@@ -158,7 +166,12 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
         "kalau Invezgo gagal fetch/gak ada data), tapi kalau ADA dan sinyalnya "
         "kuat, ini jauh lebih meyakinkan dari order_flow/broker_net_top biasa. "
         "Tugas kamu: pilih PALING "
-        "BANYAK 1 ticker yang layak di-alert.\n\n"
+        "BANYAK 1 ticker yang layak di-alert, DAN kasih conviction (1-5) buat "
+        "seberapa yakin kamu — 5 = breakout+volume kuat DAN didukung banyak "
+        "sinyal tambahan align (compression_vcp/bandar steady_accumulation_sideways/ "
+        "insider_activity naik konsisten), 3 = breakout_confirmed doang tanpa "
+        "sinyal tambahan yang jelas, 1-2 = breakout pas-pasan/borderline. Jujur "
+        "aja, jangan digedein biar keliatan yakin kalau sebenernya biasa aja.\n\n"
         "SYARAT WAJIB: breakout_confirmed harus true, ATAU ada call aktif dari "
         "mentor trading (itu analisa manusia beneran, bukan hype). JANGAN pilih "
         "ticker cuma karena ada berita bagus tanpa breakout_confirmed — itu "
@@ -180,8 +193,8 @@ def pick_alert_candidate(candidates: list[dict], macro_events: list[dict], upcom
         "RR tinggi) — sebutin pertimbangan libur ini di alasan_singkat kalau "
         "itu yang bikin kamu skip atau tetep pilih meski ada risiko ini. "
         "Jangan mengarang faktor yang gak ada di data. Balikin JSON persis: "
-        '{"pilih": "TICKER" atau null, "faktor_pendukung": ["poin 1", "poin 2"], '
-        '"alasan_singkat": "1 kalimat"}'
+        '{"pilih": "TICKER" atau null, "conviction": 1-5, '
+        '"faktor_pendukung": ["poin 1", "poin 2"], "alasan_singkat": "1 kalimat"}'
     )
     user_prompt = json.dumps(
         {"kandidat": candidates, "event_ekonomi_global": macro_events,
@@ -250,7 +263,7 @@ def pick_bpjs_candidate(candidates: list[dict]) -> dict:
     reaktif sore-ini-jual-besok-pagi). Gak ada indikator resmi/baku dari
     mentor buat BPJS — ini judgment call gabungan, mirip pick_alert_candidate
     tapi gate-nya lebih longgar sesuai sifatnya.
-    Return: {"pilih": str|None, "faktor_pendukung": [str], "alasan_singkat": str}."""
+    Return: {"pilih": str|None, "conviction": int, "faktor_pendukung": [str], "alasan_singkat": str}."""
     system_prompt = (
         "Kamu analis saham IDX yang nyari kandidat 'BPJS' (Day Trade) — beda "
         "dari Swing (breakout resistance 20 hari, dipegang berminggu-minggu) "
@@ -262,16 +275,23 @@ def pick_bpjs_candidate(candidates: list[dict]) -> dict:
         "lanjut naik 1-2 hari ke depan (bukan cuma hari ini doang). Dikasih "
         "daftar kandidat: ticker, momentum_score, session (sesi 1 atau sesi 2 "
         "yang lagi diukur), berita terkait kalau ada, status call aktif "
-        "mentor trading kalau ada.\n\n"
+        "mentor trading kalau ada. Kalau ada field channel_calls (call harga "
+        "spesifik entry/target/stop-loss dari channel sekuritas yang "
+        "dipantau — BEDA dari call mentor NEXUS), jadiin sinyal TAMBAHAN yang "
+        "MENDUKUNG (bukan syarat wajib) — momentum_score tinggi + ada "
+        "channel_calls yang searah lebih meyakinkan dari momentum doang.\n\n"
         "SYARAT WAJIB: momentum_score > 0, ATAU ada call aktif mentor. GAK "
         "ADA threshold resmi/baku dari mentor buat BPJS — ini judgment call "
         "kamu, boleh mempertimbangkan berita jangka pendek yang MENDUKUNG "
         "kelanjutan kenaikan (bukan sekadar berita netral). Pilih PALING "
         "BANYAK 1 ticker yang paling meyakinkan, atau null kalau gak ada "
         "yang cukup meyakinkan — mending gak ada call daripada call asal. "
-        "Jangan mengarang berita/faktor yang gak ada di data. Balikin JSON "
-        'persis: {"pilih": "TICKER" atau null, "faktor_pendukung": ["poin 1"], '
-        '"alasan_singkat": "1 kalimat"}'
+        "Kasih juga conviction (1-5) seberapa yakin kamu — 5 = momentum_score "
+        "tinggi banget + berita/mentor call mendukung, 3 = momentum_score lolos "
+        "syarat doang tanpa pendukung lain, 1-2 = borderline. Jangan mengarang "
+        "berita/faktor yang gak ada di data. Balikin JSON "
+        'persis: {"pilih": "TICKER" atau null, "conviction": 1-5, '
+        '"faktor_pendukung": ["poin 1"], "alasan_singkat": "1 kalimat"}'
     )
     user_prompt = json.dumps({"kandidat": candidates}, ensure_ascii=False)
     result = ask_json(system_prompt, user_prompt)
