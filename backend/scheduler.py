@@ -1770,13 +1770,17 @@ def _send_running_positions_update() -> None:
     barang", pake data Invezgo asli."""
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
+        log.info("_send_running_positions_update: skip, notif_strong_signal off di Settings")
         return
     try:
         res = supabase.table("signal_alerts").select("*").eq("status", "open").execute()
     except Exception:
+        log.exception("_send_running_positions_update: gagal query signal_alerts")
         return
     if not res.data:
+        log.info("_send_running_positions_update: NOL posisi 'open' (semua source)")
         return
+    log.info(f"_send_running_positions_update: {len(res.data)} posisi open ditemuin ({[r['ticker'] for r in res.data]})")
 
     news_by_ticker = _recent_news_by_ticker(days=2)
     positions = []
@@ -1801,6 +1805,7 @@ def _send_running_positions_update() -> None:
             "berita": news_by_ticker.get(row["ticker"]), "entry_date": entry_date,
         })
     if not positions:
+        log.info("_send_running_positions_update: NOL posisi berhasil dihitung pnl-nya (semua gagal fetch harga?)")
         return
 
     try:
@@ -1833,6 +1838,7 @@ def _send_running_positions_update() -> None:
         bandar = _detect_bandar(p["ticker"], p["entry_date"], today)
         if bandar:
             lines.append(_format_bandar_line(bandar))
+    log.info(f"_send_running_positions_update: kirim update {len(positions)} posisi")
     send_alert("\n".join(lines))
 
 
