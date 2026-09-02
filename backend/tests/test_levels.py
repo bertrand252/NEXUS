@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance
+from levels import rr_label, support_resistance, well_defended_support
 
 
 def test_rr_label_bands():
@@ -41,3 +41,28 @@ def test_support_resistance_rr_ratio_computed():
     levels = support_resistance(hist)
     assert levels["rr_label"] == rr_label(levels["rr_ratio"])
     assert levels["stop_loss"] < levels["entry_low"]  # SL harus di bawah zona entry
+
+
+_SUPPORT_BOUNCE_CLOSES = [
+    110, 107, 103, 100, 103, 107, 111, 108, 104, 100,
+    103, 108, 112, 109, 105, 100, 104, 109, 113, 110, 106, 102,
+]  # support ~100 disentuh 3x jelas (tiap bounce+turun cukup bar buat swing_window=3 kedeteksi)
+
+
+def test_well_defended_support_detects_repeated_bounce():
+    hist = _make_hist(_SUPPORT_BOUNCE_CLOSES)
+    result = well_defended_support(hist, price_now=103.0)
+    assert result is not None
+    assert result["touches"] >= 3
+    assert result["support_price"] < 103.0
+
+
+def test_well_defended_support_none_when_price_too_far():
+    hist = _make_hist(_SUPPORT_BOUNCE_CLOSES)
+    assert well_defended_support(hist, price_now=140.0) is None  # udah lari jauh, bukan lagi buy-on-weakness
+
+
+def test_well_defended_support_none_without_enough_touches():
+    closes = [100.0 + i for i in range(20)]  # naik lurus, gak ada support berulang
+    hist = _make_hist(closes)
+    assert well_defended_support(hist, price_now=119.0) is None

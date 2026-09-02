@@ -219,6 +219,42 @@ def _swing_clusters_with_roles(hist, swing_window: int = 3, cluster_pct: float =
     return merged
 
 
+def well_defended_support(hist, price_now: float, max_distance_pct: float = 6.0, min_touches: int = 3) -> dict | None:
+    """"Buy on weakness" — jalur qualify Swing ALTERNATIF dari breakout (user
+    eksplisit: dua-duanya valid, bukan gantiin). Beda arah entry: breakout
+    beli di harga SEKARANG (udah gerak naik duluan), ini beli DEKET support
+    yang berkali-kali disentuh & SELALU mantul (indikasi ada yang "jagain"
+    barang di situ) — stop ketat di bawah support, target balik ke
+    resistance/range atas, RR sering lebih gede karena entry lebih rendah.
+
+    Reuse _swing_clusters_with_roles — swing-low pivot by DEFINITION udah
+    "mantul" (titik balik naik lagi di kedua sisi, syarat swing_window),
+    jadi >=min_touches swing-low di cluster yang sama = level itu emang
+    berulang kali didukung, gak perlu cek "broken" terpisah. Skip cluster
+    yang touches_as_peak > touches_as_trough (lebih sering jadi RESISTANCE
+    dari atas belakangan — polaritasnya ambigu, bukan support bersih).
+    price_now WAJIB masih deket (max_distance_pct) — kalau udah lari jauh
+    dari support, ini bukan lagi entry point yang relevan."""
+    candidates_ = [
+        c for c in _swing_clusters_with_roles(hist)
+        if c["touches_as_trough"] >= min_touches
+        and c["touches_as_trough"] >= c["touches_as_peak"]
+        and c["price"] < price_now
+    ]
+    if not candidates_:
+        return None
+    candidates_.sort(key=lambda c: price_now - c["price"])  # paling deket harga sekarang
+    support = candidates_[0]
+    distance_pct = (price_now - support["price"]) / support["price"] * 100
+    if distance_pct > max_distance_pct:
+        return None
+    return {
+        "support_price": support["price"],
+        "touches": support["touches_as_trough"],
+        "distance_pct": round(distance_pct, 2),
+    }
+
+
 def _level_candidates(hist, price_now: float, min_touches: int = 2) -> list[dict]:
     """Gabungan unfilled gap + Fibonacci retracement + swing pivot (dengan
     role reversal) dari 1 timeframe/hist tertentu — dipake bareng-bareng

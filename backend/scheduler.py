@@ -13,7 +13,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
+from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal
 from intraday import daily_session_stats, session_takeoff
@@ -486,14 +486,15 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             "berita": berita,
         })
 
-    # urut compression_setup duluan (prinsip mentor: "makin lama sideways makin
-    # kenceng lompatannya" - candidate yang lama "ngumpul tenaga" jangan sampe
-    # ke-cut pool_limit cuma gara-gara technical_score-nya pas-pasan dibanding
-    # breakout biasa yang baru gerak), sideways_days_before PALING PANJANG jadi
-    # tie-breaker ke-2, technical_score (breakout+volume, REAL bukan total_score
-    # yang kecampur Accumulation Score mock) baru ke-3
+    # urut compression_setup DAN support_defended_flag duluan (dua-duanya
+    # kandidat non-breakout — compression = SEBELUM breakout, support_defended
+    # = "buy on weakness" gak nunggu breakout sama sekali — technical_score-nya
+    # pasti kalah dari breakout biasa, jangan sampe ke-cut pool_limit gara-gara
+    # itu), sideways_days_before PALING PANJANG jadi tie-breaker ke-2,
+    # technical_score (breakout+volume, REAL bukan total_score yang kecampur
+    # Accumulation Score mock) baru ke-3
     candidates.sort(
-        key=lambda c: (c["compression_setup"], c["sideways_days_before"] or 0, c["technical_score"] or 0),
+        key=lambda c: (c["compression_setup"], c["support_defended_flag"], c["sideways_days_before"] or 0, c["technical_score"] or 0),
         reverse=True,
     )
     candidates = candidates[:pool_limit]
@@ -557,6 +558,11 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             and market_uptrend
             and volume_dry_up(hist, c["sideways_days_before"] or 0)
         )
+        # "buy on weakness" — detail lengkap (support_price/touches/distance_pct)
+        # dihitung ULANG di sini (bukan cuma pake support_defended_flag basi dari
+        # scanner_cache) — harga bisa udah gerak sejak refresh terakhir, None
+        # kalau udah gak deket lagi. Reuse hist yang udah difetch, zero API baru.
+        c["buy_on_weakness"] = well_defended_support(hist, float(hist["Close"].iloc[-1]))
         _levels_cache[c["ticker"]] = lv
         # trend (MA50/200 mingguan, lihat determine_trend di levels.py) UDAH
         # dihitung di _apply_smart_tp di atas tapi cuma nempel ke levels buat
@@ -903,6 +909,7 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
         "broker_net_top": candidate.get("broker_net_top"),
         "bandar": candidate.get("bandar"),
         "insider_activity": candidate.get("insider_activity"),
+        "buy_on_weakness": candidate.get("buy_on_weakness"),
     }
     reasoning = analyze_alert(ticker, score_breakdown, levels, context)
     caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []), candidate.get("bandar"))
@@ -1172,12 +1179,16 @@ def check_and_alert() -> None:
         return  # Groq sendiri gak cukup yakin (conviction rendah) — mending skip daripada kirim call ragu-ragu
 
     candidate = next((c for c in candidates if c["ticker"] == ticker), None)
-    if candidate is None or candidate.get("signal") not in ("Strong", "Moderate"):
-        log.info(f"check_and_alert: {ticker} dipilih Groq tapi gak ada di pool / signal bukan Strong-Moderate")
+    # signal Strong/Moderate itu dari total_score (Volume+Price+Accum+Technical
+    # digabung) — buy_on_weakness JUSTRU lemah di situ (gak lagi breakout, itu
+    # poinnya), jadi dikecualiin dari syarat ini, sama kayak dia dikecualiin
+    # dari gate alert_threshold pas pool-building.
+    if candidate is None or (candidate.get("signal") not in ("Strong", "Moderate") and not candidate.get("buy_on_weakness")):
+        log.info(f"check_and_alert: {ticker} dipilih Groq tapi gak ada di pool / signal bukan Strong-Moderate / bukan buy_on_weakness")
         return  # jaga-jaga kalau Groq halusinasi ticker di luar pool / gak penuhi syarat skor
-    if not candidate.get("breakout_confirmed") and not candidate.get("mentor_call"):
-        log.info(f"check_and_alert: {ticker} dipilih Groq tapi breakout_confirmed=False & gak ada mentor_call")
-        return  # jaga-jaga kalau Groq ngelanggar instruksi sendiri (pilih modal berita doang, gak breakout)
+    if not candidate.get("breakout_confirmed") and not candidate.get("mentor_call") and not candidate.get("buy_on_weakness"):
+        log.info(f"check_and_alert: {ticker} dipilih Groq tapi breakout_confirmed=False & gak ada mentor_call/buy_on_weakness")
+        return  # jaga-jaga kalau Groq ngelanggar instruksi sendiri (pilih modal berita doang, gak breakout/support-defended)
 
     try:
         score_res = (

@@ -7,7 +7,7 @@ import yfinance as yf
 from scoring import compute_score, bsjp_criteria, invest_criteria, compression_setup
 from scanner_universe import TICKERS, SECTOR_BY_TICKER, NAME_BY_TICKER
 from config import supabase, today_wib
-from levels import support_resistance, detect_pivot_zones
+from levels import support_resistance, detect_pivot_zones, well_defended_support
 from prediction import predict_direction
 from prediction_features import compute_broker_features_series
 from groq_client import translate_to_indonesian, explain_levels
@@ -115,6 +115,13 @@ def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> 
     sideways_days = _sideways_days(hist)
     rr_ratio = support_resistance(hist)["rr_ratio"]
     cocok_compression = compression_setup(ma5, ma10, ma20, price_now, sideways_days, rr_ratio)
+    # "buy on weakness" — jalur qualify Swing ALTERNATIF dari breakout (user
+    # eksplisit: support yang berkali-kali disentuh & selalu mantul = ada
+    # yang jagain barang, valid buat entry deket situ, bukan cuma breakout
+    # doang). Cuma flag boolean di sini (murah, jalan ke 951 ticker tiap
+    # refresh) — detail (support_price/touches/distance) dihitung ulang di
+    # _gather_candidates buat pool kecil yang lolos, sama pola kayak cocok_compression.
+    cocok_buy_on_weakness = well_defended_support(hist, price_now) is not None
 
     return {
         "ticker": ticker,
@@ -123,6 +130,7 @@ def _score_from_history(ticker: str, hist, accum_lookup: dict | None = None) -> 
         "volume_ratio": round(volume_today / volume_avg20, 2) if volume_avg20 else 0,
         "cocok_bsjp": cocok_bsjp,
         "cocok_compression": cocok_compression,
+        "cocok_buy_on_weakness": cocok_buy_on_weakness,
         "sideways_days": sideways_days,
         **score,
     }
