@@ -228,6 +228,67 @@ def is_market_uptrend(ihsg_hist) -> bool:
     return bool(ma50 and price_now > ma50)
 
 
+def ma_alignment(ma5: float, ma10: float, ma20: float) -> str:
+    """Susunan MA5/10/20 — proxy golden/death cross JANGKA PENDEK (beda dari
+    determine_trend() di levels.py yang pake MA50/200 jangka panjang, dua-
+    duanya dipake bareng biar keliatan short-term vs long-term). 'golden' =
+    MA5>MA10>MA20 (momentum pendek udah di atas menengah/panjang, bullish
+    stack), 'death' = kebalikannya (bearish stack, biasanya pertanda mulai
+    jual/distribusi), 'mixed' = lagi transisi/belum align jelas."""
+    if ma5 > ma10 > ma20:
+        return "golden"
+    if ma5 < ma10 < ma20:
+        return "death"
+    return "mixed"
+
+
+def adx(hist, period: int = 14) -> float | None:
+    """Average Directional Index (Wilder 1978) — ngukur KEKUATAN trend
+    (0-100), BUKAN arah. >25 = trend kuat & breakout-nya lebih bisa
+    dipercaya, <20 = pasar choppy/gak jelas arahnya, breakout gampang gagal.
+    Konteks TAMBAHAN buat validasi breakout+volume yang udah ada (technical_
+    score) — bukan gantiin, JANGAN dijadiin gate keras (threshold pasti
+    butuh backtest dulu, sama prinsip kayak relative_strength). None kalau
+    histori kurang."""
+    if len(hist) < period * 2:
+        return None
+    high, low, close = hist["High"], hist["Low"], hist["Close"]
+    prev_close = close.shift(1)
+    tr = (high - low).combine((high - prev_close).abs(), max).combine((low - prev_close).abs(), max)
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    val = dx.ewm(alpha=1 / period, adjust=False).mean().iloc[-1]
+    return round(float(val), 1) if val == val else None  # val==val -> False kalau NaN
+
+
+def bollinger_signal(hist, period: int = 20, num_std: float = 2.0) -> dict | None:
+    """Bollinger Bands (SMA20 +/- 2 stddev). 'squeeze' (lebar band sekarang
+    masuk 20% TERSEMPIT 3 bulan terakhir) itu precursor breakout dari sisi
+    VOLATILITAS — sinyal beda sumber dari compression_setup (yang dari
+    spread MA doang), saling KONFIRMASI kalau dua-duanya nyala bareng.
+    'position' above_upper = harga breakout nembus band atas (momentum
+    kuat, BUKAN otomatis 'overbought harus jual' — beda interpretasi dari
+    gaya mean-reversion). None kalau histori kurang."""
+    if len(hist) < period + 20:
+        return None
+    close = hist["Close"]
+    sma = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    upper, lower = sma + num_std * std, sma - num_std * std
+    band_width_pct = (upper - lower) / sma * 100
+    recent_width = band_width_pct.tail(60)
+    squeeze = bool(band_width_pct.iloc[-1] <= recent_width.quantile(0.2)) if len(recent_width) >= 20 else False
+    price_now = float(close.iloc[-1])
+    position = "above_upper" if price_now > upper.iloc[-1] else "below_lower" if price_now < lower.iloc[-1] else "inside"
+    return {"squeeze": squeeze, "position": position, "band_width_pct": round(float(band_width_pct.iloc[-1]), 2)}
+
+
 def invest_criteria(per: float | None, pbv: float | None, dividend_yield: float | None,
                      market_cap: float | None) -> bool:
     """Investasi (hold panjang) — big cap + dividen konsisten + harga gak

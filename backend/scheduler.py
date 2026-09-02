@@ -15,7 +15,7 @@ from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend
 from chart_render import render_chart
-from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend
+from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal
 from intraday import daily_session_stats, session_takeoff
 from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit
 from forex_factory import get_forex_events
@@ -540,6 +540,25 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             and volume_dry_up(hist, c["sideways_days_before"] or 0)
         )
         _levels_cache[c["ticker"]] = lv
+        # trend (MA50/200 mingguan, lihat determine_trend di levels.py) UDAH
+        # dihitung di _apply_smart_tp di atas tapi cuma nempel ke levels buat
+        # caption doang — sekarang ikut disalurin ke Groq juga (breakout SEARAH
+        # trend jangka panjang lebih reliable, breakout di tengah downtrend
+        # patut dicurigai cuma bear-rally, prinsip TA klasik).
+        c["trend"] = lv.get("trend")
+        # ADX (kekuatan trend, bukan arah) + Bollinger squeeze/posisi + MA5/10/20
+        # golden/death cross — 3 indikator TA tambahan, user eksplisit minta.
+        # SEMUA konteks tambahan buat Groq (bukan gate keras, threshold pasti
+        # belum divalidasi backtest), reuse hist yang udah difetch, zero API call baru.
+        c["adx"] = adx(hist)
+        c["bollinger"] = bollinger_signal(hist)
+        try:
+            ma5 = float(hist["Close"].tail(5).mean())
+            ma10 = float(hist["Close"].tail(10).mean())
+            ma20 = float(hist["Close"].tail(20).mean())
+            c["ma_alignment"] = ma_alignment(ma5, ma10, ma20)
+        except Exception:
+            c["ma_alignment"] = None
         # laporan keuangan + order flow + broker net-buy — konteks tambahan buat
         # Groq (lihat pick_alert_candidate), bukan syarat wajib, diem kalau
         # Invezgo belum aktif/gagal fetch. Di-cache PER TICKER PER HARI
