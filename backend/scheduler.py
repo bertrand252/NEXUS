@@ -1844,9 +1844,11 @@ def _check_bsjp_screener() -> None:
     kirim apa-apa. Lebih baik diam daripada maksain alert dari proxy EOD
     doang yang belum tentu bener."""
     if _dedup_seen("bsjp", "screener"):
+        log.info("_check_bsjp_screener: skip, udah ke-dedup hari ini")
         return
     settings = _load_settings()
     if not settings["notif_bsjp"]:
+        log.info("_check_bsjp_screener: skip, notif_bsjp off di Settings")
         return
 
     try:
@@ -1856,9 +1858,12 @@ def _check_bsjp_screener() -> None:
             .execute()
         )
     except Exception:
+        log.exception("_check_bsjp_screener: gagal query scanner_cache Stage-1")
         return
     if not pool_res.data:
+        log.info("_check_bsjp_screener: Stage-1 kosong, gak ada ticker cocok_bsjp=True hari ini")
         return
+    log.info(f"_check_bsjp_screener: Stage-1 {len(pool_res.data)} kandidat, lanjut Stage-2 intraday")
 
     scored = []
     for row in pool_res.data:
@@ -1891,6 +1896,7 @@ def _check_bsjp_screener() -> None:
             scored.append({"ticker": ticker, "price": price_now, "takeoff": takeoff, "score": score, "full_day_pct": full_day_pct})
 
     if not scored:
+        log.info(f"_check_bsjp_screener: Stage-2 dari {len(pool_res.data)} kandidat, NOL yang 'terbang' sesi 2 (score>0)")
         return  # sesi 2 gak ada yang "terbang" beneran — diam, jangan maksain
 
     scored.sort(key=lambda c: c["score"], reverse=True)
@@ -2019,23 +2025,34 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
     """Kirim pertimbangan HOLD/EXIT ke SEMUA posisi 'open' dari 1 source yang
     TP/SL-nya belum kena. `only_before_today`: buat BSJP doang (dientry KEMARIN
     sore, dicek besok siang — posisi yang di-entry HARI INI sendiri belum
-    relevan buat dicek, masih baru beberapa jam)."""
+    relevan buat dicek, masih baru beberapa jam).
+
+    DIAGNOSTIC (2026-09-02): belum pernah divalidasi hidup di production —
+    signal_alerts total cuma 2 baris (source bpjs doang), NOL 'bsjp'/'swing'
+    pernah tercatat, jadi fungsi ini kemungkinan besar SELALU nemu rows==[]
+    (gak ada posisi open buat dicek), bukan berarti advisory-nya sendiri
+    error. log.info biar ketauan pasti dari log, bukan nebak."""
     if _dedup_seen("hold_advisory", source):
+        log.info(f"_check_hold_advisory({source}): skip, udah ke-dedup hari ini")
         return
     try:
         res = supabase.table("signal_alerts").select("*").eq("status", "open").eq("source", source).execute()
     except Exception:
+        log.exception(f"_check_hold_advisory({source}): gagal query signal_alerts")
         return
     rows = res.data or []
     if only_before_today:
         today_s = today_wib().isoformat()
         rows = [r for r in rows if str(r.get("alerted_at") or "") < today_s]
     if not rows:
+        log.info(f"_check_hold_advisory({source}): NOL posisi 'open' buat dicek (only_before_today={only_before_today})")
         return
+    log.info(f"_check_hold_advisory({source}): {len(rows)} posisi open, kirim advisory")
     for row in rows:
         try:
             _advise_hold_or_exit(row)
         except Exception:
+            log.exception(f"_check_hold_advisory({source}): _advise_hold_or_exit gagal buat {row.get('ticker')}")
             continue
     _dedup_mark("hold_advisory", source)
 
@@ -2152,7 +2169,20 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
     except Exception:
         scan_by_ticker = {}
 
-    pool = set(scan_by_ticker) | set(mentor_by_ticker)
+    # "buy on weakness" — SAMA jalur alternatif kayak Swing (support berkali-
+    # kali disentuh & mantul), user eksplisit minta diperluas ke BPJS juga.
+    # Query TERPISAH tanpa gate volume_ratio (kandidat ini JUSTRU lagi tenang/
+    # gak rame volume, itu poinnya).
+    try:
+        support_res = (
+            supabase.table("scanner_cache").select("ticker,price,volume_ratio")
+            .eq("cocok_buy_on_weakness", True).limit(pool_limit).execute()
+        )
+        support_defended_tickers = {r["ticker"] for r in support_res.data}
+    except Exception:
+        support_defended_tickers = set()
+
+    pool = set(scan_by_ticker) | set(mentor_by_ticker) | support_defended_tickers
     session = "s2" if _now_wib().time() >= time(13, 0) else "s1"
 
     candidates = []
@@ -2171,7 +2201,25 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
                 momentum_score = bpjs_momentum_score(takeoff, value_traded_idr)
         except Exception:
             pass
-        if momentum_score <= 0 and not mentor:
+        # trend/adx/bollinger/ma_alignment/buy_on_weakness — konteks TA sama
+        # kayak Swing, dari hist HARIAN (bukan intraday), user eksplisit minta
+        # diperluas ke BPJS juga. Fetch TERPISAH dari intraday di atas (beda
+        # granularitas), gagal diem-diem kalau yfinance error.
+        trend = adx_val = bollinger = ma_align = buy_on_weakness = None
+        try:
+            hist_daily = _get_history(ticker)
+            price_daily_now = float(hist_daily["Close"].iloc[-1])
+            trend = determine_trend(hist_daily)
+            adx_val = adx(hist_daily)
+            bollinger = bollinger_signal(hist_daily)
+            ma5 = float(hist_daily["Close"].tail(5).mean())
+            ma10 = float(hist_daily["Close"].tail(10).mean())
+            ma20 = float(hist_daily["Close"].tail(20).mean())
+            ma_align = ma_alignment(ma5, ma10, ma20)
+            buy_on_weakness = well_defended_support(hist_daily, price_daily_now)
+        except Exception:
+            pass
+        if momentum_score <= 0 and not mentor and not buy_on_weakness:
             continue
         candidates.append({
             "ticker": ticker,
@@ -2180,6 +2228,11 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             "mentor_call": ({"status": mentor["status"], "buy_price": mentor["buy_price"]} if mentor else None),
             "berita": news_by_ticker.get(ticker),
             "channel_calls": channel_calls_by_ticker.get(ticker),
+            "trend": trend,
+            "adx": adx_val,
+            "bollinger": bollinger,
+            "ma_alignment": ma_align,
+            "buy_on_weakness": buy_on_weakness,
         })
 
     candidates.sort(key=lambda c: c["momentum_score"], reverse=True)
@@ -2239,7 +2292,9 @@ def _check_bpjs() -> None:
         return  # Groq sendiri gak cukup yakin — skip daripada kirim call ragu-ragu
 
     candidate = next((c for c in candidates if c["ticker"] == ticker), None)
-    if candidate is None or (candidate["momentum_score"] <= 0 and not candidate.get("mentor_call")):
+    if candidate is None or (
+        candidate["momentum_score"] <= 0 and not candidate.get("mentor_call") and not candidate.get("buy_on_weakness")
+    ):
         return  # jaga-jaga Groq halusinasi ticker di luar pool / ngelanggar instruksi sendiri
 
     try:
