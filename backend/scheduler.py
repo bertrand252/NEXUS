@@ -150,6 +150,14 @@ def _next_target(now: datetime, hour: int, minute: int, weekday: int | None) -> 
     return target
 
 
+def _is_due_now(now: datetime, hour: int, minute: int, weekday: int | None) -> bool:
+    """True kalau target hour:minute (hari ini, atau hari `weekday` KALAU
+    hari ini emang hari itu) udah lewat/pas SEKARANG — dipake buat catch-up
+    pas restart abis target lewat (lihat _run_scheduled)."""
+    return (weekday is None or now.weekday() == weekday) and \
+        now >= now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 async def _run_scheduled(hour: int, minute: int, category: str, func, weekday: int | None = None) -> None:
     """Loop harian (weekday=None) atau mingguan (weekday=0-6) jam hour:minute
     WIB — BEDA dari pola while-True-sleep-until-target polos yang dipake
@@ -166,8 +174,17 @@ async def _run_scheduled(hour: int, minute: int, category: str, func, weekday: i
     (catch-up), bukan nunggu siklus berikutnya."""
     while True:
         now = _now_wib()
-        target = _next_target(now, hour, minute, weekday)
-        if now < target:
+        # BUG: _next_target() SELALU balikin target > now (constructionnya
+        # gitu), jadi `if now < target` di bawah ini kalau dites lawan hasil
+        # _next_target bakal SELALU true — dedup catch-up di bawah gak
+        # PERNAH kesampean pas restart abis target hari/minggu ini lewat,
+        # persis skenario yang mau difix (loop langsung lompat ke target
+        # BERIKUTNYA lewat _next_target, gak pernah ngecek "target hari ini
+        # udah lewat tapi belum jalan"). Fix: cek due_today LANGSUNG dari jam
+        # sekarang (bukan dari _next_target yang udah kadung ngelompatin),
+        # baru sleep kalau emang belum due.
+        if not _is_due_now(now, hour, minute, weekday):
+            target = _next_target(now, hour, minute, weekday)
             await asyncio.sleep((target - now).total_seconds())
             now = _now_wib()
         if not _dedup_seen(category, "done"):
@@ -1504,11 +1521,19 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     dates_sorted = sorted(daily_totals)
     recent_sum = sum(daily_totals[d] for d in dates_sorted[-5:])
     prior_sum = sum(daily_totals[d] for d in dates_sorted[-10:-5])
+    # BUG ketemu 2026-09-02: cabang "akumulasi_melambat" tadinya cuma cek
+    # `recent_sum < prior_sum * 0.5` tanpa mastiin prior_sum-nya POSITIF dulu
+    # — kalau broker lagi net-JUAL di window sebelumnya (prior_sum negatif)
+    # terus tambah parah jualnya (recent makin negatif), kondisi itu tetep
+    # kebawa True (misal prior=-100, recent=-80 -> -80 < -50) dan salah
+    # dilabelin "akumulasi melambat" padahal gak pernah ada akumulasi buat
+    # "melambat" — itu distribusi yang MEMBURUK. Fix: wajib prior_sum > 0
+    # dulu, "melambat" cuma masuk akal relatif dari akumulasi beneran.
     if recent_sum > 0 and recent_sum > prior_sum * 1.2:
         trend = "akumulasi_meningkat"
     elif recent_sum < 0 and prior_sum >= 0:
         trend = "distribusi_meningkat"
-    elif recent_sum < prior_sum * 0.5:
+    elif prior_sum > 0 and recent_sum < prior_sum * 0.5:
         trend = "akumulasi_melambat"
     else:
         trend = "netral"

@@ -1,6 +1,28 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
-from scheduler import _format_bandar_line, _detect_bandar
+from datetime import datetime
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now
 from unittest.mock import patch
+
+
+def test_is_due_now_catches_up_after_target_passed_today():
+    # restart 07:30, target harian 06:00 -> udah lewat HARI INI, harus catch-up (True)
+    now = datetime(2026, 9, 2, 7, 30)  # Rabu
+    assert _is_due_now(now, hour=6, minute=0, weekday=None) is True
+
+
+def test_is_due_now_false_before_target_today():
+    now = datetime(2026, 9, 2, 5, 0, 0)
+    assert _is_due_now(now, hour=6, minute=0, weekday=None) is False
+
+
+def test_is_due_now_weekly_only_true_on_target_weekday():
+    # Minggu (weekday=6) jam 21:05, target 21:00 -> lewat DI HARI YANG BENER -> True
+    sunday_after = datetime(2026, 9, 6, 21, 5)  # 2026-09-06 = Minggu
+    assert _is_due_now(sunday_after, hour=21, minute=0, weekday=6) is True
+    # Senin (bukan hari targetnya) -> False walau jamnya sama, JANGAN catch-up
+    # weekly job yang beberapa hari udah lewat (kadaluarsa, bukan telat sedikit)
+    monday = datetime(2026, 9, 7, 21, 5)
+    assert _is_due_now(monday, hour=21, minute=0, weekday=6) is False
 
 
 def test_format_bandar_line_with_avg_price():
@@ -81,3 +103,25 @@ def test_detect_bandar_not_confused_by_cumulative_growth():
         result = _detect_bandar("TEST", "2026-08-01", "2026-08-06")
     assert result["cumulative_net_value"] == 9000
     assert result["consistency_pct"] == 20.0
+
+
+def test_detect_bandar_trend_not_akumulasi_melambat_when_prior_is_selling():
+    # BUG ketemu 2026-09-02: cabang "akumulasi_melambat" tadinya cuma cek
+    # recent_sum < prior_sum * 0.5 tanpa mastiin prior_sum POSITIF dulu.
+    # Skenario ini: broker net-JUAL di window sebelumnya (prior_sum -5000)
+    # terus makin parah jualnya (recent_sum -8000) — bukan akumulasi yang
+    # "melambat" (emang gak pernah ada akumulasi), harusnya netral bukan
+    # dilabel akumulasi_melambat.
+    dates = [f"2026-08-{d:02d}" for d in range(1, 14)]
+    values = [10000, 20000, 30000,                    # warm-up, di luar window trend
+              29000, 28000, 27000, 26000, 25000,        # prior window: -1000/hari, prior_sum=-5000
+              24000, 23000, 22000, 21000, 17000]         # recent window: -1000x4,-4000, recent_sum=-8000
+    inv = {
+        "price": [{"close": 100} for _ in dates],
+        "broker": [{"broker": "AG", "data": [{"date": d, "value": v} for d, v in zip(dates, values)]}],
+    }
+    with patch("scheduler.invezgo_client.is_configured", return_value=True), \
+         patch("scheduler.invezgo_client.get_inventory_chart_stock", return_value=inv), \
+         patch("scheduler.invezgo_client.get_running_trade", return_value={"data": []}):
+        result = _detect_bandar("TEST", "2026-08-01", "2026-08-13")
+    assert result["trend"] == "netral"
