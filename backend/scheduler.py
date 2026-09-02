@@ -1623,7 +1623,14 @@ def _send_running_positions_update() -> None:
         except Exception:
             continue
         pnl_pct = round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2)
-        entry_date = str(row.get("created_at") or "")[:10] or (today_wib() - timedelta(days=30)).isoformat()
+        # BUG ketemu 2026-09-02: kolom "created_at" GAK ADA di signal_alerts
+        # (kolom timestamp aslinya "alerted_at", dikonfirmasi lawan skema live)
+        # — .get("created_at") selalu None, entry_date SELALU jatuh ke fallback
+        # 30 hari generik, gak peduli posisi baru masuk kemarin atau 3 minggu
+        # lalu. Efeknya _detect_bandar di bawah selalu pake window 30 hari
+        # yang gak nyambung sama entry beneran, bukan crash (silent, gak
+        # ketauan dari log).
+        entry_date = str(row.get("alerted_at") or "")[:10] or (today_wib() - timedelta(days=30)).isoformat()
         positions.append({
             "ticker": row["ticker"], "entry_price": row["entry_price"], "price_now": price_now,
             "pnl_pct": pnl_pct, "target": row["target"], "stop_loss": row["stop_loss"],
