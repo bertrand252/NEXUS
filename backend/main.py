@@ -22,12 +22,13 @@ from scheduler import (
     run_entry_zone_watcher,
     run_scanner_refresh,
     run_fundamentals_refresh,
+    run_bpjs_watcher,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """12 task background (lihat scheduler.py buat detail tiap fungsi):
+    """13 task background (lihat scheduler.py buat detail tiap fungsi):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
     (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:30, screener BSJP +
     pertimbangan hold/exit BPJS yang masih open), run_bsjp_hold_check (12:00,
@@ -39,7 +40,9 @@ async def lifespan(app: FastAPI):
     notif ENTRY ZONE real-time — bukan nunggu run_morning_routine besok pagi),
     run_scanner_refresh (16:00 WIB abis market tutup, auto-refresh scanner_cache
     — sebelumnya cuma manual, sempet basi 7 hari), run_fundamentals_refresh
-    (Senin 16:30 WIB, mingguan — PER/PBV/dividend jarang berubah harian).
+    (Senin 16:30 WIB, mingguan — PER/PBV/dividend jarang berubah harian),
+    run_bpjs_watcher (tiap 15 menit pas market buka — dipisah dari run_scheduler
+    yang 1 jam, momentum hari ini makin cepet kedeteksi makin bagus).
     Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
@@ -54,6 +57,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_entry_zone_watcher()),
         asyncio.create_task(run_scanner_refresh()),
         asyncio.create_task(run_fundamentals_refresh()),
+        asyncio.create_task(run_bpjs_watcher()),
     ]
     yield
     for t in tasks:

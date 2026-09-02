@@ -1694,13 +1694,39 @@ async def run_scheduler() -> None:
         # tiap check DIBUNGKUS SENDIRI-SENDIRI (sebelumnya 3 dari 4 gak
         # ke-bungkus sama sekali — kalau salah satu raise exception gak
         # terduga, SELURUH loop ini mati diem-diem, gak ada lagi Swing/
-        # watchlist/econ/BPJS check sampe Railway di-restart manual)
-        for check in (check_and_alert, _check_watchlist_alerts, _check_economic_reminders, _check_bpjs, _check_whale_alerts):
+        # watchlist/econ check sampe Railway di-restart manual). _check_bpjs
+        # PINDAH ke run_bpjs_watcher sendiri (15 menit, bukan numpang di sini
+        # 1 jam) — momentum hari ini makin cepet kedeteksi makin bagus,
+        # beda dari Swing yang emang gak urgent.
+        for check in (check_and_alert, _check_watchlist_alerts, _check_economic_reminders, _check_whale_alerts):
             try:
                 check()
             except Exception:
                 log.exception(f"{check.__name__} gagal")
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+
+
+BPJS_WATCH_INTERVAL_SECONDS = 15 * 60  # user eksplisit minta lebih sering dari 1 jam — momentum
+                                         # hari ini (BPJS) makin cepet kedeteksi makin awal bisa masuk,
+                                         # beda dari Swing yang sengaja gak urgent (jalan off-hours doang)
+
+
+async def run_bpjs_watcher() -> None:
+    """Cek kandidat BPJS TIAP 15 MENIT pas market buka (sebelumnya numpang
+    di run_scheduler 1 jam sekali, gak ada alasan teknis kuat kenapa harus
+    sejarang itu — biaya per-cek murah, cuma ~15 ticker intraday + 1 Groq
+    call kalau ada kandidat, jauh dari skala 951-ticker scan). Diem total
+    di luar jam market. _check_bpjs sendiri udah idempotent (dedup MARK
+    cuma abis sukses kirim, bukan abis nyoba) jadi aman dipanggil berkali-
+    kali sehari tanpa alert dobel."""
+    while True:
+        await asyncio.sleep(BPJS_WATCH_INTERVAL_SECONDS)
+        if not _in_market_hours():
+            continue
+        try:
+            _check_bpjs()
+        except Exception:
+            log.exception("_check_bpjs gagal (bpjs watcher)")
 
 
 def _run_night_recap_steps() -> None:
