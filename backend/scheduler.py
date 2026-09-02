@@ -433,6 +433,23 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     except Exception:
         scan_by_ticker = {}
 
+    # "buy on weakness" candidates BUKAN diseleksi dari total_score — mereka
+    # justru LEMAH di volume/price score karena emang lagi gak breakout (itu
+    # POINNYA, beli deket support pas lagi lemah, bukan beli pas udah kuat).
+    # Query TERPISAH tanpa gate alert_threshold, sama pola kayak mentor call.
+    try:
+        support_res = (
+            supabase.table("scanner_cache")
+            .select("ticker,total_score,signal,sector,technical_score,cocok_compression,sideways_days")
+            .eq("cocok_buy_on_weakness", True)
+            .execute()
+        )
+        for r in support_res.data:
+            scan_by_ticker.setdefault(r["ticker"], r)
+        support_defended_tickers = {r["ticker"] for r in support_res.data}
+    except Exception:
+        support_defended_tickers = set()
+
     mentor_by_ticker = _active_mentor_calls()
     news_by_ticker = _recent_news_by_ticker()
     macro_sectors = _macro_sector_set(macro_events)
@@ -441,7 +458,7 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
         t for t, r in scan_by_ticker.items()
         if (r.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD
     }
-    pool = (breakout_tickers | set(mentor_by_ticker)) - _dedup_seen_keys("alerted")
+    pool = (breakout_tickers | set(mentor_by_ticker) | support_defended_tickers) - _dedup_seen_keys("alerted")
 
     candidates = []
     for ticker in pool:
@@ -456,6 +473,7 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             "signal": scan["signal"] if scan else None,
             "technical_score": scan["technical_score"] if scan else None,
             "breakout_confirmed": ticker in breakout_tickers,
+            "support_defended_flag": ticker in support_defended_tickers,
             # setup mentor user — breakout dari saham yang SEBELUMNYA compression+
             # sideways lama itu sinyal lebih kuat (lihat scoring.py::compression_setup)
             "compression_setup": bool(scan and scan.get("cocok_compression")),
@@ -1112,14 +1130,23 @@ def _handle_rotation_callback(callback: dict) -> None:
 
 
 def check_and_alert() -> None:
+    # DIAGNOSTIC (2026-09-02): user lapor NOL alert Swing kekirim SELAMANYA
+    # (signal_alerts cuma 2 baris, dua-duanya BPJS) padahal pool breakout
+    # sehari-hari cukup gede (24/31 ticker Strong lolos technical_score>=12
+    # pas dicek manual). Gak ada akses Railway log dari sini buat mastiin
+    # gate mana yang nolak tiap malem — log.info tiap early-return biar
+    # ketauan PASTI dari log run off-hours berikutnya (17:00-08:00 WIB),
+    # bukan nebak. Hapus/rapihin lagi abis ketauan akar masalahnya.
     if not _in_offhours_window():
         return  # Swing itu non-urgent, sengaja cuma alert pas market tutup (17:00-08:00)
 
     settings = _load_settings()
     if not settings["notif_strong_signal"]:
+        log.info("check_and_alert: skip, notif_strong_signal off di Settings")
         return  # user matiin "Strong signal alerts" di Settings
 
     if _dedup_count_since("alerted", today_wib() - timedelta(days=7)) >= MAX_ALERTS_PER_WEEK:
+        log.info("check_and_alert: skip, udah kena MAX_ALERTS_PER_WEEK")
         return  # udah kena limit sinyal BARU minggu ini
 
     _check_invalidated()
@@ -1127,23 +1154,29 @@ def check_and_alert() -> None:
     macro_events = [e for e in get_forex_events() if e["impact"] in ("High", "Medium")]
     candidates = _gather_candidates(macro_events, settings)
     if not candidates:
+        log.info("check_and_alert: skip, _gather_candidates balikin pool kosong")
         return
 
     try:
         pick = pick_alert_candidate(candidates, macro_events, upcoming_holidays(within_days=3))
     except Exception:
+        log.exception(f"check_and_alert: pick_alert_candidate gagal, pool={len(candidates)} kandidat")
         return  # Groq gagal, coba lagi interval berikutnya
 
     ticker = pick.get("pilih")
     if not ticker:
+        log.info(f"check_and_alert: Groq pilih null dari {len(candidates)} kandidat — alasan: {pick.get('alasan_singkat')}")
         return  # sengaja gak ada yang meyakinkan — mending gak ada call daripada call asal
     if (pick.get("conviction") or 0) < MIN_CONVICTION_SWING:
+        log.info(f"check_and_alert: {ticker} conviction {pick.get('conviction')} < {MIN_CONVICTION_SWING}, skip")
         return  # Groq sendiri gak cukup yakin (conviction rendah) — mending skip daripada kirim call ragu-ragu
 
     candidate = next((c for c in candidates if c["ticker"] == ticker), None)
     if candidate is None or candidate.get("signal") not in ("Strong", "Moderate"):
+        log.info(f"check_and_alert: {ticker} dipilih Groq tapi gak ada di pool / signal bukan Strong-Moderate")
         return  # jaga-jaga kalau Groq halusinasi ticker di luar pool / gak penuhi syarat skor
     if not candidate.get("breakout_confirmed") and not candidate.get("mentor_call"):
+        log.info(f"check_and_alert: {ticker} dipilih Groq tapi breakout_confirmed=False & gak ada mentor_call")
         return  # jaga-jaga kalau Groq ngelanggar instruksi sendiri (pilih modal berita doang, gak breakout)
 
     try:
@@ -1156,6 +1189,7 @@ def check_and_alert() -> None:
         )
         score_row = score_res.data[0]
     except Exception:
+        log.exception(f"check_and_alert: gagal ambil score_row buat {ticker}")
         return
 
     try:
@@ -1167,11 +1201,13 @@ def check_and_alert() -> None:
             levels = support_resistance(hist)
             _apply_smart_tp(levels, ticker, hist)
     except Exception:
+        log.exception(f"check_and_alert: gagal hitung levels buat {ticker}")
         return  # gagal fetch harga — coba lagi interval berikutnya
 
     # portofolio SELALU dijaga max 5 saham Swing konkuren (keputusan user) —
     # kalau penuh, jangan langsung skip diem-diem kayak dulu, tawarin ROTASI
     if _count_open_swing_positions() >= MAX_CONCURRENT_SWING:
+        log.info(f"check_and_alert: {ticker} lolos semua gate tapi 5 slot Swing penuh, tawarin rotasi")
         try:
             _propose_rotation(ticker, hist, levels, score_row, pick, candidate, macro_events)
         except Exception:
@@ -1180,7 +1216,9 @@ def check_and_alert() -> None:
 
     try:
         _send_swing_alert(ticker, hist, levels, score_row, pick, candidate, macro_events)
+        log.info(f"check_and_alert: alert Swing {ticker} KEKIRIM")
     except Exception:
+        log.exception(f"check_and_alert: gagal kirim alert buat {ticker}")
         return  # gagal di Groq/render — coba lagi interval berikutnya, jangan tandain alerted
 
 
