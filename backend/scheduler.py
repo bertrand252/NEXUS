@@ -13,7 +13,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support
+from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal
 from intraday import daily_session_stats, session_takeoff
@@ -563,6 +563,10 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
         # scanner_cache) — harga bisa udah gerak sejak refresh terakhir, None
         # kalau udah gak deket lagi. Reuse hist yang udah difetch, zero API baru.
         c["buy_on_weakness"] = well_defended_support(hist, float(hist["Close"].iloc[-1]))
+        # chart pattern (triangle ascending/descending/symmetrical) — konteks
+        # TA tambahan, user eksplisit minta "setajem mungkin". Reuse hist yang
+        # udah difetch, zero API baru. None kalau bukan salah satu dari 3 pola.
+        c["chart_pattern"] = detect_chart_pattern(hist)
         _levels_cache[c["ticker"]] = lv
         # trend (MA50/200 mingguan, lihat determine_trend di levels.py) UDAH
         # dihitung di _apply_smart_tp di atas tapi cuma nempel ke levels buat
@@ -2208,7 +2212,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
         # kayak Swing, dari hist HARIAN (bukan intraday), user eksplisit minta
         # diperluas ke BPJS juga. Fetch TERPISAH dari intraday di atas (beda
         # granularitas), gagal diem-diem kalau yfinance error.
-        trend = adx_val = bollinger = ma_align = buy_on_weakness = None
+        trend = adx_val = bollinger = ma_align = buy_on_weakness = chart_pattern = None
         try:
             hist_daily = _get_history(ticker)
             price_daily_now = float(hist_daily["Close"].iloc[-1])
@@ -2220,6 +2224,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             ma20 = float(hist_daily["Close"].tail(20).mean())
             ma_align = ma_alignment(ma5, ma10, ma20)
             buy_on_weakness = well_defended_support(hist_daily, price_daily_now)
+            chart_pattern = detect_chart_pattern(hist_daily)
         except Exception:
             pass
         if momentum_score <= 0 and not mentor and not buy_on_weakness:
@@ -2236,6 +2241,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             "bollinger": bollinger,
             "ma_alignment": ma_align,
             "buy_on_weakness": buy_on_weakness,
+            "chart_pattern": chart_pattern,
         })
 
     candidates.sort(key=lambda c: c["momentum_score"], reverse=True)

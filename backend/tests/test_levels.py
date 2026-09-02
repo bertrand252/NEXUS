@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance, well_defended_support
+from levels import rr_label, support_resistance, well_defended_support, detect_chart_pattern
 
 
 def test_rr_label_bands():
@@ -66,3 +66,47 @@ def test_well_defended_support_none_without_enough_touches():
     closes = [100.0 + i for i in range(20)]  # naik lurus, gak ada support berulang
     hist = _make_hist(closes)
     assert well_defended_support(hist, price_now=119.0) is None
+
+
+def _zigzag(pivots: list[float]) -> list[float]:
+    """Bangun deret harga yang genuinely ngelewatin tiap titik di `pivots`
+    sebagai swing point ASLI (ramp 3 langkah antar titik, cukup jarak biar
+    swing_window=3 gak ke-exclude titik ujung)."""
+    seq: list[float] = []
+    for v in pivots:
+        if seq:
+            prev = seq[-1]
+            for i in range(1, 4):
+                seq.append(prev + (v - prev) * i / 4)
+        seq.append(v)
+    return seq
+
+
+def test_detect_chart_pattern_ascending_triangle():
+    # resistance flat ~125, support naik 100->108->116 (higher lows)
+    hist = _make_hist(_zigzag([125, 100, 125, 108, 125, 116, 125]))
+    result = detect_chart_pattern(hist)
+    assert result is not None
+    assert result["pattern"] == "ascending_triangle"
+
+
+def test_detect_chart_pattern_descending_triangle():
+    # support flat ~100, resistance turun 130->118->108 (lower highs)
+    hist = _make_hist(_zigzag([100, 130, 100, 118, 100, 108, 100]))
+    result = detect_chart_pattern(hist)
+    assert result is not None
+    assert result["pattern"] == "descending_triangle"
+
+
+def test_detect_chart_pattern_symmetrical_triangle():
+    # highs turun 130->122->114, lows naik 90->98->106 (konvergen 2 sisi)
+    hist = _make_hist(_zigzag([130, 90, 122, 98, 114, 106, 110]))
+    result = detect_chart_pattern(hist)
+    assert result is not None
+    assert result["pattern"] == "symmetrical_triangle"
+
+
+def test_detect_chart_pattern_none_for_parallel_channel():
+    # upper & lower dua-duanya NAIK bareng — channel paralel biasa, bukan triangle
+    hist = _make_hist(_zigzag([100, 115, 108, 123, 116, 131, 124]))
+    assert detect_chart_pattern(hist) is None

@@ -369,12 +369,12 @@ def find_smart_tp(hist_by_timeframe: dict, price_now: float) -> dict:
     }
 
 
-def detect_trend_channel(hist, lookback: int = 60, swing_window: int = 3) -> dict | None:
-    """Trend channel — 2 garis diagonal (kayak yang biasa digambar manual di
-    TradingView) — connect 2 swing low PALING BARU jadi batas bawah, 2 swing
-    high PALING BARU jadi batas atas, diproyeksiin lurus sampe bar terakhir.
-    None kalau swing point kurang dari 2 di salah satu sisi — JANGAN maksa
-    gambar channel dari titik yang gak cukup buat nentuin garis."""
+def _find_swing_points(hist, lookback: int, swing_window: int) -> tuple[list, list]:
+    """Titik balik harga asli (swing high/low, bar yang high/low-nya lebih
+    ekstrem dari swing_window bar di kanan-kirinya) — dipake BARENG oleh
+    detect_trend_channel & detect_chart_pattern, biar logic pivot-finding
+    gak duplikat di 2 tempat. Balikin (swing_high_pts, swing_low_pts),
+    tiap poin (tanggal, harga), urut kronologis."""
     recent = hist.tail(lookback)
     highs, lows = recent["High"].to_numpy(), recent["Low"].to_numpy()
     dates = recent.index
@@ -387,11 +387,20 @@ def detect_trend_channel(hist, lookback: int = 60, swing_window: int = 3) -> dic
             swing_high_pts.append((dates[i], float(highs[i])))
         if lows[i] == lows[window].min():
             swing_low_pts.append((dates[i], float(lows[i])))
+    return swing_high_pts, swing_low_pts
 
+
+def detect_trend_channel(hist, lookback: int = 60, swing_window: int = 3) -> dict | None:
+    """Trend channel — 2 garis diagonal (kayak yang biasa digambar manual di
+    TradingView) — connect 2 swing low PALING BARU jadi batas bawah, 2 swing
+    high PALING BARU jadi batas atas, diproyeksiin lurus sampe bar terakhir.
+    None kalau swing point kurang dari 2 di salah satu sisi — JANGAN maksa
+    gambar channel dari titik yang gak cukup buat nentuin garis."""
+    swing_high_pts, swing_low_pts = _find_swing_points(hist, lookback, swing_window)
     if len(swing_low_pts) < 2 or len(swing_high_pts) < 2:
         return None
 
-    last_date = dates[-1]
+    last_date = hist.tail(lookback).index[-1]
 
     def _project(p1, p2, to_date):
         (d1, v1), (d2, v2) = p1, p2
@@ -404,4 +413,67 @@ def detect_trend_channel(hist, lookback: int = 60, swing_window: int = 3) -> dic
     return {
         "lower": [lower2[0], (last_date, _project(*lower2, last_date))],
         "upper": [upper2[0], (last_date, _project(*upper2, last_date))],
+    }
+
+
+CHART_PATTERN_FLAT_THRESHOLD_PCT_PER_DAY = 0.05  # ponytail heuristic, belum divalidasi backtest —
+                                                   # slope di bawah ini dianggap "flat" (support/resistance sama)
+
+
+def detect_chart_pattern(hist, lookback: int = 60, swing_window: int = 3) -> dict | None:
+    """Klasifikasi TRIANGLE (ascending/descending/symmetrical) — pattern klasik
+    TA, dari slope garis upper/lower yang SAMA persis kayak detect_trend_channel
+    (2 swing high terbaru = upper, 2 swing low terbaru = lower), bedanya di
+    sini garisnya DIKLASIFIKASIIN (naik/turun/flat), bukan cuma digambar.
+
+    Definisi klasik:
+    - ascending_triangle: lower NAIK (higher lows, ada yang nahan beli makin
+      tinggi) + upper FLAT (resistance sama berkali-kali) -> continuation
+      BULLISH, breakout cenderung ke atas.
+    - descending_triangle: upper TURUN (lower highs, tekanan jual makin
+      rendah) + lower FLAT (support sama berkali-kali) -> continuation
+      BEARISH, breakout cenderung ke bawah.
+    - symmetrical_triangle: upper TURUN + lower NAIK (dua-duanya konvergen
+      dari 2 sisi) -> arah breakout gak pasti dari bentuknya doang, TAPI
+      range harga makin SEMPIT (mirip scoring.py::bollinger_signal squeeze
+      dari sudut beda — kalau dua-duanya nyala bareng, SALING KONFIRMASI).
+
+    None kalau swing point kurang, ATAU kombinasi slope-nya gak masuk salah
+    satu dari 3 pola di atas (misal dua-duanya naik/turun bareng — itu
+    channel biasa/paralel, bukan triangle, tetep kepake detect_trend_channel
+    buat itu). Threshold "flat" HEURISTIK (belum divalidasi backtest) — jangan
+    anggap ini deteksi presisi 100%, konteks tambahan doang buat Groq."""
+    swing_high_pts, swing_low_pts = _find_swing_points(hist, lookback, swing_window)
+    if len(swing_low_pts) < 2 or len(swing_high_pts) < 2:
+        return None
+
+    def _slope_pct_per_day(p1, p2) -> float:
+        (d1, v1), (d2, v2) = p1, p2
+        days = (d2 - d1).days
+        if days == 0 or not v1:
+            return 0.0
+        return (v2 - v1) / v1 / days * 100
+
+    def _direction(slope: float) -> str:
+        if abs(slope) <= CHART_PATTERN_FLAT_THRESHOLD_PCT_PER_DAY:
+            return "flat"
+        return "rising" if slope > 0 else "falling"
+
+    upper_slope = _slope_pct_per_day(*swing_high_pts[-2:])
+    lower_slope = _slope_pct_per_day(*swing_low_pts[-2:])
+    upper_dir, lower_dir = _direction(upper_slope), _direction(lower_slope)
+
+    if upper_dir == "flat" and lower_dir == "rising":
+        pattern = "ascending_triangle"
+    elif lower_dir == "flat" and upper_dir == "falling":
+        pattern = "descending_triangle"
+    elif upper_dir == "falling" and lower_dir == "rising":
+        pattern = "symmetrical_triangle"
+    else:
+        return None
+
+    return {
+        "pattern": pattern,
+        "upper_slope_pct_per_day": round(upper_slope, 3),
+        "lower_slope_pct_per_day": round(lower_slope, 3),
     }
