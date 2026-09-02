@@ -1436,17 +1436,78 @@ def _check_whale_alerts() -> None:
                 continue
             if total_value < SPLIT_ORDER_MIN_TOTAL_VALUE:
                 continue
+            # dedup key TETEP pake buyer code asli (biar grouping/tracking konsisten,
+            # dipake lagi malem buat _send_whale_confirmation cari ticker mana aja
+            # yang kena flag) — yang DIREDAKSI cuma teks yang DITAMPILIN ke user
+            # (lihat BUG broker provisional di atas, buyer/seller code siang hari
+            # BISA BERUBAH pas broker_summary final malam — jangan klaim nama
+            # broker yang belum pasti).
             key = f"{ticker}:{buyer}:{minute}"
             if _dedup_seen("split_order", key):
                 continue
             text = (
                 f"🧩 <b>SPLIT ORDER — {_esc(ticker)}</b>\n\n"
-                f"Broker {_esc(buyer)} pecah {len(group)}x order jam {minute} "
-                f"(dari {len(sellers)} broker lawan: {_esc(', '.join(sorted(sellers)))}) — "
-                f"total {int(total_volume):,} lembar, nilai ~Rp{total_value:,.0f}"
+                f"Broker (belum diketahui) pecah {len(group)}x order jam {minute} "
+                f"dari {len(sellers)} broker lawan berbeda — "
+                f"total {int(total_volume):,} lembar, nilai ~Rp{total_value:,.0f}\n\n"
+                f"⚠️ Kode broker provisional, belum final (baru dikonfirmasi abis "
+                f"broker summary update malam ~18:00 WIB) — nama brokernya nyusul."
             )
             if send_alert(text):
                 _dedup_mark("split_order", key)
+
+
+WHALE_CONFIRM_HOUR = 18
+WHALE_CONFIRM_MINUTE = 30  # abis window "waktu aman" broker_summary final (17:00-17:40,
+                             # +buffer) — dikonfirmasi lawan data live: broker code yang
+                             # keliatan siang di running_trade BISA BERUBAH abis window ini.
+
+
+def _send_whale_confirmation() -> None:
+    """Follow-up MALAM buat whale/split-order yang di-flag SIANG (broker-nya
+    sengaja disensor "belum diketahui" di alert asli, lihat _check_whale_alerts
+    — kode broker di running_trade PROVISIONAL siang hari, BISA BERUBAH:
+    dikonfirmasi lawan data live 2026-09-02, 3 whale trade BANK yang keliatan
+    jam 16:xx ILANG/BEDA pas dicek ulang abis jam 17:54. Jalan SEKALI abis
+    broker_summary final, cross-check ticker yang kena flag hari itu (dari
+    alert_dedup category whale/split_order, reuse — gak perlu tabel baru)
+    lawan broker_summary (data FINAL, snapshot 1 hari, bukan tape provisional)
+    — kirim 1 pesan RINGKAS siapa net-buyer paling gede, BUKAN serinci alert
+    siang (user eksplisit: "gak usah selengkap call siang, sebatas tau aja")."""
+    settings = _load_settings()
+    if not settings["notif_whale_alert"]:
+        return
+    if not invezgo_client.is_configured():
+        return
+    if _dedup_seen("whale_confirm", "sent"):
+        return
+
+    whale_keys = _dedup_seen_keys("whale") | _dedup_seen_keys("split_order")
+    if not whale_keys:
+        return  # gak ada yang kena flag hari ini, diem — gak ada gunanya kirim pesan kosong
+
+    tickers = sorted({k.split(":")[0] for k in whale_keys})
+    today = today_wib().isoformat()
+    lines = ["🐋 <b>Konfirmasi Whale Hari Ini</b>\n"]
+    found_any = False
+    for ticker in tickers:
+        try:
+            bs = invezgo_client.get_broker_summary(ticker, today, today)
+            ranked = sorted(bs, key=lambda b: float(b.get("net_value") or 0), reverse=True)
+            top = ranked[0] if ranked else None
+        except Exception:
+            top = None
+        if not top or float(top.get("net_value") or 0) <= 0:
+            lines.append(f"• {_esc(ticker)} — gak ada broker net-buy dominan jelas hari ini")
+            continue
+        found_any = True
+        net_lot = round(float(top.get("net_volume") or 0) / 100)
+        lines.append(f"• {_esc(ticker)} — kemungkinan besar broker {_esc(top['code'])} ({net_lot:,} lot net-buy hari ini)")
+
+    if not found_any:
+        return  # semua ticker gak ada kesimpulan jelas, jangan kirim pesan yang isinya nihil semua
+    if send_alert("\n".join(lines)):
+        _dedup_mark("whale_confirm", "sent")
 
 
 def _check_economic_reminders() -> None:
@@ -1935,6 +1996,10 @@ def _run_night_recap_steps() -> None:
 
 async def run_night_recap() -> None:
     await _run_scheduled(NIGHT_RECAP_HOUR, 0, "night_recap", _run_night_recap_steps)
+
+
+async def run_whale_confirm() -> None:
+    await _run_scheduled(WHALE_CONFIRM_HOUR, WHALE_CONFIRM_MINUTE, "whale_confirm_run", _send_whale_confirmation)
 
 
 BSJP_SCREENER_HOUR = 15

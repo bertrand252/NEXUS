@@ -23,12 +23,13 @@ from scheduler import (
     run_scanner_refresh,
     run_fundamentals_refresh,
     run_bpjs_watcher,
+    run_whale_confirm,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """13 task background (lihat scheduler.py buat detail tiap fungsi):
+    """14 task background (lihat scheduler.py buat detail tiap fungsi):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
     (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:30, screener BSJP +
     pertimbangan hold/exit BPJS yang masih open), run_bsjp_hold_check (12:00,
@@ -42,7 +43,10 @@ async def lifespan(app: FastAPI):
     — sebelumnya cuma manual, sempet basi 7 hari), run_fundamentals_refresh
     (Senin 16:30 WIB, mingguan — PER/PBV/dividend jarang berubah harian),
     run_bpjs_watcher (tiap 15 menit pas market buka — dipisah dari run_scheduler
-    yang 1 jam, momentum hari ini makin cepet kedeteksi makin bagus).
+    yang 1 jam, momentum hari ini makin cepet kedeteksi makin bagus),
+    run_whale_confirm (18:30 WIB, abis broker_summary final — kode broker di
+    alert whale siang sengaja disensor "belum diketahui" soalnya PROVISIONAL,
+    dikonfirmasi lawan data live suka berubah; ini follow-up ringkas malamnya).
     Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_scanner_refresh()),
         asyncio.create_task(run_fundamentals_refresh()),
         asyncio.create_task(run_bpjs_watcher()),
+        asyncio.create_task(run_whale_confirm()),
     ]
     yield
     for t in tasks:
