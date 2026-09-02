@@ -1,8 +1,9 @@
 import json
+from datetime import timedelta
 from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from config import supabase
+from config import supabase, today_wib
 from groq_client import ask_json
 from forex_factory import get_forex_events
 from rate_limit import limiter
@@ -13,6 +14,8 @@ router = APIRouter()
 SIMULATE_SYSTEM_PROMPT = """Kamu adalah AI analyst StockSense. Analisa dampak kondisi market terkini terhadap portofolio user.
 Gunakan HANYA data yang diberikan di bawah, jangan mengarang data harga/berita yang tidak ada.
 Kalau ada laporan keuangan (Income Statement per quarter, RAW dari API, bentuk field bisa macem-macem — baca sendiri apa yang kepake) buat salah satu saham, jadiin konteks fundamental TAMBAHAN pas nilai risk_level saham itu (misal tren laba lagi turun = risk lebih tinggi) — JANGAN mengarang angka yang gak ada di datanya.
+Kalau ada AKSI KORPORASI (RUPS/dividen/split/rights issue/dll, RAW per tipe beda struktur, baca sendiri) buat salah satu saham, jadiin konteks event risk TAMBAHAN — misal ex-date dividen deket (harga biasa turun abis itu), RUPS ada agenda rights issue (dilusi kepemilikan), dll.
+Kalau ada BANDARMOLOGY (broker paling akumulasi + trend akumulasi/distribusi belakangan + consistency_pct, dari data broker summary asli, BUKAN tebakan) buat salah satu saham, ini SINYAL PALING KUAT buat risk_level — trend "distribusi_meningkat" (broker top lagi JUALAN) itu red flag KONKRET, sebutin eksplisit di alasan kalau ada. "akumulasi_meningkat"/steady_accumulation_sideways itu justru sinyal BAGUS (turunin risk), jangan diabaikan juga. Field ini bisa null/gak ada buat saham tertentu (Invezgo gagal fetch atau gak ada broker net-buy signifikan) — kalau null, JANGAN mengarang, nilai dari data lain yang tersedia aja.
 Jawaban harus JSON, tidak ada teks bebas di luar JSON.
 
 Format output:
@@ -86,6 +89,37 @@ def _money_management_check(holdings: list[dict], total_capital: float) -> dict:
     }
 
 
+def _trim_calendar_entry(entry: dict) -> dict:
+    """payload.Result buat type RUPS_RESULT itu narasi lengkap hasil rapat MENTAH
+    — ketauan pas testing bisa >2000 karakter 1 entry doang (isi lengkap semua
+    agenda+keputusan), penyebab UTAMA request Groq ke-413 (Request too large).
+    Potong ke ringkasan pendek — cukup tau ADA hasil RUPS-nya + awal isinya,
+    detail lengkap gak krusial buat nilai risk portofolio."""
+    payload = dict(entry.get("payload") or {})
+    result = payload.get("Result")
+    if isinstance(result, str) and len(result) > 300:
+        payload["Result"] = result[:300] + "... (dipotong)"
+    return {"code": entry.get("code"), "type": entry.get("type"), "payload": payload}
+
+
+def _trim_financial_statement(fin: dict) -> dict:
+    """Raw Income Statement (34+ baris akun x beberapa kuartal) itu penyumbang
+    TERBESAR ke Groq TPM 413 pas testing (BBRI limit=8 default aja udah
+    ~26rb karakter SENDIRIAN, di atas limit 8000 token/menit tier on_demand
+    buat 1 saham doang). Filter ke baris "Jumlah ..."/"Total ..." doang
+    (subtotal/bottom-line: laba operasional, laba sebelum pajak, laba
+    bersih, dst) — dicek konsisten ADA di 3 sektor beda (bank BBRI, telco
+    TLKM, konglomerat ASII), turun dari 27-37 baris jadi 6-9 baris. HEURISTIK
+    penamaan Indonesia ("jumlah"/"total" = subtotal), BELUM dicek ke SEMUA
+    sektor IDX — kalau ada sektor yang gak konsisten (baris "Jumlah" ilang),
+    bakal keliatan sebagai financials kosong buat saham itu, bukan salah
+    angka. Detail baris granular (per komponen pendapatan/beban) hilang —
+    trade-off sadar demi muat token, bukan makin akurat."""
+    rows = fin.get("rows") or []
+    filtered = [r for r in rows if "jumlah" in r.get("name", "").lower() or "total" in r.get("name", "").lower()]
+    return {"rows": filtered}
+
+
 def _recent_intel_summaries(days: int = 3) -> list[dict[str, Any]]:
     res = (
         supabase.table("daily_market_intel")
@@ -121,30 +155,71 @@ def _simulate(holdings: list[dict]) -> dict:
     # Diem total kalau Invezgo belum configured/gagal fetch. RAW dict apa adanya
     # (shape {"rows":[{name,values:[{col,amount}]}]} DIVERIFIKASI lawan API asli,
     # tapi tetep dikirim raw biar Groq baca sendiri, bukan di-parsing manual di sini).
+    # Groq TPM (8000/menit, tier on_demand) KETABRAK PARAH pas dites (2 saham
+    # raw financials limit=8 default = 36880 token, 413 Request too large) —
+    # _trim_financial_statement filter ke baris subtotal doang (lihat
+    # docstring-nya), bikin muat limit=4 kuartal per saham SEKARANG.
     financials = {}
+    corporate_actions = {}
+    bandarmology = {}
     if invezgo_client.is_configured():
+        # local import — scheduler.py udah import _simulate dari sini (buat
+        # _check_portfolio_risk), import balik di module level bakal circular
+        from scheduler import _detect_bandar
+
+        lookback_from = (today_wib() - timedelta(days=30)).isoformat()
+        today_s = today_wib().isoformat()
         for h in holdings:
             try:
-                financials[h["kode"]] = invezgo_client.get_financial_statement(h["kode"], statement="IS")
+                raw_fin = invezgo_client.get_financial_statement(h["kode"], statement="IS", limit=2)
+                financials[h["kode"]] = _trim_financial_statement(raw_fin)
             except Exception:
                 financials[h["kode"]] = None
+            try:
+                raw_ca = invezgo_client.get_calendar(code=h["kode"], limit=3).get("data") or []
+                corporate_actions[h["kode"]] = [_trim_calendar_entry(e) for e in raw_ca]
+            except Exception:
+                corporate_actions[h["kode"]] = None
+            try:
+                bandarmology[h["kode"]] = _detect_bandar(h["kode"], lookback_from, today_s)
+            except Exception:
+                bandarmology[h["kode"]] = None
 
-    user_prompt = f"""=== PORTOFOLIO USER ===
+    def _build_prompt(include_heavy: bool) -> str:
+        fin_section = (
+            f"=== LAPORAN KEUANGAN (Income Statement per quarter, per saham) ===\n"
+            f"{json.dumps(financials, ensure_ascii=False) if financials else 'Gak ada data.'}\n\n"
+            f"=== AKSI KORPORASI (RUPS/dividen/split/dll TERBARU per saham, API gak dukung filter tanggal jadi baca sendiri mana yang relevan/akan datang) ===\n"
+            f"{json.dumps(corporate_actions, ensure_ascii=False) if corporate_actions else 'Gak ada data.'}\n\n"
+        ) if include_heavy else (
+            "=== LAPORAN KEUANGAN & AKSI KORPORASI ===\n"
+            "Dilewatin — portofolio kebanyakan saham buat muat token Groq sekali kirim bareng bandarmology.\n\n"
+        )
+        return f"""=== PORTOFOLIO USER ===
 {holdings_text}
 
-=== LAPORAN KEUANGAN (Income Statement per quarter, per saham) ===
-{json.dumps(financials, ensure_ascii=False) if financials else "Gak ada data."}
+{fin_section}=== BANDARMOLOGY (broker paling akumulasi + trend, dari data broker summary asli, per saham) ===
+{json.dumps(bandarmology, ensure_ascii=False) if bandarmology else "Gak ada data."}
 
 === EVENT FOREX FACTORY (minggu ini) ===
 {json.dumps(relevant_events, ensure_ascii=False) if relevant_events else "Tidak ada event high/medium impact minggu ini."}
 
 === MARKET INTEL MANUAL (3 hari terakhir) ===
-{json.dumps(intel, ensure_ascii=False) if intel else "Tidak ada intel manual yang diinput dalam 3 hari terakhir."}
+{json.dumps(intel, ensure_ascii=False) if intel else "Tidak ada intel manual yang diinput dalam 3 hari terakhir."}"""
 
-=== GEOPOLITIK / EVENT KHUSUS IDX (RUPS, dividen, MSCI, dll) ===
-Belum tersedia — nunggu sumber data otomatis (belum ada API gratis buat data ini)."""
-
-    return ask_json(SIMULATE_SYSTEM_PROMPT, user_prompt)
+    try:
+        return ask_json(SIMULATE_SYSTEM_PROMPT, _build_prompt(include_heavy=True))
+    except RuntimeError as e:
+        if "413" not in str(e) and "too large" not in str(e).lower():
+            raise
+        # portofolio kebanyakan saham (~5, MM_MAX_SLOTS) -> financials+aksi
+        # korporasi gabungan kelewat 8000 TPM Groq (tier on_demand) walau
+        # udah ditrim habis-habisan (lihat _trim_financial_statement/
+        # _trim_calendar_entry). Fallback: DROP 2 section itu, keep
+        # bandarmology (paling murah + paling kuat sinyalnya buat risk) +
+        # holdings/forex/intel — daripada gagal total, mending analisa
+        # sedikit lebih dangkal.
+        return ask_json(SIMULATE_SYSTEM_PROMPT, _build_prompt(include_heavy=False))
 
 
 @router.post("/simulate")
