@@ -8,6 +8,7 @@ from groq_client import ask_json
 from forex_factory import get_forex_events
 from rate_limit import limiter
 import invezgo_client
+from invezgo_client import trim_financial_statement
 
 router = APIRouter()
 
@@ -102,24 +103,6 @@ def _trim_calendar_entry(entry: dict) -> dict:
     return {"code": entry.get("code"), "type": entry.get("type"), "payload": payload}
 
 
-def _trim_financial_statement(fin: dict) -> dict:
-    """Raw Income Statement (34+ baris akun x beberapa kuartal) itu penyumbang
-    TERBESAR ke Groq TPM 413 pas testing (BBRI limit=8 default aja udah
-    ~26rb karakter SENDIRIAN, di atas limit 8000 token/menit tier on_demand
-    buat 1 saham doang). Filter ke baris "Jumlah ..."/"Total ..." doang
-    (subtotal/bottom-line: laba operasional, laba sebelum pajak, laba
-    bersih, dst) — dicek konsisten ADA di 3 sektor beda (bank BBRI, telco
-    TLKM, konglomerat ASII), turun dari 27-37 baris jadi 6-9 baris. HEURISTIK
-    penamaan Indonesia ("jumlah"/"total" = subtotal), BELUM dicek ke SEMUA
-    sektor IDX — kalau ada sektor yang gak konsisten (baris "Jumlah" ilang),
-    bakal keliatan sebagai financials kosong buat saham itu, bukan salah
-    angka. Detail baris granular (per komponen pendapatan/beban) hilang —
-    trade-off sadar demi muat token, bukan makin akurat."""
-    rows = fin.get("rows") or []
-    filtered = [r for r in rows if "jumlah" in r.get("name", "").lower() or "total" in r.get("name", "").lower()]
-    return {"rows": filtered}
-
-
 def _recent_intel_summaries(days: int = 3) -> list[dict[str, Any]]:
     res = (
         supabase.table("daily_market_intel")
@@ -157,8 +140,8 @@ def _simulate(holdings: list[dict]) -> dict:
     # tapi tetep dikirim raw biar Groq baca sendiri, bukan di-parsing manual di sini).
     # Groq TPM (8000/menit, tier on_demand) KETABRAK PARAH pas dites (2 saham
     # raw financials limit=8 default = 36880 token, 413 Request too large) —
-    # _trim_financial_statement filter ke baris subtotal doang (lihat
-    # docstring-nya), bikin muat limit=4 kuartal per saham SEKARANG.
+    # invezgo_client.trim_financial_statement filter ke baris subtotal doang
+    # (lihat docstring-nya), bikin muat limit=4 kuartal per saham SEKARANG.
     financials = {}
     corporate_actions = {}
     bandarmology = {}
@@ -172,7 +155,7 @@ def _simulate(holdings: list[dict]) -> dict:
         for h in holdings:
             try:
                 raw_fin = invezgo_client.get_financial_statement(h["kode"], statement="IS", limit=2)
-                financials[h["kode"]] = _trim_financial_statement(raw_fin)
+                financials[h["kode"]] = trim_financial_statement(raw_fin)
             except Exception:
                 financials[h["kode"]] = None
             try:
@@ -214,7 +197,7 @@ def _simulate(holdings: list[dict]) -> dict:
             raise
         # portofolio kebanyakan saham (~5, MM_MAX_SLOTS) -> financials+aksi
         # korporasi gabungan kelewat 8000 TPM Groq (tier on_demand) walau
-        # udah ditrim habis-habisan (lihat _trim_financial_statement/
+        # udah ditrim habis-habisan (lihat invezgo_client.trim_financial_statement/
         # _trim_calendar_entry). Fallback: DROP 2 section itu, keep
         # bandarmology (paling murah + paling kuat sinyalnya buat risk) +
         # holdings/forex/intel — daripada gagal total, mending analisa

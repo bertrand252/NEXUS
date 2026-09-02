@@ -30,6 +30,7 @@ from market_calendar import is_trading_day, upcoming_holidays
 from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
 from logger import get_logger
 import invezgo_client
+from invezgo_client import trim_financial_statement
 
 log = get_logger("scheduler")
 
@@ -596,7 +597,17 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             else:
                 fields = {}
                 try:
-                    fields["financial_statement"] = invezgo_client.get_financial_statement(c["ticker"], statement="IS")
+                    # BUG NYATA ketemu 2026-09-02: raw financial_statement (default
+                    # limit=8 kuartal, 27-37+ baris akun, ~20-26rb karakter/ticker)
+                    # dikirim MENTAH buat SETIAP kandidat di pool (bisa ~20 ticker) —
+                    # 1 panggilan pick_alert_candidate sampe 84rb token, abisin
+                    # kuota HARIAN Groq (200rb/hari) sendirian, bikin 429 diem-diem
+                    # ketelen except Exception di check_and_alert. Kemungkinan besar
+                    # ini SALAH SATU akar masalah "Swing NOL alert selamanya" (bareng
+                    # bug MAX_ALERTS_PER_WEEK yang udah difix). Fix: trim_financial_
+                    # statement (sama pola kayak Portfolio Simulation 413 fix) + limit=3.
+                    raw_fin = invezgo_client.get_financial_statement(c["ticker"], statement="IS", limit=3)
+                    fields["financial_statement"] = trim_financial_statement(raw_fin)
                 except Exception:
                     pass
                 try:

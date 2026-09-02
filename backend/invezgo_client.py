@@ -139,6 +139,28 @@ def get_financial_statement(code: str, statement: str = "BS", period_type: str =
     return _get(f"/analysis/financial-statement/{code}", {"statement": statement, "type": period_type, "limit": limit})
 
 
+def trim_financial_statement(fin: dict) -> dict:
+    """Raw Income Statement (27-37+ baris akun x beberapa kuartal) itu penyumbang
+    TERBESAR ke token LLM kalau dikirim mentah — ketemu 2x kejadian nyata:
+    (1) Portfolio Simulation 413 "Request too large" (Groq TPM 8000/menit,
+    BBRI limit=8 default aja ~26rb karakter SENDIRIAN), (2) Swing pick_alert_
+    candidate kena 429 daily quota exhausted (1 panggilan 84rb token, gara-
+    gara financial_statement RAW dikirim buat TIAP kandidat di pool, bukan
+    cuma 1). Filter ke baris "Jumlah ..."/"Total ..." doang (subtotal/
+    bottom-line: laba operasional, laba sebelum pajak, laba bersih, dst) —
+    dicek konsisten ADA di 3 sektor beda (bank BBRI, telco TLKM, konglomerat
+    ASII), turun dari 27-37 baris jadi 6-9 baris. HEURISTIK penamaan
+    Indonesia ("jumlah"/"total" = subtotal), BELUM dicek ke SEMUA sektor IDX
+    — kalau ada sektor yang gak konsisten (baris "Jumlah" ilang), bakal
+    keliatan sebagai financials kosong buat saham itu, bukan salah angka.
+    Detail baris granular (per komponen pendapatan/beban) hilang — trade-off
+    sadar demi muat token, bukan makin akurat. Reuse bareng routers/
+    portfolio.py & scheduler.py, jangan duplikat logic ini di 2 tempat."""
+    rows = fin.get("rows") or []
+    filtered = [r for r in rows if "jumlah" in r.get("name", "").lower() or "total" in r.get("name", "").lower()]
+    return {"rows": filtered}
+
+
 def get_price_seasonality(code: str, range_years: str = "3") -> dict:
     """[{month, start_price, end_price, percentage_change}, ...] — pola musiman
     historis harga per bulan. DIVERIFIKASI lawan OpenAPI spec asli."""
