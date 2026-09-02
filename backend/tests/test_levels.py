@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance, well_defended_support, detect_chart_pattern
+from levels import rr_label, support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
 
 
 def test_rr_label_bands():
@@ -66,6 +66,46 @@ def test_well_defended_support_none_without_enough_touches():
     closes = [100.0 + i for i in range(20)]  # naik lurus, gak ada support berulang
     hist = _make_hist(closes)
     assert well_defended_support(hist, price_now=119.0) is None
+
+
+def test_apply_buy_on_weakness_support_overrides_sl_to_match_narrative():
+    """BUG ketemu (code review): caption narasiin "support disentuh 3x di
+    ~Rp100" (dari well_defended_support), TAPI stop_loss yang dikirim tetep
+    dari support_resistance() trailing-20-hari — 2 level BEDA, gak nyambung.
+    Setelah apply_buy_on_weakness_support, stop_loss/support HARUS berbasis
+    support_price yang sama kayak yang dinarasiin, bukan level lama.
+
+    Closes SENGAJA beda dari _SUPPORT_BOUNCE_CLOSES — ada 1 dip tunggal ke
+    88 (bukan bagian cluster ~100 yang disentuh 3x) SUPAYA support_resistance()
+    (ambil MIN mentah trailing-20-hari) kepancing turun ke 88, sementara
+    well_defended_support (butuh >=3 sentuhan di harga yang SAMA) tetep milih
+    ~100 — 2 level yang beneran BEDA, baru ketauan kalau reconciliation-nya
+    gak jalan."""
+    closes = [110, 107, 103, 100, 103, 107, 111, 108, 104, 100,
+              103, 108, 112, 109, 105, 100, 104, 109, 113, 110, 88, 102]
+    hist = _make_hist(closes)
+    price_now = 103.0
+    levels = support_resistance(hist)
+    bow = well_defended_support(hist, price_now)
+    assert bow is not None
+    assert abs(bow["support_price"] - 100) < 2  # cluster ~100, BUKAN dip tunggal 88
+    old_stop_loss = levels["stop_loss"]
+    assert old_stop_loss < 90  # buktiin support_resistance() emang kepancing dip 88 sebelum di-fix
+
+    apply_buy_on_weakness_support(levels, price_now, bow)
+
+    assert levels["support"] == round(bow["support_price"], 2)
+    assert levels["stop_loss"] == round(bow["support_price"] * 0.98, 2)
+    assert levels["stop_loss"] != old_stop_loss  # beneran ke-override, bukan kebetulan sama
+    assert levels["rr_label"] == rr_label(levels["rr_ratio"])
+
+
+def test_apply_buy_on_weakness_support_noop_when_none():
+    hist = _make_hist(_SUPPORT_BOUNCE_CLOSES)
+    levels = support_resistance(hist)
+    before = dict(levels)
+    apply_buy_on_weakness_support(levels, 103.0, None)
+    assert levels == before
 
 
 def _zigzag(pivots: list[float]) -> list[float]:

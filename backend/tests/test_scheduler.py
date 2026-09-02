@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support
 from unittest.mock import patch
 
 
@@ -125,3 +125,39 @@ def test_detect_bandar_trend_not_akumulasi_melambat_when_prior_is_selling():
          patch("scheduler.invezgo_client.get_running_trade", return_value={"data": []}):
         result = _detect_bandar("TEST", "2026-08-01", "2026-08-13")
     assert result["trend"] == "netral"
+
+
+def test_broker_defended_support_detects_consistent_broker():
+    # broker "AG" dominan net-buy di SEMUA tanggal touch -> konfirmasi kuat
+    def fake_running_trade(ticker, date, limit=200):
+        return {"data": [
+            {"buyer": "AG", "seller": "XY", "volume": 1000},
+            {"buyer": "AG", "seller": "ZQ", "volume": 500},
+        ]}
+    with patch("scheduler.invezgo_client.is_configured", return_value=True), \
+         patch("scheduler.invezgo_client.get_running_trade", side_effect=fake_running_trade):
+        result = _broker_defended_support("TEST", ["2026-08-01", "2026-08-05", "2026-08-10"])
+    assert result is not None
+    assert result["broker"] == "AG"
+    assert result["appearances"] == 3
+
+
+def test_broker_defended_support_none_when_no_consistent_broker():
+    # beda broker dominan tiap tanggal -> gak ada yang "konsisten defend"
+    dominant_by_date = {"2026-08-01": "AG", "2026-08-05": "XY", "2026-08-10": "ZQ"}
+    def fake_running_trade(ticker, date, limit=200):
+        return {"data": [{"buyer": dominant_by_date[date], "seller": "OTHER", "volume": 1000}]}
+    with patch("scheduler.invezgo_client.is_configured", return_value=True), \
+         patch("scheduler.invezgo_client.get_running_trade", side_effect=fake_running_trade):
+        result = _broker_defended_support("TEST", list(dominant_by_date.keys()))
+    assert result is None
+
+
+def test_broker_defended_support_none_when_invezgo_not_configured():
+    with patch("scheduler.invezgo_client.is_configured", return_value=False):
+        assert _broker_defended_support("TEST", ["2026-08-01"]) is None
+
+
+def test_broker_defended_support_none_without_touch_dates():
+    with patch("scheduler.invezgo_client.is_configured", return_value=True):
+        assert _broker_defended_support("TEST", []) is None

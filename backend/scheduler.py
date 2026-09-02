@@ -13,7 +13,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern
+from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal
 from intraday import daily_session_stats, session_takeoff
@@ -118,21 +118,6 @@ def _dedup_mark(category: str, key: str) -> None:
         }).execute()
     except Exception:
         pass  # tabel belum ada, atau race/duplicate — gak fatal, worst case kirim dobel sesekali
-
-
-def _dedup_count_since(category: str, since: date) -> int:
-    """Jumlah alert kategori X dalam N hari terakhir — dipake buat cap
-    MINGGUAN (Swing itu 1-2x/minggu, bukan harian — gerakannya gak secepat
-    itu, kalau ngirim tiap hari itu lebih ke perilaku Scalping)."""
-    try:
-        res = (
-            supabase.table("alert_dedup").select("id", count="exact")
-            .eq("category", category).gte("dedup_date", since.isoformat())
-            .execute()
-        )
-        return res.count or 0
-    except Exception:
-        return 0
 
 
 def _next_target(now: datetime, hour: int, minute: int, weekday: int | None) -> datetime:
@@ -528,8 +513,18 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
     for c in candidates:
         try:
             hist = _get_history(c["ticker"])
+            price_now = float(hist["Close"].iloc[-1])
             lv = support_resistance(hist)
             _apply_smart_tp(lv, c["ticker"], hist)
+            # "buy on weakness" — DIHITUNG DI SINI (bukan di bawah, setelah gate
+            # RR) karena BUG ketemu: gate RR dulu selalu dites lawan support
+            # trailing-20-hari, walau candidate-nya lolos lewat jalur buy-on-
+            # weakness yang basis levelnya BEDA (support_price dari
+            # well_defended_support) — gate & caption bisa gak nyambung.
+            # Override SEBELUM gate, biar RR yang dites emang RR levelnya
+            # sendiri, bukan level yang gak dipake buat SL beneran.
+            buy_on_weakness = well_defended_support(hist, price_now)
+            apply_buy_on_weakness_support(lv, price_now, buy_on_weakness)
         except Exception:
             continue  # gagal fetch, skip — jangan asumsiin RR-nya oke
         if lv["rr_ratio"] < MIN_RR_RATIO:
@@ -558,11 +553,10 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
             and market_uptrend
             and volume_dry_up(hist, c["sideways_days_before"] or 0)
         )
-        # "buy on weakness" — detail lengkap (support_price/touches/distance_pct)
-        # dihitung ULANG di sini (bukan cuma pake support_defended_flag basi dari
-        # scanner_cache) — harga bisa udah gerak sejak refresh terakhir, None
-        # kalau udah gak deket lagi. Reuse hist yang udah difetch, zero API baru.
-        c["buy_on_weakness"] = well_defended_support(hist, float(hist["Close"].iloc[-1]))
+        # "buy on weakness" (support_price/touches/distance_pct) — dihitung di
+        # atas, SEBELUM gate RR (lihat komentar di situ), tinggal nempel ke
+        # candidate dict di sini.
+        c["buy_on_weakness"] = buy_on_weakness
         # chart pattern (triangle ascending/descending/symmetrical) — konteks
         # TA tambahan, user eksplisit minta "setajem mungkin". Reuse hist yang
         # udah difetch, zero API baru. None kalau bukan salah satu dari 3 pola.
@@ -673,6 +667,19 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
                     fields["bandar"] = _detect_bandar(c["ticker"], bandar_from, today_s)
                 except Exception:
                     pass
+                # cross-check buy_on_weakness (pola HARGA doang) lawan tape reading
+                # beneran — user eksplisit minta: bukan cuma "harga ketahan di sini"
+                # dari price action, tapi BENERAN ada broker yang narik barang pas
+                # nyentuh level itu. Reuse touch_dates dari well_defended_support
+                # (udah dihitung di atas, gratis) buat cari running_trade cuma di
+                # tanggal-tanggal itu doang (bukan scan lebar), murah + tepat sasaran.
+                if c.get("buy_on_weakness"):
+                    try:
+                        fields["broker_defended_support"] = _broker_defended_support(
+                            c["ticker"], c["buy_on_weakness"]["touch_dates"],
+                        )
+                    except Exception:
+                        pass
                 _invezgo_enrich_cache[c["ticker"]] = {"date": today_s, "fields": fields}
                 c.update(fields)
         filtered.append(c)
@@ -914,6 +921,7 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
         "bandar": candidate.get("bandar"),
         "insider_activity": candidate.get("insider_activity"),
         "buy_on_weakness": candidate.get("buy_on_weakness"),
+        "broker_defended_support": candidate.get("broker_defended_support"),
     }
     reasoning = analyze_alert(ticker, score_breakdown, levels, context)
     caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []), candidate.get("bandar"))
@@ -1156,8 +1164,28 @@ def check_and_alert() -> None:
         log.info("check_and_alert: skip, notif_strong_signal off di Settings")
         return  # user matiin "Strong signal alerts" di Settings
 
-    if _dedup_count_since("alerted", today_wib() - timedelta(days=7)) >= MAX_ALERTS_PER_WEEK:
-        log.info("check_and_alert: skip, udah kena MAX_ALERTS_PER_WEEK")
+    # BUG NYATA ketemu 2026-09-02 (root cause "Swing NOL alert selamanya"):
+    # cap ini dulu ngitung dari alert_dedup category="alerted" (gte dedup_date
+    # RANGE 7 hari) — tabel itu GAK PERNAH dibersihin pas signal_alerts-nya
+    # closed/dihapus manual (kejadian nyata: insiden PACK, row signal_alerts
+    # dihapus tapi row alert_dedup-nya kebawa terus). Ketauan ada 16 row
+    # "alerted" numpuk dari 2026-08-28/29 (MPIX/KETR/LIFE/PACK dkk, semua
+    # insiden LAMA yang udah closed/dihapus) — 16 >= MAX_ALERTS_PER_WEEK=5,
+    # jadi gate ini NOLAK SETIAP KALI dari 28/29 Agustus, padahal pool
+    # kandidat sehat (dicek manual: 7 lolos RR gate). Fix: itung dari
+    # signal_alerts LANGSUNG (source of truth yang bener2 ke-maintain —
+    # closed/dihapus beneran ilang dari hitungan), bukan tabel dedup terpisah
+    # yang gak ada mekanisme cleanup-nya sama sekali.
+    try:
+        week_ago = (today_wib() - timedelta(days=7)).isoformat()
+        weekly_count = (
+            supabase.table("signal_alerts").select("id", count="exact")
+            .eq("source", "swing").gte("alerted_at", week_ago).execute()
+        ).count or 0
+    except Exception:
+        weekly_count = 0
+    if weekly_count >= MAX_ALERTS_PER_WEEK:
+        log.info(f"check_and_alert: skip, udah kena MAX_ALERTS_PER_WEEK ({weekly_count}/{MAX_ALERTS_PER_WEEK})")
         return  # udah kena limit sinyal BARU minggu ini
 
     _check_invalidated()
@@ -1645,6 +1673,59 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
         "trend": trend,
         "consistency_pct": consistency_pct,
         "steady_accumulation_sideways": steady_accumulation_sideways,
+    }
+
+
+def _broker_defended_support(ticker: str, touch_dates: list[str]) -> dict | None:
+    """Cross-check levels.py::well_defended_support (pola HARGA doang, dari
+    swing-low pivot) lawan TAPE READING beneran (running-trade Invezgo) —
+    user eksplisit minta: bukan cuma "harga ketahan di sini" dari price
+    action, tapi BENERAN ada broker yang narik barang pas harga nyentuh
+    level itu. Buat tiap touch_dates, cari broker paling DOMINAN net-buy
+    hari itu dari transaksi tape reading (bukan snapshot broker_summary).
+    Kalau broker YANG SAMA dominan di >=2 dari touch_dates yang dicek, itu
+    konfirmasi kuat — "good entry area" beneran, bukan pola harga kebetulan.
+    Cuma dicek 4 touch_dates TERBARU (bukan semua, biar gak boros kuota
+    kalau support-nya udah disentuh banyak kali). None kalau Invezgo gak
+    configured/gagal fetch/gak ada broker yang konsisten dominan."""
+    if not invezgo_client.is_configured() or not touch_dates:
+        return None
+    dominant_per_date: dict[str, str] = {}
+    broker_appearances: dict[str, int] = {}
+    for d in touch_dates[-4:]:
+        try:
+            resp = invezgo_client.get_running_trade(ticker, d, limit=200)
+        except Exception:
+            continue
+        net_by_broker: dict[str, float] = {}
+        for r in resp.get("data") or []:
+            try:
+                vol = float(r.get("volume") or 0)
+            except Exception:
+                continue
+            buyer, seller = r.get("buyer"), r.get("seller")
+            if buyer:
+                net_by_broker[buyer] = net_by_broker.get(buyer, 0) + vol
+            if seller:
+                net_by_broker[seller] = net_by_broker.get(seller, 0) - vol
+        if not net_by_broker:
+            continue
+        top_broker = max(net_by_broker, key=net_by_broker.get)
+        if net_by_broker[top_broker] <= 0:
+            continue  # gak ada yang net-buy dominan hari itu, skip
+        dominant_per_date[d] = top_broker
+        broker_appearances[top_broker] = broker_appearances.get(top_broker, 0) + 1
+
+    if not broker_appearances:
+        return None
+    consistent_broker = max(broker_appearances, key=broker_appearances.get)
+    appearances = broker_appearances[consistent_broker]
+    if appearances < 2:
+        return None  # cuma dominan 1x, belum cukup buat bilang "konsisten defend"
+    return {
+        "broker": consistent_broker,
+        "appearances": appearances,
+        "of_dates_checked": len(dominant_per_date),
     }
 
 
@@ -2216,7 +2297,19 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
         try:
             hist_daily = _get_history(ticker)
             price_daily_now = float(hist_daily["Close"].iloc[-1])
-            trend = determine_trend(hist_daily)
+            # determine_trend() itung golden/death cross dari MA50/MA200 —
+            # BUG ketemu (code review): dulu dikasih hist_daily langsung
+            # (period="2mo", ~40 bar), MA-nya jadi rata-rata SELURUH window
+            # 2 bulan itu, BUKAN sinyal jangka panjang kayak yang di-dokumenin
+            # ke Groq ("posisi harga vs MA50/MA200 MINGGUAN") — bisa kebalik
+            # arah dari trend jangka panjang beneran. Fix: reuse pola sama
+            # kayak Swing (_apply_smart_tp) — mingguan "max", fallback ke
+            # hist_daily kalau weekly-nya gagal/kurang dari 50 bar.
+            try:
+                weekly = yf.Ticker(f"{ticker}.JK").history(period="max", interval="1wk", auto_adjust=False).dropna(subset=["Close"])
+            except Exception:
+                weekly = None
+            trend = determine_trend(weekly if weekly is not None and len(weekly) >= 50 else hist_daily)
             adx_val = adx(hist_daily)
             bollinger = bollinger_signal(hist_daily)
             ma5 = float(hist_daily["Close"].tail(5).mean())
@@ -2308,7 +2401,13 @@ def _check_bpjs() -> None:
 
     try:
         hist = _get_history(ticker)
+        price_now = float(hist["Close"].iloc[-1])
         levels = support_resistance(hist)
+        # sama bug/fix kayak Swing (_gather_candidates) — kalau candidate lolos
+        # lewat jalur buy_on_weakness, SL/support HARUS berbasis level itu,
+        # bukan trailing-20-hari support_resistance() biasa yang gak nyambung
+        # sama narasi caption-nya. Override SEBELUM gate RR di bawah.
+        apply_buy_on_weakness_support(levels, price_now, candidate.get("buy_on_weakness"))
     except Exception:
         return
     if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:

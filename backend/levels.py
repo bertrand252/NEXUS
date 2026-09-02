@@ -57,6 +57,30 @@ def support_resistance(hist) -> dict:
     }
 
 
+def apply_buy_on_weakness_support(levels: dict, price_now: float, buy_on_weakness: dict | None) -> None:
+    """BUG ketemu 2026-09-02 (code review): candidate yang qualify lewat jalur
+    "buy on weakness" (well_defended_support — support disentuh berkali-kali
+    & mantul) dapet caption yang narasiin level itu, TAPI stop_loss/support
+    yang beneran DIKIRIM (dari support_resistance() biasa) tetep pake
+    trailing-20-hari low — 2 angka BEDA, gak pernah direkonsiliasi. Bisa
+    kejadian SL yang dikirim ada DI ATAS support yang jadi alasan trade-nya
+    (posisi stop out sebelum support asli sempet diuji ulang). Fix: kalau
+    ada buy_on_weakness, override support/stop_loss/risk_pct/rr_ratio pake
+    level itu — resistance/reward_pct/entry TETEP dari support_resistance()
+    (target & zona entry gak berubah, cuma basis SL yang perlu nyambung ke
+    narasinya). Mutasi in-place, dipanggil SEBELUM gate RR/risk."""
+    if not buy_on_weakness:
+        return
+    support = buy_on_weakness["support_price"]
+    stop_loss = round(support * 0.98, 2)
+    risk_pct = round((price_now - stop_loss) / price_now * 100, 2)
+    levels["support"] = round(support, 2)
+    levels["stop_loss"] = stop_loss
+    levels["risk_pct"] = risk_pct
+    levels["rr_ratio"] = round(levels["reward_pct"] / risk_pct, 2) if risk_pct > 0 else 0.0
+    levels["rr_label"] = rr_label(levels["rr_ratio"])
+
+
 def detect_pivot_zones(hist, lookback: int = 60, swing_window: int = 3,
                         cluster_pct: float = 0.015, top_n: int = 1, min_touches: int = 2) -> list[dict]:
     """Level support/resistance TAMBAHAN ("AI Zones" di chart) — BEDA dari
@@ -171,47 +195,56 @@ def _swing_clusters_with_roles(hist, swing_window: int = 3, cluster_pct: float =
     dari atas) DAN PERNAH jadi support (mantul dari bawah) di waktu beda
     (role reversal — "support jadi resistance" pas ditembus, atau
     sebaliknya). Balikin is_peak/is_trough/touches_as_peak/touches_as_trough
-    per cluster — caller yang nentuin type-nya relatif ke harga SEKARANG."""
-    highs, lows = hist["High"].to_numpy(), hist["Low"].to_numpy()
-    n = len(hist)
-    swing_highs, swing_lows = [], []
-    for i in range(swing_window, n - swing_window):
-        window = slice(i - swing_window, i + swing_window + 1)
-        if highs[i] == highs[window].max():
-            swing_highs.append(float(highs[i]))
-        if lows[i] == lows[window].min():
-            swing_lows.append(float(lows[i]))
+    + peak_dates/trough_dates (ISO string, buat cross-check broker summary/
+    tape reading di tanggal itu, lihat scheduler.py::_broker_defended_support)
+    per cluster — caller yang nentuin type-nya relatif ke harga SEKARANG.
+    Reuse _find_swing_points (sama helper kayak detect_trend_channel/
+    detect_chart_pattern) — lookback=len(hist) biar behavior SAMA kayak
+    sebelum refactor (dulu selalu pake SELURUH hist yang dikasih, gak ada
+    truncation lookback)."""
+    swing_high_pts, swing_low_pts = _find_swing_points(hist, len(hist), swing_window)
 
-    def _cluster(points: list[float]) -> list[dict]:
+    def _cluster(points: list[tuple]) -> list[dict]:
         if not points:
             return []
-        points = sorted(points)
+        points = sorted(points, key=lambda p: p[1])
         clusters = [[points[0]]]
         for p in points[1:]:
-            if abs(p - clusters[-1][-1]) / clusters[-1][-1] <= cluster_pct:
+            if abs(p[1] - clusters[-1][-1][1]) / clusters[-1][-1][1] <= cluster_pct:
                 clusters[-1].append(p)
             else:
                 clusters.append([p])
-        return [{"price": round(sum(c) / len(c), 2), "touches": len(c)} for c in clusters]
+        return [
+            {"price": round(sum(p[1] for p in c) / len(c), 2), "touches": len(c),
+             "dates": [d.date().isoformat() for d, v in c]}
+            for c in clusters
+        ]
 
-    peak_clusters = _cluster(swing_highs)
-    trough_clusters = _cluster(swing_lows)
+    peak_clusters = _cluster(swing_high_pts)
+    trough_clusters = _cluster(swing_low_pts)
 
     merged, used_troughs = [], set()
     for pc in peak_clusters:
-        entry = {"price": pc["price"], "touches_as_peak": pc["touches"], "touches_as_trough": 0}
+        entry = {
+            "price": pc["price"], "touches_as_peak": pc["touches"], "touches_as_trough": 0,
+            "peak_dates": pc["dates"], "trough_dates": [],
+        }
         for j, tc in enumerate(trough_clusters):
             if j in used_troughs:
                 continue
             if abs(pc["price"] - tc["price"]) / pc["price"] <= cluster_pct:
                 entry["price"] = round((pc["price"] + tc["price"]) / 2, 2)
                 entry["touches_as_trough"] = tc["touches"]
+                entry["trough_dates"] = tc["dates"]
                 used_troughs.add(j)
                 break
         merged.append(entry)
     for j, tc in enumerate(trough_clusters):
         if j not in used_troughs:
-            merged.append({"price": tc["price"], "touches_as_peak": 0, "touches_as_trough": tc["touches"]})
+            merged.append({
+                "price": tc["price"], "touches_as_peak": 0, "touches_as_trough": tc["touches"],
+                "peak_dates": [], "trough_dates": tc["dates"],
+            })
 
     for e in merged:
         e["touches"] = e["touches_as_peak"] + e["touches_as_trough"]
@@ -252,6 +285,11 @@ def well_defended_support(hist, price_now: float, max_distance_pct: float = 6.0,
         "support_price": support["price"],
         "touches": support["touches_as_trough"],
         "distance_pct": round(distance_pct, 2),
+        # tanggal tiap sentuhan — dipake scheduler.py::_broker_defended_support
+        # buat cross-check broker summary/tape reading TEPAT di tanggal itu
+        # (bukan cuma pola harga doang, tapi beneran ADA broker yang narik
+        # barang pas harga nyentuh situ)
+        "touch_dates": support["trough_dates"],
     }
 
 
