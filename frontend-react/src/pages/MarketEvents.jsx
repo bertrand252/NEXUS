@@ -93,7 +93,7 @@ export default function MarketEvents() {
 
   const [corporate, setCorporate] = useState(null);
   useEffect(() => {
-    fetch(`${API_BASE}/market-events/corporate`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setCorporate).catch(() => setCorporate(null));
+    fetch(`${API_BASE}/market-events/corporate`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setCorporate).catch(() => setCorporate({ configured: false }));
   }, []);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -170,9 +170,11 @@ export default function MarketEvents() {
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white tracking-tight">Corporate Actions (RUPS/Dividen)</h3>
-            {!corporate?.configured && <span className="text-[10px] text-slate-500 font-mono">Data gak tersedia</span>}
+            {corporate && !corporate.configured && <span className="text-[10px] text-slate-500 font-mono">Data gak tersedia</span>}
           </div>
-          {!corporate?.configured ? (
+          {!corporate ? (
+            <p className="text-sm text-slate-500 py-6 text-center">Memuat...</p>
+          ) : !corporate.configured ? (
             <p className="text-sm text-slate-500 py-6 text-center">
               Gagal ambil jadwal RUPS/dividen resmi — coba lagi nanti.
             </p>

@@ -471,7 +471,7 @@ export default function StockDetail() {
     fetch(`${API_BASE}/scanner/${ticker}/broker-flow?from_date=${brokerFlowFrom}&to_date=${brokerFlowTo}&akum_days=${akumDays}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((json) => { if (!cancelled) setBrokerFlow(json); })
-      .catch(() => { if (!cancelled) setBrokerFlow(null); });
+      .catch(() => { if (!cancelled) setBrokerFlow({ configured: false }); });
     return () => { cancelled = true; };
   }, [ticker, brokerFlowFrom, brokerFlowTo, akumDays]);
 
@@ -641,7 +641,14 @@ export default function StockDetail() {
             )}
           </div>
 
-          {!brokerFlow?.configured && (
+          {!brokerFlow && (
+            <div className="glow-border rounded-2xl bg-card border border-border p-5">
+              <h3 className="text-sm font-bold text-white tracking-tight mb-3">Broker Flow (Invezgo)</h3>
+              <p className="text-sm text-slate-500 py-8 text-center">Memuat...</p>
+            </div>
+          )}
+
+          {brokerFlow && !brokerFlow.configured && (
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <h3 className="text-sm font-bold text-white tracking-tight mb-3">Broker Flow (Invezgo)</h3>
               <p className="text-sm text-slate-500 py-8 text-center">
@@ -686,16 +693,22 @@ export default function StockDetail() {
                   {brokerFlow.insider_activity.data.slice(0, 8).map((row, i) => {
                     const isNew = row.date && (Date.now() - new Date(row.date).getTime()) < 30 * 86400000;
                     const role = (row.badge || '').replace(/[{}]/g, '');
-                    const latest = row.subrow?.[0];
+                    // shape asli: prev_val/next_val (lembar) + prev_percent/next_percent,
+                    // BUKAN {status,value,price} kayak asumsi lama (field itu gak ada di
+                    // API asli — row.subrow selalu undefined, baris ini gak pernah nongol)
+                    const prevVal = row.prev_val != null ? Number(row.prev_val) : null;
+                    const nextVal = row.next_val != null ? Number(row.next_val) : null;
+                    const naik = prevVal != null && nextVal != null ? nextVal > prevVal : null;
                     return (
                       <li key={i} className="flex items-start justify-between gap-2 border-b border-border/30 last:border-0 pb-2 last:pb-0">
                         <div>
                           <span className="font-semibold text-white">{row.name}</span>
                           {role && <span className="text-[10px] text-slate-500 ml-1">({role})</span>}
-                          {latest && (
+                          {prevVal != null && nextVal != null && (
                             <p className="text-[11px] text-slate-400 mt-0.5">
-                              <span className={latest.status === 'Buy' ? 'text-emerald-400' : 'text-red-400'}>{latest.status}</span>
-                              {' '}{Number(latest.value ?? 0).toLocaleString('id-ID')} lembar @Rp{Number(latest.price ?? 0).toLocaleString('id-ID')}
+                              <span className={naik ? 'text-emerald-400' : 'text-red-400'}>{naik ? 'Naik' : 'Turun'}</span>
+                              {' '}{prevVal.toLocaleString('id-ID')} → {nextVal.toLocaleString('id-ID')} lembar
+                              {row.next_percent != null && ` (${Number(row.next_percent).toFixed(2)}%)`}
                             </p>
                           )}
                         </div>

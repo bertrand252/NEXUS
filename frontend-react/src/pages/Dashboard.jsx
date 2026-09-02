@@ -168,7 +168,7 @@ export default function Dashboard() {
     fetch(`${API_BASE}/scanner/top/ritel`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setTopRitel)
-      .catch(() => setTopRitel(null));
+      .catch(() => setTopRitel({ configured: false }));
 
     loadBriefing();
   }, []);
@@ -280,9 +280,11 @@ export default function Dashboard() {
         <div className="glow-border rounded-2xl bg-card border border-border p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white tracking-tight">Top Retail Activity</h3>
-            {!topRitel?.configured && <span className="text-[11px] text-slate-500 font-mono">Data gak tersedia</span>}
+            {topRitel && !topRitel.configured && <span className="text-[11px] text-slate-500 font-mono">Data gak tersedia</span>}
           </div>
-          {!topRitel?.configured ? (
+          {!topRitel ? (
+            <p className="text-sm text-slate-500 py-4">Memuat...</p>
+          ) : !topRitel.configured ? (
             <p className="text-sm text-slate-500 py-4">Gagal ambil data top retail activity hari ini — coba lagi nanti.</p>
           ) : topRitel.data ? (
             <TopRitelList data={topRitel.data} />

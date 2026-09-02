@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../lib/api';
 
 const SOURCE_LABEL = { swing: 'Swing', bpjs: 'BPJS', bsjp: 'BSJP' };
@@ -25,13 +25,24 @@ export default function HistoryNexus() {
   const [error, setError] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all');
 
+  const reqId = useRef(0);
+
   useEffect(() => {
     function load() {
+      // tag tiap tick polling — kalau response tick LAMA baru resolve SETELAH
+      // tick BARU (network reorder/slow response), jangan biarin nimpa data
+      // yang udah lebih fresh
+      const id = ++reqId.current;
       fetch(`${API_BASE}/signal-track/history`)
         .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then(({ data, warning }) => { if (warning) setError(warning); else { setError(null); setRows(data); } })
-        .catch(() => setError('Gak bisa konek ke backend.'));
-      fetch(`${API_BASE}/signal-track/stats`).then((r) => (r.ok ? r.json() : Promise.reject())).then(setStats).catch(() => setStats(null));
+        .then(({ data, warning }) => {
+          if (id !== reqId.current) return;
+          if (warning) setError(warning); else { setError(null); setRows(data); }
+        })
+        .catch(() => { if (id === reqId.current) setError('Gak bisa konek ke backend.'); });
+      fetch(`${API_BASE}/signal-track/stats`).then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((json) => { if (id === reqId.current) setStats(json); })
+        .catch(() => { if (id === reqId.current) setStats(null); });
     }
     load();
     // polling 60 detik — call baru (Swing/BPJS/BSJP) langsung ke-insert signal_alerts

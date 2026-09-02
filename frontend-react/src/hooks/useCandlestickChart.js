@@ -53,7 +53,17 @@ export function useCandlestickChart(candles, levels, zones) {
 
   useEffect(() => {
     const s = seriesRef.current;
-    if (!s.candle || !candles || candles.length === 0) return;
+    if (!s.candle) return;
+    // candles kosong (misal lagi ganti ticker, data lama di-null-in dulu di
+    // StockDetail) — BUG lama: return diem-diem di sini ninggalin chart
+    // ticker SEBELUMNYA masih nongol, gak sinkron sama card lain yang udah blank
+    if (!candles || candles.length === 0) {
+      s.candle.setData([]);
+      s.sma5.setData([]);
+      s.sma10.setData([]);
+      s.sma15.setData([]);
+      return;
+    }
 
     s.candle.setData(candles);
     s.sma5.setData(smaLine(candles, 5));

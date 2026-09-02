@@ -24,9 +24,8 @@ limit kelewat, _check_budget() raise Exception — SEMUA caller (scheduler.py/
 routers) udah wrap tiap panggilan Invezgo dalam try/except & fail-soft (skip
 field itu doang), jadi otomatis kepake tanpa perlu ubah kode caller.
 """
-import datetime
 import httpx
-from config import INVEZGO_API_KEY
+from config import INVEZGO_API_KEY, today_wib
 from logger import get_logger
 
 log = get_logger("invezgo_client")
@@ -50,7 +49,7 @@ def _headers() -> dict:
 
 
 def _check_budget() -> None:
-    today = datetime.date.today().isoformat()
+    today = today_wib().isoformat()
     if _usage["date"] != today:
         _usage["date"] = today
         _usage["count"] = 0
