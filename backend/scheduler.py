@@ -6,6 +6,7 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 — gak butuh cron/Celery/proses terpisah, paling sederhana buat single-user tool.
 """
 import asyncio
+from time import sleep as _sleep_secs  # alias — "time" udah kepake buat datetime.time di bawah
 from datetime import date, datetime, time, timedelta, timezone
 from html import escape as _esc
 import yfinance as yf
@@ -2130,8 +2131,20 @@ def _advise_hold_or_exit(row: dict) -> None:
     try:
         advice = ask_hold_or_exit(context)
     except Exception:
-        log.exception(f"_advise_hold_or_exit({ticker}): ask_hold_or_exit gagal")
-        return
+        # BUG ketemu 2026-09-02: PGAS gak dapet advisory sama sekali padahal
+        # data-nya valid (dites manual, ask_hold_or_exit balikin "hold" bagus)
+        # — kemungkinan besar Groq rate-limit SESAAT (run_bsjp_screener 15:30
+        # numpuk bareng run_bpjs_watcher yang JUGA jatuh di menit :30, plus
+        # loop ini sendiri manggil Groq per-baris tanpa jeda kalau lebih dari
+        # 1 posisi open). Retry sekali abis jeda pendek — pola sama kayak
+        # ask_json's retry json_validate_failed & refresh_scanner's retry
+        # rate-limit, sebelum nyerah beneran.
+        _sleep_secs(3)
+        try:
+            advice = ask_hold_or_exit(context)
+        except Exception:
+            log.exception(f"_advise_hold_or_exit({ticker}): ask_hold_or_exit gagal (udah retry 1x)")
+            return
     if not advice or advice.get("rekomendasi") not in ("hold", "exit"):
         log.info(f"_advise_hold_or_exit({ticker}): diem, Groq balikin rekomendasi gak valid ({advice})")
         return
@@ -2178,7 +2191,12 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
         log.info(f"_check_hold_advisory({source}): NOL posisi 'open' buat dicek (only_before_today={only_before_today})")
         return
     log.info(f"_check_hold_advisory({source}): {len(rows)} posisi open, kirim advisory")
-    for row in rows:
+    for i, row in enumerate(rows):
+        if i > 0:
+            # jeda antar-posisi — kalau lebih dari 1, mengecilkan risiko numpuk
+            # panggilan Groq dalem 1 menit yang sama (rate-limit sesaat, lihat
+            # komentar retry di _advise_hold_or_exit)
+            _sleep_secs(2)
         try:
             _advise_hold_or_exit(row)
         except Exception:
