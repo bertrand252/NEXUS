@@ -135,6 +135,51 @@ def _dedup_count_since(category: str, since: date) -> int:
         return 0
 
 
+def _next_target(now: datetime, hour: int, minute: int, weekday: int | None) -> datetime:
+    """weekday=None -> next occurrence hari ini/besok jam hour:minute.
+    weekday=0-6 (Senin=0) -> next occurrence hari itu jam hour:minute."""
+    if weekday is None:
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        return target
+    days_until = (weekday - now.weekday()) % 7
+    target = (now + timedelta(days=days_until)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=7)
+    return target
+
+
+async def _run_scheduled(hour: int, minute: int, category: str, func, weekday: int | None = None) -> None:
+    """Loop harian (weekday=None) atau mingguan (weekday=0-6) jam hour:minute
+    WIB — BEDA dari pola while-True-sleep-until-target polos yang dipake
+    tiap loop terjadwal sebelum ini. Bug NYATA ketemu 2026-09-02 (user lapor
+    Sarapan Pagi gak kekirim, generate_briefing()-nya sendiri gak error kalau
+    dites manual): Railway REDEPLOY (sesi ngoding aktif bisa push berkali-
+    kali sehari) reset SEMUA state in-memory TERMASUK posisi loop ini. Pola
+    lama, kalau restart kejadian PAS ABIS target hari ini/minggu ini lewat
+    (`now >= target` -> langsung `target += 1 hari/minggu`), hari ini
+    DISKIP DIEM-DIEM, gak ada log/error yang nunjukin. Fix: dedup ke
+    `alert_dedup` (Supabase, SELAMAT dari redeploy, pola sama kayak
+    _dedup_seen dipake alert biasa) buat tau APAKAH target udah kejalanin
+    hari ini — kalau target udah lewat TAPI belum ke-dedup, jalanin SEKARANG
+    (catch-up), bukan nunggu siklus berikutnya."""
+    while True:
+        now = _now_wib()
+        target = _next_target(now, hour, minute, weekday)
+        if now < target:
+            await asyncio.sleep((target - now).total_seconds())
+            now = _now_wib()
+        if not _dedup_seen(category, "done"):
+            try:
+                func()
+            except Exception:
+                log.exception(f"{category} gagal")
+            _dedup_mark(category, "done")
+        next_target = _next_target(now + timedelta(seconds=1), hour, minute, weekday)
+        await asyncio.sleep(max((next_target - _now_wib()).total_seconds(), 1))
+
+
 def _check_invalidated() -> None:
     """Ticker yang lagi ada posisi Swing AKTIF (waiting_entry/open di
     signal_alerts — BUKAN cuma yang di-alert HARI INI, posisi bisa kepegang
@@ -1626,25 +1671,23 @@ async def run_scheduler() -> None:
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 
+def _run_night_recap_steps() -> None:
+    try:
+        _send_night_recap()
+    except Exception:
+        log.exception("_send_night_recap gagal")
+    try:
+        _send_running_positions_update()
+    except Exception:
+        log.exception("_send_running_positions_update gagal")
+    try:
+        _check_portfolio_risk()
+    except Exception:
+        log.exception("_check_portfolio_risk gagal")
+
+
 async def run_night_recap() -> None:
-    while True:
-        now = _now_wib()
-        target = now.replace(hour=NIGHT_RECAP_HOUR, minute=0, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            _send_night_recap()
-        except Exception:
-            log.exception("_send_night_recap gagal")
-        try:
-            _send_running_positions_update()
-        except Exception:
-            log.exception("_send_running_positions_update gagal")
-        try:
-            _check_portfolio_risk()
-        except Exception:
-            log.exception("_check_portfolio_risk gagal")
+    await _run_scheduled(NIGHT_RECAP_HOUR, 0, "night_recap", _run_night_recap_steps)
 
 
 BSJP_SCREENER_HOUR = 15
@@ -1871,26 +1914,24 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
     _dedup_mark("hold_advisory", source)
 
 
+def _run_bsjp_screener_steps() -> None:
+    try:
+        _check_bsjp_screener()
+    except Exception:
+        log.exception("_check_bsjp_screener gagal")
+    # BPJS deadline-nya SAMA jam ini (15:30, sebelum market tutup, "harus
+    # dijual sore ini") — panggilan TERPISAH dari _check_bsjp_screener()
+    # (fungsi itu banyak early-return kalau BSJP sendiri gak nemu apa-apa
+    # hari itu — "diam lebih baik daripada maksain" — BPJS hold-check
+    # harus tetep jalan walau BSJP-nya gak nemu apa-apa).
+    try:
+        _check_hold_advisory("bpjs")
+    except Exception:
+        log.exception("_check_hold_advisory(bpjs) gagal")
+
+
 async def run_bsjp_screener() -> None:
-    while True:
-        now = _now_wib()
-        target = now.replace(hour=BSJP_SCREENER_HOUR, minute=BSJP_SCREENER_MINUTE, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            _check_bsjp_screener()
-        except Exception:
-            log.exception("_check_bsjp_screener gagal")
-        # BPJS deadline-nya SAMA jam ini (15:30, sebelum market tutup, "harus
-        # dijual sore ini") — panggilan TERPISAH dari _check_bsjp_screener()
-        # (fungsi itu banyak early-return kalau BSJP sendiri gak nemu apa-apa
-        # hari itu — "diam lebih baik daripada maksain" — BPJS hold-check
-        # harus tetep jalan walau BSJP-nya gak nemu apa-apa).
-        try:
-            _check_hold_advisory("bpjs")
-        except Exception:
-            log.exception("_check_hold_advisory(bpjs) gagal")
+    await _run_scheduled(BSJP_SCREENER_HOUR, BSJP_SCREENER_MINUTE, "bsjp_screener", _run_bsjp_screener_steps)
 
 
 BSJP_HOLD_CHECK_HOUR = 12  # midday break IDX (12:00-13:30) — BSJP HARUSNYA
@@ -1898,16 +1939,10 @@ BSJP_HOLD_CHECK_MINUTE = 5  # udah dijual PAGI, kalau siang gini masih 'open' be
 
 
 async def run_bsjp_hold_check() -> None:
-    while True:
-        now = _now_wib()
-        target = now.replace(hour=BSJP_HOLD_CHECK_HOUR, minute=BSJP_HOLD_CHECK_MINUTE, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            _check_hold_advisory("bsjp", only_before_today=True)
-        except Exception:
-            log.exception("run_bsjp_hold_check gagal")
+    await _run_scheduled(
+        BSJP_HOLD_CHECK_HOUR, BSJP_HOLD_CHECK_MINUTE, "bsjp_hold_check",
+        lambda: _check_hold_advisory("bsjp", only_before_today=True),
+    )
 
 
 MARKET_OPEN = time(9, 0)
@@ -1925,19 +1960,14 @@ async def run_scanner_refresh() -> None:
     selama itu. Sekarang auto-refresh 1x/hari abis market tutup (reuse
     refresh_scanner_data yang udah ada throttle 5-worker + retry rate-limit,
     sama logic kayak tombol manual, cuma dipanggil otomatis)."""
-    while True:
-        now = _now_wib()
-        target = now.replace(hour=SCANNER_REFRESH_HOUR, minute=SCANNER_REFRESH_MINUTE, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        if not is_trading_day(_now_wib().date()):
-            continue
-        try:
-            result = refresh_scanner_data()
-            log.info(f"scanner_cache auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
-        except Exception:
-            log.exception("run_scanner_refresh gagal")
+    await _run_scheduled(SCANNER_REFRESH_HOUR, SCANNER_REFRESH_MINUTE, "scanner_refresh", _run_scanner_refresh_step)
+
+
+def _run_scanner_refresh_step() -> None:
+    if not is_trading_day(today_wib()):
+        return
+    result = refresh_scanner_data()
+    log.info(f"scanner_cache auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
 
 
 FUNDAMENTALS_REFRESH_HOUR = 16
@@ -1951,20 +1981,15 @@ async def run_fundamentals_refresh() -> None:
     harian (beda dari breakout/harga yang harus fresh tiap hari), harian
     cuma boros .info call (lebih berat dari .history()) buat data yang gak
     berubah. Senin 16:30 WIB — abis weekend, mulai minggu baru."""
-    while True:
-        now = _now_wib()
-        days_until_monday = (0 - now.weekday()) % 7  # Python weekday(): Senin=0
-        target = (now + timedelta(days=days_until_monday)).replace(
-            hour=FUNDAMENTALS_REFRESH_HOUR, minute=FUNDAMENTALS_REFRESH_MINUTE, second=0, microsecond=0,
-        )
-        if target <= now:
-            target += timedelta(days=7)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            result = refresh_fundamentals_data()
-            log.info(f"fundamentals auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
-        except Exception:
-            log.exception("run_fundamentals_refresh gagal")
+    await _run_scheduled(
+        FUNDAMENTALS_REFRESH_HOUR, FUNDAMENTALS_REFRESH_MINUTE, "fundamentals_refresh",
+        _run_fundamentals_refresh_step, weekday=0,  # Senin
+    )
+
+
+def _run_fundamentals_refresh_step() -> None:
+    result = refresh_fundamentals_data()
+    log.info(f"fundamentals auto-refresh: {result['refreshed']} ok, {result['failed']} gagal")
 
 BPJS_POOL_LIMIT = 15  # lebih kecil dari pool Swing (20) — dipanggil berkali-kali/hari
                         # (tiap jam pas market buka), bukan 1x/hari kayak Swing/BSJP
@@ -2172,26 +2197,27 @@ def _send_morning_briefing() -> None:
                 line += f"\n  {_esc(e['detail'])}"
             lines.append(line)
 
+    # BUG ketemu 2026-09-02 (user lapor Sarapan Pagi gak kekirim): field
+    # rekomendasi diganti shape-nya waktu redesign ("saham"/"alasan" ->
+    # {ticker, entry_price, target, stop_loss, call_oleh}, tempelan langsung
+    # dari signal_alerts, lihat _generate_briefing), tapi formatter DI SINI
+    # gak ikut kesentuh — .get("saham")/.get("alasan") selalu None, _esc(None)
+    # (html.escape) crash tiap ada rekomendasi, ke-swallow diem-diem sama
+    # try/except run_pre_market_briefing (gak ada log yang kebaca gampang).
     rekomendasi = briefing.get("rekomendasi") or []
     if rekomendasi:
         lines.append("\n⭐ <b>Watchlist Hari Ini</b>")
         for r in rekomendasi:
-            lines.append(f"• <b>{_esc(r.get('saham'))}</b>: {_esc(r.get('alasan'))}")
+            lines.append(
+                f"• <b>{_esc(r.get('ticker'))}</b> ({_esc(r.get('call_oleh'))}) — "
+                f"Entry Rp{r['entry_price']:,.0f} · TP Rp{r['target']:,.0f} · SL Rp{r['stop_loss']:,.0f}"
+            )
 
     send_alert("\n".join(lines))
 
 
 async def run_pre_market_briefing() -> None:
-    while True:
-        now = _now_wib()
-        target = now.replace(hour=PRE_MARKET_HOUR, minute=PRE_MARKET_MINUTE, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            _send_morning_briefing()
-        except Exception:
-            log.exception("_send_morning_briefing gagal")
+    await _run_scheduled(PRE_MARKET_HOUR, PRE_MARKET_MINUTE, "pre_market_briefing", _send_morning_briefing)
 
 
 async def run_telegram_channel_listener() -> None:
@@ -2273,26 +2299,24 @@ async def run_telegram_scrape_listener() -> None:
         await asyncio.sleep(TELEGRAM_SCRAPE_INTERVAL_SECONDS)
 
 
+def _run_morning_routine_steps() -> None:
+    # tiap step DIBUNGKUS SENDIRI-SENDIRI (bukan 1 try/except ngelingkupin
+    # semua) — biar 1 step gagal (misal refresh_mentor_calls network error)
+    # gak nge-block step selanjutnya (misal _check_signal_outcomes yang
+    # nutup posisi trading, itu lebih penting daripada mentor sheet)
+    for step in (refresh_mentor_calls, _generate_briefing, _check_entry_zone_touches,
+                 _check_signal_outcomes):
+        try:
+            step()
+        except Exception:
+            log.exception(f"{step.__name__} gagal (morning routine)")
+
+
 async def run_morning_routine() -> None:
     """Sekali tiap hari jam MORNING_ROUTINE_HOUR: refresh mentor_calls dari
     Google Sheets, terus sintesis daily_briefing dari intel yang numpuk
     beberapa hari terakhir — biar pas dibuka paginya udah fresh, gak nunggu."""
-    while True:
-        now = _now_wib()
-        target = now.replace(hour=MORNING_ROUTINE_HOUR, minute=0, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        # tiap step DIBUNGKUS SENDIRI-SENDIRI (bukan 1 try/except ngelingkupin
-        # semua) — biar 1 step gagal (misal refresh_mentor_calls network error)
-        # gak nge-block step selanjutnya (misal _check_signal_outcomes yang
-        # nutup posisi trading, itu lebih penting daripada mentor sheet)
-        for step in (refresh_mentor_calls, _generate_briefing, _check_entry_zone_touches,
-                     _check_signal_outcomes):
-            try:
-                step()
-            except Exception:
-                log.exception(f"{step.__name__} gagal (morning routine)")
+    await _run_scheduled(MORNING_ROUTINE_HOUR, 0, "morning_routine", _run_morning_routine_steps)
 
 
 WEEKLY_POSTMORTEM_HOUR = 21  # Minggu malam WIB — abis 1 minggu trading penuh (Sen-Jum) kelar
@@ -2348,16 +2372,4 @@ def _send_weekly_postmortem() -> None:
 
 
 async def run_weekly_postmortem() -> None:
-    while True:
-        now = _now_wib()
-        days_until_sunday = (6 - now.weekday()) % 7  # Python weekday(): Senin=0 ... Minggu=6
-        target = (now + timedelta(days=days_until_sunday)).replace(
-            hour=WEEKLY_POSTMORTEM_HOUR, minute=0, second=0, microsecond=0,
-        )
-        if target <= now:
-            target += timedelta(days=7)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            _send_weekly_postmortem()
-        except Exception:
-            log.exception("_send_weekly_postmortem gagal")
+    await _run_scheduled(WEEKLY_POSTMORTEM_HOUR, 0, "weekly_postmortem", _send_weekly_postmortem, weekday=6)
