@@ -1406,10 +1406,12 @@ def _check_whale_alerts() -> None:
             if _dedup_seen("whale", key):
                 continue
             side = t.get("type", "—")
+            side_emoji = "📈" if side == "BUY" else "📉" if side == "SELL" else "↔️"
             text = (
                 f"🐋 <b>WHALE ALERT — {_esc(ticker)}</b>\n\n"
-                f"{side} {int(t['volume']):,} lembar @ Rp{t['price']:,.0f} "
-                f"(nilai ~Rp{value:,.0f}) jam {t.get('time', '—')}"
+                f"{side_emoji} <b>{_esc(side)}</b> {int(t['volume']):,} lembar @ Rp{t['price']:,.0f}\n"
+                f"💰 <b>Nilai</b> ~Rp{value:,.0f}\n"
+                f"⏱ <b>Jam</b> {t.get('time', '—')}"
             )
             if send_alert(text):
                 _dedup_mark("whale", key)
@@ -1447,11 +1449,11 @@ def _check_whale_alerts() -> None:
                 continue
             text = (
                 f"🧩 <b>SPLIT ORDER — {_esc(ticker)}</b>\n\n"
-                f"Broker (belum diketahui) pecah {len(group)}x order jam {minute} "
-                f"dari {len(sellers)} broker lawan berbeda — "
-                f"total {int(total_volume):,} lembar, nilai ~Rp{total_value:,.0f}\n\n"
-                f"⚠️ Kode broker provisional, belum final (baru dikonfirmasi abis "
-                f"broker summary update malam ~18:00 WIB) — nama brokernya nyusul."
+                f"🔒 <b>Broker</b> Unknown\n"
+                f"⏱ <b>Jam</b> {minute} · {len(group)}x transaksi beruntun\n"
+                f"👥 <b>Dari</b> {len(sellers)} penjual berbeda\n"
+                f"💰 <b>Total</b> Rp{total_value:,.0f} ({int(total_volume):,} lembar)\n\n"
+                f"📩 Nama broker nyusul malam ini (~18:30 WIB)."
             )
             if send_alert(text):
                 _dedup_mark("split_order", key)
@@ -1498,11 +1500,11 @@ def _send_whale_confirmation() -> None:
         except Exception:
             top = None
         if not top or float(top.get("net_value") or 0) <= 0:
-            lines.append(f"• {_esc(ticker)} — gak ada broker net-buy dominan jelas hari ini")
+            lines.append(f"❓ <b>{_esc(ticker)}</b> — belum ada broker yang keliatan dominan")
             continue
         found_any = True
         net_lot = round(float(top.get("net_volume") or 0) / 100)
-        lines.append(f"• {_esc(ticker)} — kemungkinan besar broker {_esc(top['code'])} ({net_lot:,} lot net-buy hari ini)")
+        lines.append(f"🏦 <b>{_esc(ticker)}</b> — broker {_esc(top['code'])} ({net_lot:,} lot net-buy hari ini)")
 
     if not found_any:
         return  # semua ticker gak ada kesimpulan jelas, jangan kirim pesan yang isinya nihil semua
