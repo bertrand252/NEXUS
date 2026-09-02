@@ -1370,8 +1370,23 @@ def _check_whale_alerts() -> None:
     today = today_wib().isoformat()
     for ticker in tickers:
         try:
-            resp = invezgo_client.get_running_trade(ticker, today, limit=50)
-            trades = resp.get("data") or []
+            # BUG NYATA ketemu 2026-09-02 (user lapor whale detector "gak nyala"
+            # sama sekali, 0 alert dari sejak dibikin): get_running_trade tanpa
+            # `page` = SELALU halaman 1 (kronologis AWAL hari, dikonfirmasi lawan
+            # data live JECX: page1 jam 08:58-09:04, page 18/18 jam 15:49-16:14).
+            # Loop ini jalan TIAP JAM sepanjang hari tapi selalu re-fetch 5-10
+            # menit PERTAMA trading yang SAMA — gak pernah liat transaksi
+            # terbaru sama sekali, brp kalipun re-check. Fix: fetch halaman
+            # TERAKHIR (paling baru) pake totalPage dari response, bukan page 1.
+            first = invezgo_client.get_running_trade(ticker, today, limit=100, page=1)
+            total_pages = first.get("totalPage") or 1
+            trades = list(first.get("data") or []) if total_pages == 1 else []
+            if total_pages > 1:
+                last = invezgo_client.get_running_trade(ticker, today, limit=100, page=total_pages)
+                trades.extend(last.get("data") or [])
+                if total_pages > 2:
+                    prev = invezgo_client.get_running_trade(ticker, today, limit=100, page=total_pages - 1)
+                    trades.extend(prev.get("data") or [])
         except Exception:
             continue
 
