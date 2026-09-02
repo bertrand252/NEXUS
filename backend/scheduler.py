@@ -1931,10 +1931,12 @@ def _check_bsjp_screener() -> None:
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini — jual PAGI besok, jangan dipegang kelamaan.</b>")
 
+    log.info(f"_check_bsjp_screener: {len(scored)} kandidat 'terbang' sesi 2, kirim alert")
     if send_alert("\n".join(lines)):
         _dedup_mark("bsjp", "screener")
         for c in scored:
             if not c["levels"]:
+                log.info(f"_check_bsjp_screener: {c['ticker']} kekirim TANPA TP/SL (RR/levels gak masuk akal)")
                 continue
             try:
                 supabase.table("signal_alerts").insert({
@@ -1953,8 +1955,9 @@ def _check_bsjp_screener() -> None:
                         "full_day_pct": c.get("full_day_pct"),
                     },
                 }).execute()
+                log.info(f"_check_bsjp_screener: {c['ticker']} ke-track ke signal_alerts")
             except Exception:
-                pass
+                log.exception(f"_check_bsjp_screener: gagal insert signal_alerts buat {c['ticker']}")
 
 
 def _advise_hold_or_exit(row: dict) -> None:
