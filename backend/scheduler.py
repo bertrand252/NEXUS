@@ -2193,10 +2193,19 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
     log.info(f"_check_hold_advisory({source}): {len(rows)} posisi open, kirim advisory")
     for i, row in enumerate(rows):
         if i > 0:
-            # jeda antar-posisi — kalau lebih dari 1, mengecilkan risiko numpuk
-            # panggilan Groq dalem 1 menit yang sama (rate-limit sesaat, lihat
-            # komentar retry di _advise_hold_or_exit)
-            _sleep_secs(2)
+            # jeda 1 menit antar-posisi (user eksplisit minta) — hold-advisory
+            # BUKAN urgent per-detik (beda dari BPJS pick yang emang time-sensitive),
+            # jadi aman renggangin buat mengecilkan risiko numpuk panggilan Groq
+            # dalem 1 menit yang sama (rate-limit sesaat, lihat komentar retry
+            # di _advise_hold_or_exit). Ini SATU-SATUNYA loop di scheduler.py
+            # yang manggil Groq berkali-kali beruntun — panggilan lain (pick
+            # Swing/BPJS, analyze_alert, dst) masing-masing cuma 1x per siklus.
+            # ponytail: time.sleep() blocking nahan seluruh event loop scheduler
+            # selama jeda ini (bukan cuma fungsi ini) — aman selama posisi open
+            # cuma segelintir (sekarang 2), upgrade ke asyncio.sleep (butuh
+            # _check_hold_advisory jadi async) kalau suatu saat posisi
+            # bersamaan bisa numpuk banyak (misal >10x60dtk = 10 menit macet).
+            _sleep_secs(60)
         try:
             _advise_hold_or_exit(row)
         except Exception:
