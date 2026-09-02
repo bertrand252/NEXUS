@@ -1349,14 +1349,17 @@ def _check_whale_alerts() -> None:
        pola akumulasi institusi yang sengaja dipecah biar gak keliatan 1
        transaksi gede di tape). Dedup per (ticker, buyer, menit) biar gak
        ke-alert ulang tiap loop.
-    Diem total kalau Invezgo belum aktif (is_configured()) ATAU market lagi
-    tutup — run_scheduler manggil ini TIAP JAM 24/7, tapi transaksi whale cuma
-    relevan pas market beneran buka (di luar itu gak ada transaksi baru sama
-    sekali, cuma buang kuota Invezgo re-fetch data hari itu yang udah final)."""
+    Diem total kalau Invezgo belum aktif (is_configured()) ATAU di luar jam
+    cek — run_scheduler manggil ini TIAP JAM 24/7, tapi transaksi whale cuma
+    relevan pas jendela ini beneran buka (di luar itu gak ada transaksi baru
+    sama sekali, cuma buang kuota Invezgo re-fetch data hari itu yang udah
+    final). Pake _in_whale_check_window (09:00-16:20), BUKAN _in_market_hours
+    (09:00-15:50) — crossing block trade gede kejadian nyata di sesi
+    penutupan (BANK Rp21M jam 16:05), _in_market_hours biasa bakal kelewatan."""
     settings = _load_settings()
     if not settings["notif_whale_alert"]:
         return
-    if not invezgo_client.is_configured() or not _in_market_hours():
+    if not invezgo_client.is_configured() or not _in_whale_check_window():
         return
 
     try:
@@ -2092,8 +2095,10 @@ def _advise_hold_or_exit(row: dict) -> None:
         volume_today = float(hist["Volume"].iloc[-1])
         volume_avg20 = float(hist["Volume"].iloc[-21:-1].mean()) if len(hist) >= 21 else None
     except Exception:
+        log.exception(f"_advise_hold_or_exit({ticker}): gagal fetch histori harga")
         return
     if not volume_avg20 or not invezgo_client.is_configured():
+        log.info(f"_advise_hold_or_exit({ticker}): diem, volume_avg20={volume_avg20}, invezgo_configured={invezgo_client.is_configured()}")
         return
 
     today = today_wib().isoformat()
@@ -2102,8 +2107,10 @@ def _advise_hold_or_exit(row: dict) -> None:
         bs = invezgo_client.get_broker_summary(ticker, week_ago, today)
         top_broker = max(bs, key=lambda b: float(b.get("net_value") or 0)) if bs else None
     except Exception:
+        log.exception(f"_advise_hold_or_exit({ticker}): gagal fetch broker_summary")
         top_broker = None
     if not top_broker or float(top_broker.get("net_value") or 0) <= 0:
+        log.info(f"_advise_hold_or_exit({ticker}): diem, gak ada broker jelas paling akumulasi (top_broker={top_broker})")
         return  # gak ada broker yang jelas paling akumulasi, jangan nebak siapa yang "jual"
 
     context = {
@@ -2123,10 +2130,13 @@ def _advise_hold_or_exit(row: dict) -> None:
     try:
         advice = ask_hold_or_exit(context)
     except Exception:
+        log.exception(f"_advise_hold_or_exit({ticker}): ask_hold_or_exit gagal")
         return
     if not advice or advice.get("rekomendasi") not in ("hold", "exit"):
+        log.info(f"_advise_hold_or_exit({ticker}): diem, Groq balikin rekomendasi gak valid ({advice})")
         return
 
+    log.info(f"_advise_hold_or_exit({ticker}): kirim {advice['rekomendasi']}")
     emoji = "🟢" if advice["rekomendasi"] == "hold" else "🔴"
     label = "HOLD" if advice["rekomendasi"] == "hold" else "PERTIMBANGKAN EXIT"
     sign = "+" if context["pnl_pct"] >= 0 else ""
@@ -2265,6 +2275,24 @@ def _in_market_hours() -> bool:
     BPJS "jam open market sampe close, sebelum bsjp"."""
     now = _now_wib()
     return is_trading_day(now.date()) and MARKET_OPEN <= now.time() < MARKET_CLOSE
+
+
+WHALE_CHECK_CLOSE = time(16, 20)  # sesi PENUTUPAN (pre-closing + closing auction) — dicek
+                                    # langsung lawan data live: transaksi crossing GEDE (BANK
+                                    # Rp21 M) kejadian jam 16:03-16:05, di LUAR _in_market_hours
+                                    # biasa (15:50). 16:20 kasih buffer, belum divalidasi jadwal
+                                    # resmi IDX pra-penutupan/closing auction, cuma dari observasi data.
+
+
+def _in_whale_check_window() -> bool:
+    """09:00-16:20 WIB + hari trading — whale/split-order detector BUTUH nyakup
+    sesi PENUTUPAN juga (beda dari _in_market_hours biasa yang berhenti 15:50),
+    soalnya crossing block trade gede sering kejadian pas pre-closing/closing
+    auction, BUKAN pas continuous trading. Fungsi TERPISAH dari _in_market_hours
+    (BPJS tetep pake yang lama, gak berubah — day-trade beneran gak relevan
+    sama sesi penutupan)."""
+    now = _now_wib()
+    return is_trading_day(now.date()) and MARKET_OPEN <= now.time() < WHALE_CHECK_CLOSE
 
 
 def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
