@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from config import supabase, today_wib
@@ -68,14 +68,31 @@ def submit_intel(payload: IntelInput):
     return update_res.data[0] if update_res.data else row
 
 
+MAX_RECENT_INTEL = 30  # cap tampilan — "Berita Terkini" di PortfolioSimulation.jsx
+                        # render LANGSUNG tanpa pagination, ratusan baris (kejadian nyata,
+                        # 100+ baris/hari) bakal numpuk kartu berantakan di UI
+
+
 @router.get("")
 def get_recent_intel(days: int = 3):
-    """Riwayat intel terakhir, dipakai buat section 'Berita Terkini' di Portfolio Simulation."""
+    """Riwayat intel N hari terakhir, dipakai buat section 'Berita Terkini' di
+    Portfolio Simulation (PortfolioSimulation.jsx manggil `GET /intel?days=3`
+    langsung, BUKAN lewat routers/portfolio.py::_recent_intel_summaries —
+    itu jalur TERPISAH, cuma dipake internal buat prompt Groq /simulate).
+    BUG ketemu 2026-09-03: dulu `.limit(days)` — itu limit JUMLAH BARIS,
+    bukan filter tanggal, jadi kalau intel numpuk (>days baris HARI INI
+    doang, kejadian nyata: 100+ baris/hari) query ini cuma balikin beberapa
+    baris TERAKHIR (bisa semua dari 1 jam doang), bukan "3 hari terakhir"
+    beneran. Fix: `.gte("tanggal", since)` + cap MAX_RECENT_INTEL (filter
+    tanggal doang, tanpa cap, balikin RATUSAN baris — frontend render semua
+    langsung tanpa pagination, jadi UI berantakan)."""
+    since = (today_wib() - timedelta(days=days)).isoformat()
     res = (
         supabase.table("daily_market_intel")
         .select("*")
+        .gte("tanggal", since)
         .order("tanggal", desc=True)
-        .limit(days)
+        .limit(MAX_RECENT_INTEL)
         .execute()
     )
     return {"data": res.data}

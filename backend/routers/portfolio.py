@@ -103,12 +103,25 @@ def _trim_calendar_entry(entry: dict) -> dict:
     return {"code": entry.get("code"), "type": entry.get("type"), "payload": payload}
 
 
+MAX_INTEL_ENTRIES = 15  # sama cap kayak routers/daily_briefing.py::MAX_ENTRIES — biar gak
+                          # kena limit TPM Groq kalau intel numpuk (lihat komentar di bawah)
+
+
 def _recent_intel_summaries(days: int = 3) -> list[dict[str, Any]]:
+    # BUG ketemu 2026-09-03: dulu `.limit(days)` — itu limit JUMLAH BARIS,
+    # bukan filter tanggal, jadi kalau intel numpuk (>days baris HARI INI
+    # doang, kejadian nyata: 20+ baris masuk 1 hari) query ini cuma balikin
+    # beberapa baris TERAKHIR (bisa semua dari 1 jam doang), bukan "3 hari
+    # terakhir" beneran. Fix: `.gte("tanggal", since)` + cap MAX_INTEL_ENTRIES
+    # (sama pola kayak daily_briefing.py::MAX_ENTRIES) — filter tanggal doang
+    # tanpa cap bisa balikin puluhan baris kalau lagi rame, boros token Groq.
+    since = (today_wib() - timedelta(days=days)).isoformat()
     res = (
         supabase.table("daily_market_intel")
         .select("sumber,tanggal,summary_ai")
+        .gte("tanggal", since)
         .order("tanggal", desc=True)
-        .limit(days)
+        .limit(MAX_INTEL_ENTRIES)
         .execute()
     )
     # cuma summary_ai yang dipakai di prompt, bukan isi_teks mentah — biar hemat token Groq
