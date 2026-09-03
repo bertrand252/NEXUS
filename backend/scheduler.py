@@ -1442,7 +1442,7 @@ def _check_whale_alerts() -> None:
             side_emoji = "📈" if side == "BUY" else "📉" if side == "SELL" else "↔️"
             text = (
                 f"🐋 <b>WHALE ALERT — {_esc(ticker)}</b>\n\n"
-                f"{side_emoji} <b>{_esc(side)}</b> {int(t['volume']):,} lembar @ Rp{t['price']:,.0f}\n"
+                f"{side_emoji} <b>{_esc(side)}</b> {int(t['volume']) // 100:,} lot @ Rp{t['price']:,.0f}\n"
                 f"💰 <b>Nilai</b> ~Rp{value:,.0f}\n"
                 f"⏱ <b>Jam</b> {t.get('time', '—')}"
             )
@@ -1490,7 +1490,7 @@ def _check_whale_alerts() -> None:
                 f"🔒 <b>Broker</b> Unknown\n"
                 f"⏱ <b>Jam</b> {minute} · {len(group)}x transaksi beruntun\n"
                 f"👥 <b>Dari</b> {len(sellers)} penjual berbeda\n"
-                f"💰 <b>Total</b> Rp{total_value:,.0f} ({int(total_volume):,} lembar)\n\n"
+                f"💰 <b>Total</b> Rp{total_value:,.0f} ({int(total_volume) // 100:,} lot)\n\n"
                 f"📩 Nama broker nyusul malam ini (~18:30 WIB)."
             )
             if send_alert(text):
