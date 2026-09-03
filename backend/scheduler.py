@@ -1332,10 +1332,15 @@ def _check_watchlist_alerts() -> None:
 WHALE_MIN_VALUE = 500_000_000  # Rp500 juta/transaksi — dipake buat saham LIKUID (lantai flat).
                                  # Buat saham tipis, ambang RELATIF di bawah lebih kepake — dites
                                  # 2026-09-03 lawan data live: JECX (avg value 20d ~Rp10,2M/hari)
-                                 # trade terbesar hari itu cuma Rp448jt, gak pernah kena flat 500jt;
-                                 # HADE (avg ~Rp84jt/hari) trade terbesar cuma Rp9jt tapi udah ~10%
-                                 # avg hariannya sendiri. Flat 500jt buta di skala kecil.
+                                 # trade terbesar hari itu cuma Rp448jt, gak pernah kena flat 500jt.
+                                 # Flat 500jt buta di skala kecil.
 WHALE_RELATIVE_PCT = 0.04  # ambang alternatif: 4% dari avg value 20 hari saham itu sendiri
+WHALE_ABSOLUTE_FLOOR = 50_000_000  # Rp50 juta — BUG NYATA ketemu 2026-09-03: CARE (avg value
+                                     # 20d cuma ~Rp68,8jt) 4%-nya jadi Rp2,75jt, alert "WHALE"
+                                     # kekirim buat transaksi Rp3-8jt (user lapor langsung dari
+                                     # screenshot). Berapapun tipis sahamnya, transaksi di bawah
+                                     # ~Rp50jt itu ukuran retail biasa, BUKAN whale — ambang
+                                     # relatif gak boleh turun di bawah ini.
 
 SPLIT_ORDER_MIN_TRADES = 3          # minimal berapa transaksi kecil dari buyer SAMA dalam 1 menit
 SPLIT_ORDER_MIN_SELLERS = 2         # minimal berapa broker LAWAN beda (bukan cuma 1 seller doang)
@@ -1343,12 +1348,13 @@ SPLIT_ORDER_MIN_TOTAL_VALUE = 500_000_000  # total gabungan minimal — sama amb
 
 
 def _whale_threshold(flat_floor: float, avg_value: float | None) -> float:
-    """Ambil yang lebih rendah antara ambang flat vs relatif (5% avg value 20d) —
-    biar saham tipis (avg value kecil) kena ambang lebih rendah dari flat_floor,
-    saham likuid tetep pake flat_floor (gak dibikin lebih ketat dari sekarang)."""
+    """Ambang whale: makin rendah dari flat_floor buat saham tipis (relatif ke
+    avg value 20d), tapi gak pernah di bawah WHALE_ABSOLUTE_FLOOR — relatif
+    doang bikin saham super-tipis (CARE) nge-flag transaksi Rp3-8jt jadi
+    "whale", padahal itu ukuran retail biasa berapapun tipis sahamnya."""
     if not avg_value:
         return flat_floor
-    return min(flat_floor, avg_value * WHALE_RELATIVE_PCT)
+    return max(WHALE_ABSOLUTE_FLOOR, min(flat_floor, avg_value * WHALE_RELATIVE_PCT))
 
 
 def _avg_daily_value(ticker: str) -> float | None:

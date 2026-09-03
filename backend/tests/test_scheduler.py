@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR
 from unittest.mock import patch
 
 
@@ -49,12 +49,13 @@ def test_whale_threshold_thin_stock_drops_below_flat_floor():
     assert 448_174_000 >= threshold  # trade JECX yang lolos sekarang
 
 
-def test_whale_threshold_very_thin_stock_far_below_flat_floor():
-    # HADE real 2026-09-03: avg value 20d ~Rp84jt, trade terbesar cuma Rp9jt
-    # (~10% avg) -> ambang relatif harus jauh di bawah flat biar kedetek
-    threshold = _whale_threshold(WHALE_MIN_VALUE, 84_428_600)
-    assert threshold < 10_000_000
-    assert 9_000_000 >= threshold
+def test_whale_threshold_never_drops_below_absolute_floor():
+    # BUG NYATA 2026-09-03: CARE avg value 20d ~Rp68,8jt, 4%-nya cuma Rp2,75jt
+    # -> tanpa lantai absolut, alert "WHALE" kekirim buat transaksi Rp3-8jt
+    # (user lapor screenshot asli). Ambang HARUS clamp ke WHALE_ABSOLUTE_FLOOR.
+    threshold = _whale_threshold(WHALE_MIN_VALUE, 68_789_350)
+    assert threshold == WHALE_ABSOLUTE_FLOOR
+    assert 8_126_600 < threshold  # trade CARE yang KEMARIN salah lolos, sekarang harus keblok
 
 
 def test_whale_threshold_no_avg_value_falls_back_to_flat_floor():
@@ -62,7 +63,7 @@ def test_whale_threshold_no_avg_value_falls_back_to_flat_floor():
 
 
 def test_whale_threshold_liquid_stock_stays_at_flat_floor():
-    # avg value gede (saham likuid beneran) -> 5% nya jauh di atas flat, harus
+    # avg value gede (saham likuid beneran) -> 4%-nya jauh di atas flat, harus
     # tetep pake flat_floor (gak dibikin lebih ketat dari sebelumnya)
     threshold = _whale_threshold(WHALE_MIN_VALUE, 50_000_000_000)
     assert threshold == WHALE_MIN_VALUE
