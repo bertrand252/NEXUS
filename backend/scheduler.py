@@ -1329,15 +1329,39 @@ def _check_watchlist_alerts() -> None:
                 pass
 
 
-WHALE_MIN_VALUE = 500_000_000  # Rp500 juta/transaksi — ASUMSI heuristik kasar, BUKAN dari
-                                 # riset/data broker beneran (belum ada API key buat liat sebaran
-                                 # value_traded transaksi normal per saham). Sesuaikan begitu udah
-                                 # keliatan distribusi asli, mungkin perlu beda ambang per saham
-                                 # (saham gede vs kecil) bukan 1 angka flat.
+WHALE_MIN_VALUE = 500_000_000  # Rp500 juta/transaksi — dipake buat saham LIKUID (lantai flat).
+                                 # Buat saham tipis, ambang RELATIF di bawah lebih kepake — dites
+                                 # 2026-09-03 lawan data live: JECX (avg value 20d ~Rp10,2M/hari)
+                                 # trade terbesar hari itu cuma Rp448jt, gak pernah kena flat 500jt;
+                                 # HADE (avg ~Rp84jt/hari) trade terbesar cuma Rp9jt tapi udah ~10%
+                                 # avg hariannya sendiri. Flat 500jt buta di skala kecil.
+WHALE_RELATIVE_PCT = 0.04  # ambang alternatif: 4% dari avg value 20 hari saham itu sendiri
 
 SPLIT_ORDER_MIN_TRADES = 3          # minimal berapa transaksi kecil dari buyer SAMA dalam 1 menit
 SPLIT_ORDER_MIN_SELLERS = 2         # minimal berapa broker LAWAN beda (bukan cuma 1 seller doang)
-SPLIT_ORDER_MIN_TOTAL_VALUE = 500_000_000  # total gabungan minimal — sama ambang whale, ASUMSI juga
+SPLIT_ORDER_MIN_TOTAL_VALUE = 500_000_000  # total gabungan minimal — sama ambang whale, dipadu WHALE_RELATIVE_PCT juga
+
+
+def _whale_threshold(flat_floor: float, avg_value: float | None) -> float:
+    """Ambil yang lebih rendah antara ambang flat vs relatif (5% avg value 20d) —
+    biar saham tipis (avg value kecil) kena ambang lebih rendah dari flat_floor,
+    saham likuid tetep pake flat_floor (gak dibikin lebih ketat dari sekarang)."""
+    if not avg_value:
+        return flat_floor
+    return min(flat_floor, avg_value * WHALE_RELATIVE_PCT)
+
+
+def _avg_daily_value(ticker: str) -> float | None:
+    """Avg value (Rp) transaksi 20 hari terakhir, buat ambang whale RELATIF —
+    saham tipis (avg value kecil) butuh ambang lebih rendah dari saham likuid,
+    flat Rp500jt buta di dua-duanya (lihat WHALE_MIN_VALUE). yfinance gratis,
+    gak makan kuota Invezgo, dipanggil per ticker watchlist doang (dikit)."""
+    try:
+        hist = _get_history(ticker, period="1mo")
+        value = (hist["Close"] * hist["Volume"]).tail(20)
+        return float(value.mean()) if not value.empty else None
+    except Exception:
+        return None
 
 
 def _check_whale_alerts() -> None:
@@ -1394,13 +1418,16 @@ def _check_whale_alerts() -> None:
         except Exception:
             continue
 
+        avg_value = _avg_daily_value(ticker)
+        whale_threshold = _whale_threshold(WHALE_MIN_VALUE, avg_value)
+
         # pola 1: transaksi tunggal gede
         for t in trades:
             try:
                 value = float(t["price"]) * float(t["volume"])
             except Exception:
                 continue
-            if value < WHALE_MIN_VALUE:
+            if value < whale_threshold:
                 continue
             key = f"{ticker}:{t.get('time')}:{t.get('price')}:{t.get('volume')}"
             if _dedup_seen("whale", key):
@@ -1417,18 +1444,23 @@ def _check_whale_alerts() -> None:
                 _dedup_mark("whale", key)
 
         # pola 2: split order — group by (buyer, menit)
+        split_threshold = _whale_threshold(SPLIT_ORDER_MIN_TOTAL_VALUE, avg_value)
+
         groups: dict[tuple[str, str], list[dict]] = {}
         for t in trades:
             buyer = t.get("buyer")
             minute = str(t.get("time", ""))[:5]  # "HH:MM:SS" -> "HH:MM"
-            if not buyer or not minute:
+            # "--" = kode broker belum kebuka (lihat _avg_daily_value/dokumentasi
+            # fungsi ini) — gak bisa dipakai buat group by buyer/seller sama sekali,
+            # dites lawan data live JECX & HADE, "--" total sepanjang hari.
+            if not buyer or buyer == "--" or not minute:
                 continue
             groups.setdefault((buyer, minute), []).append(t)
 
         for (buyer, minute), group in groups.items():
             if len(group) < SPLIT_ORDER_MIN_TRADES:
                 continue
-            sellers = {g.get("seller") for g in group if g.get("seller")}
+            sellers = {g.get("seller") for g in group if g.get("seller") and g.get("seller") != "--"}
             if len(sellers) < SPLIT_ORDER_MIN_SELLERS:
                 continue
             try:
@@ -1436,7 +1468,7 @@ def _check_whale_alerts() -> None:
                 total_volume = sum(float(g["volume"]) for g in group)
             except Exception:
                 continue
-            if total_value < SPLIT_ORDER_MIN_TOTAL_VALUE:
+            if total_value < split_threshold:
                 continue
             # dedup key TETEP pake buyer code asli (biar grouping/tracking konsisten,
             # dipake lagi malem buat _send_whale_confirmation cari ticker mana aja
