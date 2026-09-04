@@ -243,9 +243,15 @@ def simulate_portfolio(trades: list[dict], initial_capital: float = INITIAL_CAPI
 
 def _ihsg_benchmark(start_date: str, end_date: str) -> float | None:
     """Return IHSG buy-and-hold di rentang tanggal yang sama, buat pembanding
-    — "kalau modalnya ditaro IHSG doang dari awal, hasilnya berapa"."""
+    — "kalau modalnya ditaro IHSG doang dari awal, hasilnya berapa".
+    BUG ketemu 2026-09-03: yfinance `end=` itu EXCLUSIVE (dites lawan data
+    live: end='2026-08-31' gak nyertain tanggal itu sendiri, baris terakhir
+    yang muncul 08-28) — pass end_date APA ADANYA bikin benchmark ketinggalan
+    1 hari terakhir dibanding return strategi (yang ngitung sampe exit_date
+    PENUH). Fix: +1 hari biar boundary exclusive-nya kena SETELAH end_date asli."""
     try:
-        hist = yf.Ticker("^JKSE").history(start=start_date, end=end_date, auto_adjust=False).dropna(subset=["Close"])
+        end_exclusive = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        hist = yf.Ticker("^JKSE").history(start=start_date, end=end_exclusive, auto_adjust=False).dropna(subset=["Close"])
         if len(hist) < 2:
             return None
         return round((float(hist["Close"].iloc[-1]) - float(hist["Close"].iloc[0])) / float(hist["Close"].iloc[0]) * 100, 2)
