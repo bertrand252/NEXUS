@@ -142,7 +142,14 @@ export default function Dashboard() {
 
     fetch(`${API_BASE}/market-events`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(({ data }) => setEvents((data || []).slice(0, 4)))
+      // BUG NYATA: backend balikin SEMUA event minggu ini apa adanya (gak
+      // difilter/sort), MarketEvents.jsx nge-filter "e.date >= today" sebelum
+      // ditampilin tapi widget ini enggak — bisa nampilin event yang UDAH
+      // LEWAT (misal Senin) padahal judulnya "Upcoming Events".
+      .then(({ data }) => {
+        const today = new Date().toISOString().slice(0, 10);
+        setEvents((data || []).filter((e) => e.date >= today).slice(0, 4));
+      })
       .catch(() => setEvents([]));
 
     fetch(`${API_BASE}/scanner/index/ihsg`)
