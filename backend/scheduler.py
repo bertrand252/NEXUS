@@ -6,6 +6,7 @@ sebagai foto. Jalan di process yang sama kayak FastAPI lewat asyncio.create_task
 — gak butuh cron/Celery/proses terpisah, paling sederhana buat single-user tool.
 """
 import asyncio
+import statistics
 from time import sleep as _sleep_secs  # alias — "time" udah kepake buat datetime.time di bawah
 from datetime import date, datetime, time, timedelta, timezone
 from html import escape as _esc
@@ -1373,6 +1374,11 @@ def _avg_daily_value(ticker: str) -> float | None:
 WHALE_LOOKBACK_SECONDS = CHECK_INTERVAL_SECONDS + 900  # +15 menit buffer jitter/loop telat
 WHALE_MAX_PAGES_PER_TICKER = 20  # cap kuota — batas atas 2.000 trade/ticker/cek
 
+# ponytail: in-memory doang (reset tiap redeploy) — cutoff waktu di bawah
+# tetep jamin BENER walau cache kosong/basi, ini murni optimasi kuota (skip
+# halaman yang GAK MUNGKIN berubah lagi), gak butuh Supabase buat itu.
+_whale_page_cache: dict[str, tuple[str, int]] = {}  # ticker -> (tanggal, total_pages checked terakhir)
+
 
 def _trade_dt(t: dict, day: date) -> datetime | None:
     """Gabung field `time` ("HH:MM:SS") running-trade + tanggal `day` jadi
@@ -1383,6 +1389,46 @@ def _trade_dt(t: dict, day: date) -> datetime | None:
         return datetime(day.year, day.month, day.day, h, m, s, tzinfo=WIB)
     except Exception:
         return None
+
+
+def _trade_value(t: dict) -> float | None:
+    try:
+        return float(t["price"]) * float(t["volume"])
+    except Exception:
+        return None
+
+
+def _whale_resume_page(prev_total_pages: int, total_pages: int) -> int:
+    """Halaman terjauh yang WAJIB direfetch — paginasi running-trade itu
+    append-only (halaman lama gak mungkin keubah lagi begitu ada halaman baru
+    di atasnya), jadi halaman < hasil ini aman di-skip. TAPI kalau totalPage
+    GAK nambah dari cek sebelumnya, halaman TERAKHIR itu (prev_total_pages)
+    masih bisa aja terus keisi trade baru (belum ke-supersede halaman baru)
+    — kudu tetep direfetch, bukan di-skip."""
+    return prev_total_pages if total_pages == prev_total_pages else prev_total_pages + 1
+
+
+WHALE_OUTLIER_MULTIPLIER = 6  # trade harus >= 6x transaksi TIPIKAL ticker itu HARI INI
+WHALE_OUTLIER_MIN_SAMPLES = 20  # butuh sampel cukup biar median gak kebentuk sotoy dari 2-3 trade
+
+
+def _whale_outlier_threshold(trades: list[dict]) -> float | None:
+    """Ambang whale ADAPTIF per-ticker per-sesi — beda dari `_whale_threshold`
+    yang cuma bandingin ke rata-rata NILAI HARIAN (bisa gede padahal trade-nya
+    banyak, bukan tiap trade gede). BUG NYATA ketemu 2026-09-04 (user komplain
+    CUAN, saham gorengan hiperaktif): trade 10.000-30.000 lot itu NORMAL buat
+    dia, kejadian tiap menit, tapi ke atas ambang flat/relatif jadi kepanggil
+    "WHALE" terus-terusan, gak informatif — beda sama saham yang biasanya
+    trade-nya kecil terus tiba-tiba ada 1 transaksi jauh lebih gede dari
+    biasanya (itu whale beneran). Fix: bandingin tiap trade ke MEDIAN trade
+    LAIN ticker itu di jendela sesi ini (`trades`, udah kefetch buat dedup
+    window whale) — whale = jauh di atas tipikal HARI ITU, bukan cuma
+    "nilainya gede" absolut. Return None kalau sampel kurang (biarin fallback
+    ke `_whale_threshold` polos, jangan sotoy dari sample kecil)."""
+    values = [v for t in trades if (v := _trade_value(t)) is not None]
+    if len(values) < WHALE_OUTLIER_MIN_SAMPLES:
+        return None
+    return statistics.median(values) * WHALE_OUTLIER_MULTIPLIER
 
 
 def _check_whale_alerts() -> None:
@@ -1437,15 +1483,25 @@ def _check_whale_alerts() -> None:
             # — jamin semua trade dalam jendela waktu cek ke-cover, gak nebak
             # jumlah halaman tetap. Dedup (`_dedup_seen("whale", key)`) yang
             # udah ada nanganin overlap re-fetch antar-cek, aman dobel-fetch.
+            # BOROS KUOTA kalau backfill 1 jam penuh TIAP jam (user tanya
+            # langsung 2026-09-04) — halaman lama (bukan halaman terakhir)
+            # gak akan pernah berubah lagi (paginasi append-only, trade baru
+            # cuma nambah di halaman terakhir), jadi gak perlu di-refetch
+            # kalau udah ke-cover cek jam sebelumnya. `_whale_page_cache`
+            # simpen total_pages cek terakhir per ticker, halaman <= itu di-skip.
             first = invezgo_client.get_running_trade(ticker, today, limit=100, page=1)
             total_pages = first.get("totalPage") or 1
+            cache_date, prev_total_pages = _whale_page_cache.get(ticker, (None, 0))
+            if cache_date != today:
+                prev_total_pages = 0
+            resume_from = _whale_resume_page(prev_total_pages, total_pages)
             if total_pages == 1:
                 trades = list(first.get("data") or [])
             else:
                 trades = []
                 page = total_pages
                 pages_fetched = 0
-                while page >= 1 and pages_fetched < WHALE_MAX_PAGES_PER_TICKER:
+                while page >= resume_from and page >= 1 and pages_fetched < WHALE_MAX_PAGES_PER_TICKER:
                     resp = first if page == 1 else invezgo_client.get_running_trade(
                         ticker, today, limit=100, page=page)
                     page_trades = list(resp.get("data") or [])
@@ -1458,17 +1514,20 @@ def _check_whale_alerts() -> None:
                     if oldest is None or oldest <= cutoff:
                         break
                     page -= 1
+            _whale_page_cache[ticker] = (today, total_pages)
         except Exception:
             continue
 
         avg_value = _avg_daily_value(ticker)
         whale_threshold = _whale_threshold(WHALE_MIN_VALUE, avg_value)
+        outlier_threshold = _whale_outlier_threshold(trades)
+        if outlier_threshold is not None:
+            whale_threshold = max(whale_threshold, outlier_threshold)
 
         # pola 1: transaksi tunggal gede
         for t in trades:
-            try:
-                value = float(t["price"]) * float(t["volume"])
-            except Exception:
+            value = _trade_value(t)
+            if value is None:
                 continue
             if value < whale_threshold:
                 continue
