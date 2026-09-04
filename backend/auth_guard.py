@@ -8,12 +8,16 @@ Terima salah satu dari:
   2. X-Service-Key: <key> — buat caller mesin-ke-mesin (WhatsApp listener,
      cron, dst) yang gak login lewat browser. Cocokin ke SERVICE_API_KEY.
 """
+import hmac
 from fastapi import Header, HTTPException
 from config import supabase, SERVICE_API_KEY
 
 
 def require_auth(authorization: str | None = Header(None), x_service_key: str | None = Header(None)) -> None:
-    if SERVICE_API_KEY and x_service_key == SERVICE_API_KEY:
+    # hmac.compare_digest — perbandingan constant-time, `==` biasa buat secret
+    # rawan timing attack (durasi compare bocorin berapa karakter awal yang
+    # udah cocok). Guard x_service_key None dulu, compare_digest gak terima None.
+    if SERVICE_API_KEY and x_service_key and hmac.compare_digest(x_service_key, SERVICE_API_KEY):
         return
 
     if authorization and authorization.startswith("Bearer "):
