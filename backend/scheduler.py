@@ -1370,6 +1370,21 @@ def _avg_daily_value(ticker: str) -> float | None:
         return None
 
 
+WHALE_LOOKBACK_SECONDS = CHECK_INTERVAL_SECONDS + 900  # +15 menit buffer jitter/loop telat
+WHALE_MAX_PAGES_PER_TICKER = 20  # cap kuota — batas atas 2.000 trade/ticker/cek
+
+
+def _trade_dt(t: dict, day: date) -> datetime | None:
+    """Gabung field `time` ("HH:MM:SS") running-trade + tanggal `day` jadi
+    datetime WIB, dipake nentuin seberapa jauh halaman ditarik mundur."""
+    raw = str(t.get("time") or "")
+    try:
+        h, m, s = (int(x) for x in raw.split(":")[:3])
+        return datetime(day.year, day.month, day.day, h, m, s, tzinfo=WIB)
+    except Exception:
+        return None
+
+
 def _check_whale_alerts() -> None:
     """Kerangka Whale/Block Trade Alert — 2 pola deteksi dari running-trade
     Invezgo, cuma buat ticker di watchlist (BUKAN semua 951 saham, hemat kuota):
@@ -1401,26 +1416,48 @@ def _check_whale_alerts() -> None:
     if not tickers:
         return
 
-    today = today_wib().isoformat()
+    today_date = today_wib()
+    today = today_date.isoformat()
+    cutoff = _now_wib() - timedelta(seconds=WHALE_LOOKBACK_SECONDS)
     for ticker in tickers:
         try:
             # BUG NYATA ketemu 2026-09-02 (user lapor whale detector "gak nyala"
             # sama sekali, 0 alert dari sejak dibikin): get_running_trade tanpa
-            # `page` = SELALU halaman 1 (kronologis AWAL hari, dikonfirmasi lawan
-            # data live JECX: page1 jam 08:58-09:04, page 18/18 jam 15:49-16:14).
-            # Loop ini jalan TIAP JAM sepanjang hari tapi selalu re-fetch 5-10
-            # menit PERTAMA trading yang SAMA — gak pernah liat transaksi
-            # terbaru sama sekali, brp kalipun re-check. Fix: fetch halaman
-            # TERAKHIR (paling baru) pake totalPage dari response, bukan page 1.
+            # `page` = SELALU halaman 1 (kronologis AWAL hari). Fix pertama:
+            # fetch halaman TERAKHIR (paling baru). TAPI fix itu sendiri masih
+            # BUG buat ticker HIPERAKTIF (ketemu 2026-09-04, CUAN — puluhan
+            # transaksi/menit): cuma ambil 3 halaman TETAP (terakhir + 2
+            # sebelumnya) padahal loop ini jalan 1x/JAM (CHECK_INTERVAL_SECONDS)
+            # — kalau sejam lebih dari 3 halaman transaksi, trade yang jatuh
+            # di halaman TENGAH gak pernah ke-fetch sama sekali & gak akan
+            # pernah jadi "3 halaman terakhir" lagi di cek berikutnya (udah
+            # kegeser makin dalem). Fix: tarik mundur halaman SATU-SATU dari
+            # yang terakhir, berhenti begitu trade TERTUA di halaman itu udah
+            # lebih tua dari `cutoff` (waktu sekarang - WHALE_LOOKBACK_SECONDS)
+            # — jamin semua trade dalam jendela waktu cek ke-cover, gak nebak
+            # jumlah halaman tetap. Dedup (`_dedup_seen("whale", key)`) yang
+            # udah ada nanganin overlap re-fetch antar-cek, aman dobel-fetch.
             first = invezgo_client.get_running_trade(ticker, today, limit=100, page=1)
             total_pages = first.get("totalPage") or 1
-            trades = list(first.get("data") or []) if total_pages == 1 else []
-            if total_pages > 1:
-                last = invezgo_client.get_running_trade(ticker, today, limit=100, page=total_pages)
-                trades.extend(last.get("data") or [])
-                if total_pages > 2:
-                    prev = invezgo_client.get_running_trade(ticker, today, limit=100, page=total_pages - 1)
-                    trades.extend(prev.get("data") or [])
+            if total_pages == 1:
+                trades = list(first.get("data") or [])
+            else:
+                trades = []
+                page = total_pages
+                pages_fetched = 0
+                while page >= 1 and pages_fetched < WHALE_MAX_PAGES_PER_TICKER:
+                    resp = first if page == 1 else invezgo_client.get_running_trade(
+                        ticker, today, limit=100, page=page)
+                    page_trades = list(resp.get("data") or [])
+                    trades.extend(page_trades)
+                    pages_fetched += 1
+                    oldest = min(
+                        (dt for t in page_trades if (dt := _trade_dt(t, today_date))),
+                        default=None,
+                    )
+                    if oldest is None or oldest <= cutoff:
+                        break
+                    page -= 1
         except Exception:
             continue
 

@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
-from datetime import datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity
+from datetime import date, datetime
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt
 from unittest.mock import patch
 
 
@@ -67,6 +67,30 @@ def test_whale_threshold_liquid_stock_stays_at_flat_floor():
     # tetep pake flat_floor (gak dibikin lebih ketat dari sebelumnya)
     threshold = _whale_threshold(WHALE_MIN_VALUE, 50_000_000_000)
     assert threshold == WHALE_MIN_VALUE
+
+
+def test_trade_dt_parses_time_against_given_day():
+    dt = _trade_dt({"time": "10:28:56"}, date(2026, 9, 4))
+    assert dt == datetime(2026, 9, 4, 10, 28, 56, tzinfo=dt.tzinfo)
+
+
+def test_trade_dt_none_on_missing_or_malformed_time():
+    assert _trade_dt({}, date(2026, 9, 4)) is None
+    assert _trade_dt({"time": "garbage"}, date(2026, 9, 4)) is None
+
+
+def test_trade_dt_orders_correctly_against_cutoff():
+    # BUG NYATA ketemu 2026-09-04 (CUAN, saham hiperaktif): _check_whale_alerts
+    # dulu cuma tarik 3 halaman TETAP, gak liat trade di halaman tengah. Fix-nya
+    # jalan mundur halaman per halaman sampe trade TERTUA di halaman itu udah
+    # lebih tua dari cutoff (now - WHALE_LOOKBACK_SECONDS) — _trade_dt itu
+    # comparator utamanya, jadi ini yang paling wajib bener.
+    day = date(2026, 9, 4)
+    cutoff = datetime(2026, 9, 4, 10, 0, 0, tzinfo=_trade_dt({"time": "10:00:00"}, day).tzinfo)
+    fresh = _trade_dt({"time": "10:28:56"}, day)
+    stale = _trade_dt({"time": "09:13:54"}, day)
+    assert fresh > cutoff  # masih dalam jendela -> loop harus lanjut ke halaman sebelumnya
+    assert stale <= cutoff  # udah di luar jendela -> loop harus berhenti
 
 
 def test_position_severity_urgent_cl_wins_over_distribusi():
