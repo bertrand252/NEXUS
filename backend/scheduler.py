@@ -1879,15 +1879,18 @@ def _format_bandar_line(bandar: dict) -> str:
     return line
 
 
-def _position_severity(verdict: str, bandar: dict | None) -> str:
-    """Gabung 2 sinyal independen (Groq verdict berita/harga + trend broker
-    _detect_bandar) jadi 1 kesimpulan — BUG NYATA ketemu 2026-09-03: tanpa ini,
-    headline "lanjut" (Groq gak liat data broker sama sekali) bisa kepampang
-    bareng catatan "mulai ADA DISTRIBUSI" (dari broker) di pesan yang SAMA,
-    user bingung liat 2 kesimpulan kontra. urgent_cl dari Groq tetep menang
-    (bisa soal berita spesifik yang broker gak nangkep), distribusi broker
-    baru dicek kalau Groq bilang 'lanjut'."""
-    if verdict == "urgent_cl":
+def _position_severity(verdict: str, bandar: dict | None, exit_advised_today: bool = False) -> str:
+    """Gabung 3 sinyal independen jadi 1 kesimpulan — BUG NYATA ketemu
+    2026-09-03: tanpa ini, headline "lanjut" (Groq assess_running_positions,
+    cuma liat harga+berita) bisa kepampang bareng catatan "mulai ADA
+    DISTRIBUSI" (_detect_bandar, broker) di pesan yang SAMA, ATAU malah
+    kontra sama alert "PERTIMBANGKAN EXIT" (_advise_hold_or_exit) yang udah
+    kekirim SIANG itu buat ticker yang SAMA — user bingung liat kesimpulan
+    beda-beda dari sistem beda jam. Prioritas: exit_advised_today (udah
+    eksplisit disaranin EXIT hari ini) & urgent_cl (Groq nemu alasan
+    spesifik) sama-sama paling urgent, distribusi broker baru dicek kalau
+    dua-duanya gak ada."""
+    if verdict == "urgent_cl" or exit_advised_today:
         return "urgent_cl"
     if bandar and bandar.get("trend") == "distribusi_meningkat":
         return "distribusi"
@@ -1948,6 +1951,13 @@ def _send_running_positions_update() -> None:
     except Exception:
         verdicts = {}
 
+    # ticker yang UDAH disaranin EXIT hari ini via _advise_hold_or_exit (BPJS
+    # 15:30/BSJP pagi) — dicatat _dedup_mark("hold_advisory_result", ...),
+    # dipakai _position_severity biar night recap gak kontra sama alert siang.
+    exit_advised_tickers = {
+        k.split(":", 1)[0] for k in _dedup_seen_keys("hold_advisory_result") if k.endswith(":exit")
+    }
+
     today = today_wib().isoformat()
     lines = ["📋 <b>Update Posisi Running</b>\n"]
     for p in positions:
@@ -1960,9 +1970,14 @@ def _send_running_positions_update() -> None:
         # ditempel doang jadi catatan yang gak ngaruh ke kesimpulan.
         bandar = _detect_bandar(p["ticker"], p["entry_date"], today)
         v = verdicts.get(p["ticker"], {})
-        alasan = _esc(v.get("alasan") or "-")
+        verdict = v.get("verdict", "lanjut")
+        exit_advised = p["ticker"] in exit_advised_tickers
+        alasan = _esc(v.get("alasan") or "-") if verdict == "urgent_cl" else (
+            "Udah disaranin EXIT siang ini (cek alert PERTIMBANGKAN EXIT sebelumnya) — belum ditutup manual."
+            if exit_advised else _esc(v.get("alasan") or "-")
+        )
         sign = "+" if p["pnl_pct"] >= 0 else ""
-        severity = _position_severity(v.get("verdict", "lanjut"), bandar)
+        severity = _position_severity(verdict, bandar, exit_advised)
         if severity == "urgent_cl":
             lines.append(
                 f"🚨 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
@@ -2279,6 +2294,12 @@ def _advise_hold_or_exit(row: dict) -> None:
         return
 
     log.info(f"_advise_hold_or_exit({ticker}): kirim {advice['rekomendasi']}")
+    # dicatat per-ticker (BUKAN cuma dedup per-source di _check_hold_advisory)
+    # biar _send_running_positions_update malam bisa liat udah ada advisory
+    # EXIT hari ini buat ticker ini — sebelum ini night recap bisa bilang
+    # "lanjut, aman" padahal siang udah eksplisit disaranin EXIT, user bingung
+    # liat 2 kesimpulan kontra dari 2 sistem beda jam (lihat _position_severity).
+    _dedup_mark("hold_advisory_result", f"{ticker}:{advice['rekomendasi']}")
     emoji = "🟢" if advice["rekomendasi"] == "hold" else "🔴"
     label = "HOLD" if advice["rekomendasi"] == "hold" else "PERTIMBANGKAN EXIT"
     sign = "+" if context["pnl_pct"] >= 0 else ""
