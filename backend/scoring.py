@@ -158,6 +158,24 @@ def bsjp_intraday_score(takeoff: dict | None, value_traded_idr: float) -> float:
     return round(score, 3)
 
 
+BSJP_SL_PCT = 2.0  # flat, user eksplisit (mentor practice: overnight hold, SL harus ketat)
+BSJP_TP_MIN_PCT = 2.0  # TP momentum lemah (skor deket batas bawah bsjp_intraday_score)
+BSJP_TP_MAX_PCT = 3.0  # TP momentum kuat (skor >= BSJP_TP_SCORE_HIGH)
+BSJP_TP_SCORE_LOW = 1.5  # score (~volume_ratio sesi 2) di titik ini -> TP minimum
+BSJP_TP_SCORE_HIGH = 3.0  # score di titik ini (atau lebih) -> TP maksimum, linear interpolate di antaranya
+
+
+def bsjp_tp_pct(score: float) -> float:
+    """TP% BSJP scale ke kekuatan momentum sesi 2 (insiden #17: dulu pake
+    support_resistance() 20-hari Swing, target-nya sering udah kelewat
+    duluan pas breakout, SEMUA kandidat asli gagal cap RR). User (praktisi
+    BSJP beneran): TP/SL realistis 2-3% doang buat overnight hold, makin
+    kuat momentum sesi 2 (skor ~volume_ratio) makin gede TP-nya."""
+    frac = (score - BSJP_TP_SCORE_LOW) / (BSJP_TP_SCORE_HIGH - BSJP_TP_SCORE_LOW)
+    frac = min(max(frac, 0.0), 1.0)
+    return round(BSJP_TP_MIN_PCT + frac * (BSJP_TP_MAX_PCT - BSJP_TP_MIN_PCT), 2)
+
+
 def bpjs_momentum_score(takeoff: dict | None, value_traded_idr: float) -> float:
     """BPJS (Day Trade) — reuse `intraday.py::session_takeoff` tapi buat SESI
     APAPUN yang lagi jalan (bukan cuma sesi 2 kayak BSJP), karena BPJS

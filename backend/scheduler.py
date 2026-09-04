@@ -14,9 +14,9 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
+from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
 from chart_render import render_chart
-from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal
+from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT
 from intraday import daily_session_stats, session_takeoff
 from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit
 from forex_factory import get_forex_events
@@ -2167,31 +2167,28 @@ def _check_bsjp_screener() -> None:
     scored.sort(key=lambda c: c["score"], reverse=True)
     scored = scored[:MAX_BSJP_PER_DAY]
 
-    # BSJP dulu GAK PUNYA target/SL sama sekali — gak ke-track di signal_alerts
-    # (gak muncul di History NEXUS, gak bisa dievaluasi "kejemput atau enggak").
-    # Beli LANGSUNG di harga alert (bukan nunggu entry zone kayak Swing/BPJS),
-    # jadi entry_low=entry_high=harga sekarang, status langsung "open".
+    # BSJP dulu pake support_resistance() 20-hari (Swing) buat TP/SL — SALAH
+    # (insiden #17): target 20-hari resistance sering udah kelewat DULUAN pas
+    # sahamnya "terbang" hari ini (reward negatif), stop 20-hari support jauh
+    # gak masuk akal buat trade overnight (risk% bisa 20-38%, 4 kandidat asli
+    # 2026-09-03/04 SEMUA gagal cap). User (yang emang praktekin BSJP): TP/SL
+    # realistis 2-3% doang, SL flat 2%, TP scale ke momentum sesi 2 (skor dari
+    # bsjp_intraday_score — makin gede volume_ratio sesi 2, makin gede TP).
     for c in scored:
-        try:
-            hist_daily = _get_history(c["ticker"])
-            lv = support_resistance(hist_daily)
-        except Exception:
-            c["levels"] = None
-            continue
-        if lv["rr_ratio"] < MIN_RR_RATIO or lv["risk_pct"] > MAX_RISK_PCT or lv["reward_pct"] > MAX_REWARD_PCT:
-            c["levels"] = None  # RR/levels gak masuk akal — tetep tampil alert momentumnya, TAPI gak dikasih TP/SL ngaco
-            continue
-        c["levels"] = lv
+        tp_pct = bsjp_tp_pct(c["score"])
+        c["tp_pct"] = tp_pct
+        c["target"] = round(c["price"] * (1 + tp_pct / 100), 2)
+        c["stop_loss"] = round(c["price"] * (1 - BSJP_SL_PCT / 100), 2)
 
     lines = ["🌆 <b>BSJP — Beli Sore Jual Pagi</b>\n", "Terkonfirmasi \"terbang\" di sesi 2 hari ini:"]
     for c in scored:
         t = c["takeoff"]
         support_note = " (+ sesi 1 juga spike, pendukung)" if t.get("s1_spike_supporting") else ""
         day_pct_txt = f", harga hari ini {c['full_day_pct']:+g}%" if c["full_day_pct"] is not None else ""
-        level_txt = f"\n   🎯 Target Rp{c['levels']['resistance']:,.0f} · ⛔ SL Rp{c['levels']['stop_loss']:,.0f}" if c["levels"] else ""
         lines.append(
             f"✅ <b>{_esc(c['ticker'])}</b> — Rp{c['price']:,.0f} "
-            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}{level_txt}"
+            f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}\n"
+            f"   🎯 Target Rp{c['target']:,.0f} (+{c['tp_pct']:g}%) · ⛔ SL Rp{c['stop_loss']:,.0f} (-{BSJP_SL_PCT:g}%)"
         )
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini — jual PAGI besok, jangan dipegang kelamaan.</b>")
@@ -2200,17 +2197,14 @@ def _check_bsjp_screener() -> None:
     if send_alert("\n".join(lines)):
         _dedup_mark("bsjp", "screener")
         for c in scored:
-            if not c["levels"]:
-                log.info(f"_check_bsjp_screener: {c['ticker']} kekirim TANPA TP/SL (RR/levels gak masuk akal)")
-                continue
             try:
                 supabase.table("signal_alerts").insert({
                     "ticker": c["ticker"],
                     "entry_price": c["price"],
                     "entry_low": c["price"],
                     "entry_high": c["price"],
-                    "target": c["levels"]["resistance"],
-                    "stop_loss": c["levels"]["stop_loss"],
+                    "target": c["target"],
+                    "stop_loss": c["stop_loss"],
                     "status": "open",
                     "source": "bsjp",
                     "faktor_pendukung": {
@@ -2639,7 +2633,12 @@ def _check_bpjs() -> None:
     try:
         hist = _get_history(ticker)
         price_now = float(hist["Close"].iloc[-1])
-        levels = support_resistance(hist)
+        # BUKAN support_resistance() 20-hari (itu buat Swing, mingguan) —
+        # BPJS day-trade (resolve besok), 20-hari MIN/MAX ekstrem bikin RR
+        # gak pernah masuk akal (semua kandidat 2026-09 gagal cap, lihat
+        # insiden #16). nearest_support_resistance() ambil swing point
+        # TERDEKAT dari harga sekarang, cocok buat horizon pendek.
+        levels = nearest_support_resistance(hist)
         # sama bug/fix kayak Swing (_gather_candidates) — kalau candidate lolos
         # lewat jalur buy_on_weakness, SL/support HARUS berbasis level itu,
         # bukan trailing-20-hari support_resistance() biasa yang gak nyambung

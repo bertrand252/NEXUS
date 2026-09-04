@@ -57,6 +57,43 @@ def support_resistance(hist) -> dict:
     }
 
 
+def nearest_support_resistance(hist) -> dict:
+    """Versi `support_resistance()` khusus BPJS (day trade, resolve besok
+    sore) — 20-hari MIN/MAX itu EKSTREM, sering jauh dari harga sekarang,
+    bikin RR gak masuk akal buat trade yang mesti kelar besok (ARA/ARB IDX
+    max ~15-25%/hari, gak mungkin nyampe level sejauh itu dalam 1-2 hari).
+    Reuse `_find_swing_points` (titik balik harga asli, bukan cuma window
+    extreme) buat ambil support/resistance TERDEKAT dari harga sekarang,
+    bukan yang paling jauh. Fallback ke 20-hari kalau gak ada swing point
+    di sisi yang dicari (kejadian pas breakout blue-sky / all-time-low)."""
+    price_now = float(hist["Close"].iloc[-1])
+    swing_highs, swing_lows = _find_swing_points(hist, lookback=60, swing_window=3)
+
+    resistances = [p for _, p in swing_highs if p > price_now]
+    supports = [p for _, p in swing_lows if p < price_now]
+    resistance = min(resistances) if resistances else float(hist["High"].tail(20).max())
+    support = max(supports) if supports else float(hist["Low"].tail(20).min())
+
+    entry_low = round(price_now * 0.99, 2)
+    entry_high = round(price_now * 1.02, 2)
+    stop_loss = round(support * 0.98, 2)
+    risk_pct = round((price_now - stop_loss) / price_now * 100, 2)
+    reward_pct = round((resistance - price_now) / price_now * 100, 2)
+    rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+
+    return {
+        "support": round(support, 2),
+        "resistance": round(resistance, 2),
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "stop_loss": stop_loss,
+        "risk_pct": risk_pct,
+        "reward_pct": reward_pct,
+        "rr_ratio": rr_ratio,
+        "rr_label": rr_label(rr_ratio),
+    }
+
+
 def apply_buy_on_weakness_support(levels: dict, price_now: float, buy_on_weakness: dict | None) -> None:
     """BUG ketemu 2026-09-02 (code review): candidate yang qualify lewat jalur
     "buy on weakness" (well_defended_support — support disentuh berkali-kali
