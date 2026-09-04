@@ -150,9 +150,19 @@ def _simulate_ticker(ticker: str, hist: pd.DataFrame, weekly: pd.DataFrame, mont
             continue
 
         entry_date = dates[i]
-        # slice weekly/monthly SAMPE tanggal entry doang — jangan bocor liat masa depan
-        weekly_slice = weekly[weekly.index <= entry_date]
-        monthly_slice = monthly[monthly.index <= entry_date]
+        # BUG ketemu 2026-09-03: bar mingguan/bulanan yfinance dilabelin AWAL
+        # periode (Senin buat mingguan, tanggal-1 buat bulanan), tapi High/Low/
+        # Close-nya BARU FINAL abis periode itu SELESAI. Filter `index <=
+        # entry_date` doang nyeret bar yang LAGI JALAN (index-nya di masa lalu,
+        # tapi isinya termasuk hari-hari SETELAH entry_date) — bocor liat masa
+        # depan padahal niatnya eksplisit "jangan". Dikonfirmasi lawan data live
+        # BBRI: bar mingguan berlabel 2026-08-31 (Senin) High-nya 3440 itu
+        # KEJADIAN 2026-09-04 (Kamis), bocor 3 hari kalau entry_date cuma 09-01.
+        # Fix: WAJIB periode itu udah SELESAI TOTAL (mingguan >=7 hari lewat,
+        # bulanan >=31 hari lewat biar aman semua panjang bulan) dari awal
+        # periode ke entry_date, baru bar itu boleh dipake.
+        weekly_slice = weekly[weekly.index + pd.Timedelta(days=7) <= entry_date]
+        monthly_slice = monthly[monthly.index + pd.Timedelta(days=31) <= entry_date]
         levels = _smart_levels(hist.iloc[:i + 1], weekly_slice, monthly_slice)
         if levels["rr_ratio"] < MIN_RR_RATIO:
             i += 1
