@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity
 from unittest.mock import patch
 
 
@@ -67,6 +67,27 @@ def test_whale_threshold_liquid_stock_stays_at_flat_floor():
     # tetep pake flat_floor (gak dibikin lebih ketat dari sebelumnya)
     threshold = _whale_threshold(WHALE_MIN_VALUE, 50_000_000_000)
     assert threshold == WHALE_MIN_VALUE
+
+
+def test_position_severity_urgent_cl_wins_over_distribusi():
+    bandar = {"trend": "distribusi_meningkat"}
+    assert _position_severity("urgent_cl", bandar) == "urgent_cl"
+
+
+def test_position_severity_lanjut_with_distribusi_becomes_waspada():
+    # BUG NYATA 2026-09-03: Groq verdict "lanjut" (gak liat broker) + broker
+    # lagi distribusi -> headline HARUS ke-flag, bukan bilang "lanjut" adem
+    bandar = {"trend": "distribusi_meningkat"}
+    assert _position_severity("lanjut", bandar) == "distribusi"
+
+
+def test_position_severity_lanjut_no_bandar_data_stays_lanjut():
+    assert _position_severity("lanjut", None) == "lanjut"
+
+
+def test_position_severity_lanjut_with_akumulasi_stays_lanjut():
+    bandar = {"trend": "akumulasi_meningkat"}
+    assert _position_severity("lanjut", bandar) == "lanjut"
 
 
 def test_format_bandar_line_steady_accumulation_sideways():

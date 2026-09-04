@@ -1879,6 +1879,21 @@ def _format_bandar_line(bandar: dict) -> str:
     return line
 
 
+def _position_severity(verdict: str, bandar: dict | None) -> str:
+    """Gabung 2 sinyal independen (Groq verdict berita/harga + trend broker
+    _detect_bandar) jadi 1 kesimpulan — BUG NYATA ketemu 2026-09-03: tanpa ini,
+    headline "lanjut" (Groq gak liat data broker sama sekali) bisa kepampang
+    bareng catatan "mulai ADA DISTRIBUSI" (dari broker) di pesan yang SAMA,
+    user bingung liat 2 kesimpulan kontra. urgent_cl dari Groq tetep menang
+    (bisa soal berita spesifik yang broker gak nangkep), distribusi broker
+    baru dicek kalau Groq bilang 'lanjut'."""
+    if verdict == "urgent_cl":
+        return "urgent_cl"
+    if bandar and bandar.get("trend") == "distribusi_meningkat":
+        return "distribusi"
+    return "lanjut"
+
+
 def _send_running_positions_update() -> None:
     """Digest posisi 'running' (signal_alerts status='open') — dikirim tiap
     malam bareng Recap Malam. Beda dari _check_signal_outcomes() (yang OTOMATIS
@@ -1936,26 +1951,35 @@ def _send_running_positions_update() -> None:
     today = today_wib().isoformat()
     lines = ["📋 <b>Update Posisi Running</b>\n"]
     for p in positions:
+        # broker summary DULU (bukan abis headline) — BUG NYATA ketemu 2026-09-03:
+        # headline "lanjut" (dari assess_running_positions, cuma liat harga+berita,
+        # SAMA SEKALI GAK LIAT DATA BROKER) kepampang bareng "mulai ADA DISTRIBUSI"
+        # di baris bawahnya (dari _detect_bandar, cek broker terpisah) — user
+        # bingung liat 1 pesan bilang "lanjut, aman" sekaligus "ada distribusi".
+        # Fix: distribusi_meningkat WAJIB nge-override verdict headline, jangan
+        # ditempel doang jadi catatan yang gak ngaruh ke kesimpulan.
+        bandar = _detect_bandar(p["ticker"], p["entry_date"], today)
         v = verdicts.get(p["ticker"], {})
-        verdict = v.get("verdict", "lanjut")
         alasan = _esc(v.get("alasan") or "-")
         sign = "+" if p["pnl_pct"] >= 0 else ""
-        if verdict == "urgent_cl":
+        severity = _position_severity(v.get("verdict", "lanjut"), bandar)
+        if severity == "urgent_cl":
             lines.append(
                 f"🚨 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
                 f"<b>PERTIMBANGKAN CUT LOSS</b>\n{alasan}\n"
+            )
+        elif severity == "distribusi":
+            lines.append(
+                f"🟡 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
+                f"<b>WASPADA, broker mulai distribusi</b> (target TP Rp{p['target']:,.0f})\n{alasan}\n"
             )
         else:
             lines.append(
                 f"🟢 <b>{_esc(p['ticker'])}</b> ({sign}{p['pnl_pct']}%) — "
                 f"lanjut, target TP Rp{p['target']:,.0f}\n{alasan}\n"
             )
-        # broker summary otomatis per posisi open — cuma jalan kalau Invezgo
-        # aktif, diem total kalau enggak (lihat _detect_bandar). Jawab "market
-        # maker mulai buang atau nambah barang" + perkiraan bandar (informasi
-        # doang, BUKAN dasar keputusan average-down/up — gak ada cara tau sisa
-        # modal bandar dari data publik manapun)
-        bandar = _detect_bandar(p["ticker"], p["entry_date"], today)
+        # perkiraan bandar (informasi doang, BUKAN dasar keputusan average-down/up
+        # — gak ada cara tau sisa modal bandar dari data publik manapun)
         if bandar:
             lines.append(_format_bandar_line(bandar))
     log.info(f"_send_running_positions_update: kirim update {len(positions)} posisi")
