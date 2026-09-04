@@ -77,8 +77,17 @@ def run() -> None:
     results = []
     errors = 0
     for ticker, items in by_ticker.items():
+        # period="3mo" FIX dulu — cukup buat data sekarang (~17 hari span), TAPI
+        # script ini eksplisit didesain buat dipake ULANG beberapa bulan ke
+        # depan pas intel numpuk lebih banyak (lihat docstring modul). Begitu
+        # ada mention lebih tua dari 3 bulan, bakal silent gak ke-match (idx
+        # gak nyampe ke tanggal itu) — bug yang baru KETARA belakangan, gak
+        # kerasa sekarang. Fix: fetch dari mention TERTUA emiten itu, bukan
+        # window fix, + buffer FUTURE_DAYS biar cukup buat itung harga N hari
+        # abis mention yang paling BARU juga.
+        earliest = min(m["date"] for m in items)
         try:
-            hist = yf.Ticker(f"{ticker}.JK").history(period="3mo", auto_adjust=False).dropna(subset=["Close"])
+            hist = yf.Ticker(f"{ticker}.JK").history(start=earliest, auto_adjust=False).dropna(subset=["Close"])
         except Exception:
             errors += 1
             continue
