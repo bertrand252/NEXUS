@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
+from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
 
 
 def test_rr_label_bands():
@@ -47,6 +47,27 @@ _SUPPORT_BOUNCE_CLOSES = [
     110, 107, 103, 100, 103, 107, 111, 108, 104, 100,
     103, 108, 112, 109, 105, 100, 104, 109, 113, 110, 106, 102,
 ]  # support ~100 disentuh 3x jelas (tiap bounce+turun cukup bar buat swing_window=3 kedeteksi)
+
+
+def test_nearest_support_resistance_ignores_stale_deep_dip():
+    """Insiden #16 (BPJS, 2026-09-04): support_resistance() 20-hari ambil
+    MIN/MAX mentah trailing-20 — 1 dip lama yang gak lagi relevan (bukan
+    swing point asli, cuma noise sesaat) ketarik jadi 'support', bikin
+    risk_pct/stop_loss jauh gak masuk akal buat trade yang mesti resolve
+    besok. nearest_support_resistance() reuse swing point asli (butuh jadi
+    titik balik beneran), jadi dip 1 hari yang gak dikonfirmasi swing_window
+    di dua sisi gak ketarik, hasil support-nya lebih deket & risk_pct lebih
+    kecil."""
+    closes = [100, 100, 60, 100, 100, 103, 107, 111, 108, 104,
+              100, 103, 108, 112, 109, 105, 100, 104, 109, 113, 140]
+    hist = _make_hist(closes)
+
+    old = support_resistance(hist)
+    new = nearest_support_resistance(hist)
+
+    assert old["support"] < 65  # ketarik ke dip lama (~59.4)
+    assert new["support"] > 90  # ambil swing low asli terdekat (~99), bukan dip noise
+    assert new["risk_pct"] < old["risk_pct"]
 
 
 def test_well_defended_support_detects_repeated_bounce():

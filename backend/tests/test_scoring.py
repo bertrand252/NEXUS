@@ -6,7 +6,8 @@ import pandas as pd
 from scoring import (
     volume_score, price_score, technical_score, bsjp_criteria,
     compression_setup, bsjp_intraday_score, bpjs_momentum_score, signal_label,
-    ma_alignment, adx, bollinger_signal,
+    ma_alignment, adx, bollinger_signal, bsjp_tp_pct,
+    BSJP_TP_MIN_PCT, BSJP_TP_MAX_PCT, BSJP_TP_SCORE_LOW, BSJP_TP_SCORE_HIGH,
 )
 
 
@@ -92,6 +93,24 @@ def test_bsjp_intraday_score_positive_with_supporting_bonus():
     takeoff = {"volume_ratio": 5.0, "price_change_pct": 3.0, "s1_spike_supporting": True}
     score = bsjp_intraday_score(takeoff, 6_000_000_000)
     assert score == 5.5  # 5.0 * 1.1
+
+
+def test_bsjp_tp_pct_clamped_at_bounds():
+    """Insiden #17: TP/SL BSJP dulu dari support_resistance() 20-hari (Swing),
+    sering gagal/negatif buat saham yang emang lagi breakout. Ganti scale
+    2-3% dari momentum sesi 2 — skor di bawah/di atas ambang clamp ke
+    batas, gak boleh keluar 2-3%."""
+    assert bsjp_tp_pct(BSJP_TP_SCORE_LOW) == BSJP_TP_MIN_PCT
+    assert bsjp_tp_pct(0.1) == BSJP_TP_MIN_PCT  # di bawah ambang, tetep clamp ke minimum
+    assert bsjp_tp_pct(BSJP_TP_SCORE_HIGH) == BSJP_TP_MAX_PCT
+    assert bsjp_tp_pct(10.0) == BSJP_TP_MAX_PCT  # momentum ekstrem, tetep clamp ke maksimum
+
+
+def test_bsjp_tp_pct_scales_with_momentum():
+    mid = (BSJP_TP_SCORE_LOW + BSJP_TP_SCORE_HIGH) / 2
+    tp = bsjp_tp_pct(mid)
+    assert BSJP_TP_MIN_PCT < tp < BSJP_TP_MAX_PCT
+    assert bsjp_tp_pct(BSJP_TP_SCORE_LOW + 0.1) < bsjp_tp_pct(BSJP_TP_SCORE_HIGH - 0.1)
 
 
 def test_bpjs_momentum_score_below_liquidity_floor():
