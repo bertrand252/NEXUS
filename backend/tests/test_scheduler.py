@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES
 from unittest.mock import patch
 
 
@@ -91,6 +91,47 @@ def test_trade_dt_orders_correctly_against_cutoff():
     stale = _trade_dt({"time": "09:13:54"}, day)
     assert fresh > cutoff  # masih dalam jendela -> loop harus lanjut ke halaman sebelumnya
     assert stale <= cutoff  # udah di luar jendela -> loop harus berhenti
+
+
+def test_whale_resume_page_first_run_backfills_from_page_1():
+    assert _whale_resume_page(prev_total_pages=0, total_pages=8) == 1
+
+
+def test_whale_resume_page_skips_finalized_pages_when_grown():
+    # totalPage naik dari 5 -> 8 sejak cek terakhir -> halaman 1-5 udah FINAL
+    # (halaman 6 ada artinya halaman 5 udah penuh gak keubah lagi), cuma
+    # halaman 6-8 yang baru & perlu difetch ulang.
+    assert _whale_resume_page(prev_total_pages=5, total_pages=8) == 6
+
+
+def test_whale_resume_page_refetches_growing_tail_when_no_new_pages():
+    # BUG yang KEHAMPIR kejadian: totalPage SAMA (5==5) BUKAN berarti gak ada
+    # trade baru — halaman terakhir bisa aja masih terus keisi (belum penuh
+    # 100 trade). Kalau resume_from > 5 di sini, trade baru di halaman 5
+    # ke-skip permanen. Harus tetep refetch halaman 5, bukan skip.
+    assert _whale_resume_page(prev_total_pages=5, total_pages=5) == 5
+
+
+def test_whale_outlier_threshold_none_with_insufficient_samples():
+    trades = [{"price": 1000, "volume": 100_000}] * (WHALE_OUTLIER_MIN_SAMPLES - 1)
+    assert _whale_outlier_threshold(trades) is None
+
+
+def test_whale_outlier_threshold_flags_only_real_outlier():
+    # CUAN 2026-09-04: trade 10rb-30rb lot itu NORMAL buat saham gorengan
+    # hiperaktif ini, kejadian tiap menit — bukan whale. Median trade session
+    # ini emang gede semua (~Rp1-2M), jadi ambang HARUS ikut naik, bukan
+    # nyangkut di flat 500jt lama.
+    routine = [{"price": 920, "volume": v} for v in
+               [1_100_000, 1_200_000, 2_000_000, 1_900_000, 1_900_000, 1_400_000,
+                1_600_000, 3_100_000, 1_100_000, 900_000, 1_400_000, 2_600_000,
+                2_200_000, 900_000] * 2]  # 28 sample, di atas WHALE_OUTLIER_MIN_SAMPLES
+    threshold = _whale_outlier_threshold(routine)
+    assert threshold is not None
+    routine_value = 920 * 1_500_000  # trade tipikal sesi ini
+    assert routine_value < threshold  # trade biasa TETEP di bawah ambang, gak ke-flag
+    genuine_whale_value = 920 * 20_000_000  # trade jauh di atas tipikal
+    assert genuine_whale_value > threshold
 
 
 def test_position_severity_urgent_cl_wins_over_distribusi():
