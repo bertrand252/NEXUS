@@ -90,6 +90,17 @@ def test_position_severity_lanjut_with_akumulasi_stays_lanjut():
     assert _position_severity("lanjut", bandar) == "lanjut"
 
 
+def test_position_severity_exit_advised_earlier_today_overrides_lanjut():
+    # BUG NYATA 2026-09-03: BPJS 15:30 udah kirim "PERTIMBANGKAN EXIT" buat
+    # BRIS, tapi night recap 20:00 masih bilang "lanjut" -> 2 sistem kontra.
+    # exit_advised_today (dari _dedup_mark hold_advisory_result) harus menang.
+    assert _position_severity("lanjut", None, exit_advised_today=True) == "urgent_cl"
+
+
+def test_position_severity_no_exit_advised_defaults_to_bandar_check():
+    assert _position_severity("lanjut", None, exit_advised_today=False) == "lanjut"
+
+
 def test_format_bandar_line_steady_accumulation_sideways():
     line = _format_bandar_line({
         "broker": "AG", "trend": "netral", "avg_price_estimate": None,
