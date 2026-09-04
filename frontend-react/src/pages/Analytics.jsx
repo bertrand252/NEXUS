@@ -30,6 +30,11 @@ export default function Analytics() {
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/journal/analytics?year=${viewYear}`);
+        // BUG NYATA: dulu gak cek res.ok — backend error (500) tetep balikin
+        // JSON valid ({"detail":...}), setData() keisi itu, terus
+        // data.monthly_pnl.map(...) di render CRASH (halaman blank) bukan
+        // nampilin state error yang udah disiapin.
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         if (!cancelled) setData(json);
       } catch {
