@@ -1771,13 +1771,80 @@ def _check_portfolio_risk() -> None:
 
 NIGHT_RECAP_HOUR = 20  # 20:00 waktu lokal server, abis market tutup
 
+# ponytail: daftar tetap, bukan dari index weight beneran (Invezgo/yfinance
+# dua-duanya gak expose bobot index resmi) — proxy "big cap paling mungkin
+# gerakin IHSG" pake saham-saham kapitalisasi terbesar IDX yang kepake umum.
+# Upgrade ke bobot index asli kalau nanti ketemu sumber datanya.
+BIG_CAP_TICKERS = [
+    "BBCA", "BBRI", "BMRI", "BBNI", "TLKM", "ASII", "UNVR", "ICBP",
+    "ADRO", "AMMN", "AMRT", "GOTO", "TPIA", "MDKA", "INKP", "KLBF",
+    "INDF", "PGAS", "SMGR", "AKRA",
+]
+
+
+def _top_ihsg_movers(limit: int = 5) -> list[dict]:
+    """Top saham big cap (dari BIG_CAP_TICKERS) yang paling banyak berubah
+    hari ini, proxy buat 'penggerak utama IHSG' — dari scanner_cache (udah
+    ke-refresh harian), bukan API tambahan."""
+    try:
+        res = (
+            supabase.table("scanner_cache")
+            .select("ticker,price,change_pct")
+            .in_("ticker", BIG_CAP_TICKERS)
+            .execute()
+        )
+    except Exception:
+        return []
+    rows = [r for r in res.data if r.get("change_pct") is not None]
+    rows.sort(key=lambda r: abs(r["change_pct"]), reverse=True)
+    return rows[:limit]
+
+
+def _today_morning_berita() -> list[dict]:
+    """Berita positive/negative hari ini dari daily_briefing (yang udah
+    ditempelin pagi ini) — konteks Groq buat review malam, biar review
+    'nyambung' sama apa yang udah dibaca user pagi ini."""
+    try:
+        res = (
+            supabase.table("daily_briefing")
+            .select("berita")
+            .eq("tanggal", today_wib().isoformat())
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return []
+    if not res.data:
+        return []
+    berita = res.data[0].get("berita") or {}
+    return (berita.get("positive") or []) + (berita.get("negative") or [])
+
+
+def _today_foreign_flow_snapshot() -> dict | None:
+    """Top 5 accum/dist foreign flow HARI INI dari Invezgo (mentah, gak
+    diagregat/diklaim jadi kesimpulan di sini — biar Groq yang narasiin
+    dengan hedge yang bener). None kalau Invezgo gak configured/gagal fetch."""
+    if not invezgo_client.is_configured():
+        return None
+    try:
+        frn = invezgo_client.get_top_foreign(today_wib().isoformat())
+    except Exception:
+        return None
+    return {
+        "top_accum": (frn.get("accum") or [])[:5],
+        "top_dist": (frn.get("dist") or [])[:5],
+    }
+
 
 def _send_night_recap() -> None:
-    """Gated `notif_daily_recap` di Settings. Recap ringan: closing IHSG,
-    jumlah Strong signal hari ini, win rate NEXUS kalau datanya udah ada.
-    Skip diem-diem kalau hari ini bursa tutup (weekend/libur) — gak ada
-    yang perlu direkap, spam doang kalau tetep dikirim. Swing (check_and_alert)
-    TETEP jalan kayak biasa, ini cuma soal notif rutin doang."""
+    """Gated `notif_daily_recap` di Settings. Recap closing IHSG + KENAPA-nya
+    (top 5 big cap penggerak, review Groq yang ngaitin ke berita pagi/foreign
+    flow/event ekonomi deket — bukan cuma lapor angka doang, permintaan
+    eksplisit user), jumlah Strong signal hari ini, win rate NEXUS kalau
+    datanya udah ada. Skip diem-diem kalau hari ini bursa tutup (weekend/
+    libur) — gak ada yang perlu direkap, spam doang kalau tetep dikirim.
+    Swing (check_and_alert) TETEP jalan kayak biasa, ini cuma soal notif
+    rutin doang."""
     if not is_trading_day(today_wib()):
         return
     settings = _load_settings()
@@ -1786,6 +1853,7 @@ def _send_night_recap() -> None:
 
     from routers.scanner import get_ihsg
     from routers.signal_track import get_signal_track_stats
+    from groq_client import ask_night_recap_review
 
     try:
         ihsg = get_ihsg()
@@ -1799,12 +1867,42 @@ def _send_night_recap() -> None:
         strong_count = 0
 
     stats = get_signal_track_stats()
+    movers = _top_ihsg_movers()
 
-    lines = ["🌙 <b>Recap Malam Ini</b>\n"]
+    lines = ["🌙 <b>Market Close Report — NEXUS</b>\n"]
     if ihsg:
         arrow = "🟢" if ihsg["change_pct"] >= 0 else "🔴"
-        lines.append(f"{arrow} IHSG: <b>{ihsg['price']:,.0f}</b> ({ihsg['change_pct']:+.2f}%)")
-    lines.append(f"📈 Strong signal hari ini: <b>{strong_count}</b> ticker")
+        lines.append(f"{arrow} IHSG closing: <b>{ihsg['price']:,.0f}</b> ({ihsg['change_pct']:+.2f}%)")
+    else:
+        lines.append("⚪ IHSG: data gak ketemu hari ini.")
+
+    if movers:
+        lines.append("\n<b>Top Penggerak Big Cap</b>")
+        for m in movers:
+            arrow = "🟢" if m["change_pct"] >= 0 else "🔴"
+            lines.append(f"{arrow} {_esc(m['ticker'])} {m['change_pct']:+.2f}% (Rp{m['price']:,.0f})")
+
+    try:
+        upcoming_events = [
+            e for e in get_forex_events()
+            if e["impact"] == "High" and today_wib().isoformat() <= e["date"] <= (today_wib() + timedelta(days=3)).isoformat()
+        ]
+    except Exception:
+        upcoming_events = []
+
+    if ihsg or movers:
+        alasan = ask_night_recap_review({
+            "ihsg_price": ihsg["price"] if ihsg else None,
+            "ihsg_change_pct": ihsg["change_pct"] if ihsg else None,
+            "top_movers": movers,
+            "berita_pagi": _today_morning_berita(),
+            "foreign_flow_top": _today_foreign_flow_snapshot(),
+            "event_ekonomi_dekat": upcoming_events,
+        })
+        if alasan:
+            lines.append(f"\n🧠 <b>Kenapa bisa gini?</b>\n{_esc(alasan)}")
+
+    lines.append(f"\n📈 Strong signal hari ini: <b>{strong_count}</b> ticker")
     if stats.get("win_rate_pct") is not None:
         lines.append(f"🎯 Win rate NEXUS: <b>{stats['win_rate_pct']}%</b> ({stats['tp_hit']} TP / {stats['sl_hit']} SL)")
     send_alert("\n".join(lines))
