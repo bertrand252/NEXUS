@@ -3044,15 +3044,37 @@ def _gather_sekuritas_calls(days: int = 1) -> list[dict]:
     return calls
 
 
-def _build_sekuritas_caption(pick: dict) -> str:
+CHART_PATTERN_LABEL = {
+    "ascending_triangle": "Ascending triangle (bullish continuation)",
+    "descending_triangle": "Descending triangle (bearish, waspada)",
+    "symmetrical_triangle": "Symmetrical triangle (range nyempit, arah belum pasti)",
+}
+
+
+def _build_sekuritas_caption(ticker: str, pick: dict, levels: dict) -> str:
+    """Format VISUAL SAMA kayak call Swing/BPJS (header+BUY/TARGET/SL/RR+trend+
+    pattern+chart foto) — user eksplisit gak mau versi ringkas teks doang,
+    minta 'persis kaya call biasa'. Bedanya cuma sourcing: entry/TP/SL dari
+    analis sekuritas asli (udah lolos guard RR), bukan technical_score/
+    breakout NEXUS sendiri — makanya baris sumber+disclaimer tetep ada,
+    biar jelas ini BUKAN call breakout+volume standar."""
     sumber_txt = ", ".join(pick.get("sumber") or []) or "sekuritas"
+    trend = TREND_LABEL.get(levels.get("trend"), "")
+    trend_line = f"📈 <b>Trend</b>: {trend}\n" if trend else ""
+    pattern = levels.get("chart_pattern")
+    pattern_line = f"📐 <b>Pola chart</b>: {CHART_PATTERN_LABEL.get(pattern['pattern'], pattern['pattern'])}\n" if pattern else ""
     return (
-        f"📰 <b>Call Sekuritas — {_esc(pick['ticker'])}</b>\n\n"
-        f"Entry: Rp{pick['entry']:,.0f} · 🎯 Target: Rp{pick['target']:,.0f} · "
-        f"⛔ SL: Rp{pick['stop_loss']:,.0f}\n\n"
-        f"{_esc(pick.get('alasan_singkat') or '')}\n\n"
-        f"📌 Disaring NEXUS dari call {_esc(sumber_txt)} — bukan comot mentah, "
-        f"udah di-cross-check RR & data teknikal internal."
+        f"📰 <b>CALL SEKURITAS — {_esc(ticker)}</b>\n"
+        f"🎯 Gaya: Sekuritas (disaring NEXUS)\n"
+        f"{trend_line}{pattern_line}\n"
+        f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
+        f"🎯 <b>TARGET</b> Rp{pick['target']:,.0f} (+{levels['reward_pct']}%)\n"
+        f"⛔ <b>STOP LOSS (CL)</b> Rp{pick['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
+        f"⚖️ <b>Risk:Reward</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
+        f"📌 <b>Sumber:</b> {_esc(sumber_txt)}\n\n"
+        f"📊 <b>Kenapa kuat:</b>\n{_esc(pick.get('alasan_singkat') or '-')}\n\n"
+        f"⚠️ Call analis sekuritas, disaring & di-cross-check RR+teknikal NEXUS — "
+        f"BUKAN indikator resmi mentor, bukan jaminan."
     )
 
 
@@ -3122,8 +3144,30 @@ def _check_sekuritas_pick() -> None:
             continue
         pick = validated
         ticker, entry_price, target, stop_loss = pick["ticker"], pick["entry"], pick["target"], pick["stop_loss"]
-        caption = _build_sekuritas_caption(pick)
-        message_id = send_alert(caption)
+
+        risk_pct = round((entry_price - stop_loss) / entry_price * 100, 2)
+        reward_pct = round((target - entry_price) / entry_price * 100, 2)
+        rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+        levels = {
+            "entry_low": round(entry_price * 0.99, 2), "entry_high": round(entry_price * 1.02, 2),
+            "risk_pct": risk_pct, "reward_pct": reward_pct, "rr_ratio": rr_ratio, "rr_label": rr_label(rr_ratio),
+        }
+        # chart+trend+pattern SAMA kayak call Swing/BPJS (user eksplisit minta
+        # format visual sama, bukan teks ringkas doang) — support/resistance
+        # yang digambar di chart pake stop_loss/target ASLI dari sekuritas
+        # (levels trade beneran), bukan support_resistance() 20-hari generik.
+        try:
+            hist = _get_history(ticker, period="6mo")
+            channel = detect_trend_channel(hist)
+            levels["trend"] = determine_trend(hist)
+            levels["chart_pattern"] = detect_chart_pattern(hist)
+            chart_png = render_chart(ticker, hist, stop_loss, target, channel)
+        except Exception:
+            log.exception(f"_check_sekuritas_pick: gagal render chart {ticker}, kirim tanpa foto")
+            chart_png = None
+
+        caption = _build_sekuritas_caption(ticker, pick, levels)
+        message_id = send_alert_photo(chart_png, caption) if chart_png else send_alert(caption)
         if not message_id:
             continue
         sent_any = True
