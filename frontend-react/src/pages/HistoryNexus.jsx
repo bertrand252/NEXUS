@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../lib/api';
 
-const SOURCE_LABEL = { swing: 'Swing', bpjs: 'BPJS', bsjp: 'BSJP', sekuritas: 'Sekuritas' };
+const SOURCE_LABEL = { swing: 'Swing', bpjs: 'BPJS', bsjp: 'BSJP' };
 const STATUS_META = {
   waiting_entry: { label: 'Nunggu Entry', cls: 'bg-white/5 text-slate-400 border-border' },
   open: { label: 'Jalan', cls: 'bg-cyan/10 text-cyan border-cyan/30' },
@@ -93,7 +93,7 @@ export default function HistoryNexus() {
 
         <div className="glow-border rounded-2xl bg-card border border-border overflow-hidden">
           <div className="flex items-center gap-1 p-4 border-b border-border">
-            {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS'], ['bsjp', 'BSJP'], ['sekuritas', 'Sekuritas']].map(([key, label]) => (
+            {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS'], ['bsjp', 'BSJP']].map(([key, label]) => (
               <button key={key} onClick={() => setSourceFilter(key)}
                 className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition ${sourceFilter === key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
                 {label}

@@ -2590,7 +2590,7 @@ def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> Non
     send_alert(caption)
 
 
-SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing", "sekuritas": "Sekuritas"}
+SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing"}
 
 
 def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
@@ -3051,30 +3051,43 @@ CHART_PATTERN_LABEL = {
 }
 
 
-def _build_sekuritas_caption(ticker: str, pick: dict, levels: dict) -> str:
-    """Format VISUAL SAMA kayak call Swing/BPJS (header+BUY/TARGET/SL/RR+trend+
-    pattern+chart foto) — user eksplisit gak mau versi ringkas teks doang,
-    minta 'persis kaya call biasa'. Bedanya cuma sourcing: entry/TP/SL dari
-    analis sekuritas asli (udah lolos guard RR), bukan technical_score/
-    breakout NEXUS sendiri — makanya baris sumber+disclaimer tetep ada,
-    biar jelas ini BUKAN call breakout+volume standar."""
-    sumber_txt = ", ".join(pick.get("sumber") or []) or "sekuritas"
+SEKURITAS_STYLE_META = {
+    "swing": {
+        "emoji": "🔥", "label": "SWING SIGNAL",
+        "rule_note": "Dipegang sampe TP/SL kena — gak ada limit hari (posisi jangka menengah).",
+    },
+    "bpjs": {
+        "emoji": "⚡", "label": "BPJS — Day Trade",
+        "rule_note": f"Day-trade — WAJIB dijual maksimal {BPJS_MAX_HOLD_DAYS} hari kalau belum kena TP/SL.",
+    },
+    "bsjp": {
+        "emoji": "🌆", "label": "BSJP — Beli Sore Jual Pagi",
+        "rule_note": "Overnight — WAJIB dijual besok kecuali data eksplisit masih kuat (dicek otomatis jam 12 siang).",
+    },
+}
+
+
+def _build_sekuritas_caption(ticker: str, gaya: str, pick: dict, levels: dict) -> str:
+    """Format SAMA kayak call Swing/BPJS/BSJP asli (header+BUY/TARGET/SL/RR+
+    trend+pattern+chart foto) — user eksplisit (2026-09-09): ini JADI CALL
+    NEXUS SENDIRI, BUKAN 'titip call sekuritas' — jangan sebut sumber/nama
+    channel di caption sama sekali, header+rule_note ngikutin GAYA yang
+    Groq klasifikasi (`gaya`), header PERSIS kayak call native gaya itu biar
+    gak kebedain user."""
+    meta = SEKURITAS_STYLE_META.get(gaya, SEKURITAS_STYLE_META["swing"])
     trend = TREND_LABEL.get(levels.get("trend"), "")
     trend_line = f"📈 <b>Trend</b>: {trend}\n" if trend else ""
     pattern = levels.get("chart_pattern")
     pattern_line = f"📐 <b>Pola chart</b>: {CHART_PATTERN_LABEL.get(pattern['pattern'], pattern['pattern'])}\n" if pattern else ""
     return (
-        f"📰 <b>CALL SEKURITAS — {_esc(ticker)}</b>\n"
-        f"🎯 Gaya: Sekuritas (disaring NEXUS)\n"
+        f"{meta['emoji']} <b>{meta['label']} — {_esc(ticker)}</b>\n"
         f"{trend_line}{pattern_line}\n"
         f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
         f"🎯 <b>TARGET</b> Rp{pick['target']:,.0f} (+{levels['reward_pct']}%)\n"
         f"⛔ <b>STOP LOSS (CL)</b> Rp{pick['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
         f"⚖️ <b>Risk:Reward</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
-        f"📌 <b>Sumber:</b> {_esc(sumber_txt)}\n\n"
         f"📊 <b>Kenapa kuat:</b>\n{_esc(pick.get('alasan_singkat') or '-')}\n\n"
-        f"⚠️ Call analis sekuritas, disaring & di-cross-check RR+teknikal NEXUS — "
-        f"BUKAN indikator resmi mentor, bukan jaminan."
+        f"⏰ {meta['rule_note']}"
     )
 
 
@@ -3083,8 +3096,10 @@ def _validate_sekuritas_pick(pick: dict, valid_tickers: set[str]) -> dict | None
     baik ke Groq (bisa halusinasi ticker di luar daftar) MAUPUN ke sekuritas
     asalnya (angka entry/target/SL mentah belum tentu RR-nya masuk akal,
     sama filosofi kayak guard BPJS insiden #14). Balikin pick dengan
-    entry/target/stop_loss udah dicoerce jadi float kalau lolos, None kalau
-    ditolak (fungsi murni, gak ada side effect/logging — caller yang log)."""
+    entry/target/stop_loss udah dicoerce jadi float + gaya udah divalidasi
+    (default 'swing' kalau Groq kasih nilai di luar 3 pilihan) kalau lolos,
+    None kalau ditolak (fungsi murni, gak ada side effect/logging — caller
+    yang log)."""
     ticker = pick.get("ticker")
     if ticker not in valid_tickers:
         return None
@@ -3101,18 +3116,21 @@ def _validate_sekuritas_pick(pick: dict, valid_tickers: set[str]) -> dict | None
     rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
     if risk_pct > MAX_RISK_PCT or reward_pct > MAX_REWARD_PCT or rr_ratio < MIN_RR_RATIO:
         return None
-    return {**pick, "entry": entry_price, "target": target, "stop_loss": stop_loss}
+    gaya = pick.get("gaya") if pick.get("gaya") in SEKURITAS_STYLE_META else "swing"
+    return {**pick, "entry": entry_price, "target": target, "stop_loss": stop_loss, "gaya": gaya}
 
 
 def _check_sekuritas_pick() -> None:
     """Screening harian call sekuritas — jalan 1x/hari abis market tutup
     (biar nyakup SELURUH call yang masuk sepanjang hari, bukan cuma pagi).
-    Gate: dedup 1x/hari -> toggle notif -> kumpul call -> Groq saring
-    maks 2 -> GUARD PYTHON (ticker WAJIB dari daftar asli + RR minimum,
-    pola sama kayak BPJS/Swing — jangan percaya buta angka dari Groq
-    ATAU dari sekuritas asalnya) -> kirim -> catat ke signal_alerts
-    (source='sekuritas', lifecycle sama kayak Swing: waiting_entry ->
-    open -> tp_hit/sl_hit/timeout, dicek _check_signal_outcomes generik)."""
+    Gate: dedup 1x/hari -> toggle notif -> kumpul call -> Groq saring maks 2
+    + klasifikasi gaya (swing/bpjs/bsjp) -> GUARD PYTHON (ticker WAJIB dari
+    daftar asli + RR minimum) -> kirim SEBAGAI CALL NEXUS BIASA (bukan
+    'titip call sekuritas', user eksplisit 2026-09-09) -> catat ke
+    signal_alerts DENGAN source = gaya yang dipilih Groq, BUKAN 'sekuritas'
+    — biar OTOMATIS kepake seluruh aturan existing gaya itu (max hold BPJS
+    2 hari, force-cut BSJP H+1, Swing gak ada timeout) TANPA plumbing
+    tambahan, semua mekanisme itu emang udah generik di kolom `source`."""
     if _dedup_seen("sekuritas", "picked"):
         return
     settings = _load_settings()
@@ -3135,7 +3153,8 @@ def _check_sekuritas_pick() -> None:
         log.info(f"_check_sekuritas_pick: Groq gak milih apa-apa — {result.get('alasan_kalau_kosong')}")
         return
 
-    valid_tickers = set(by_t["ticker"] for by_t in calls)
+    calls_by_ticker = {c["ticker"]: c for c in calls}
+    valid_tickers = set(calls_by_ticker)
     sent_any = False
     for pick in picks:
         validated = _validate_sekuritas_pick(pick, valid_tickers)
@@ -3143,7 +3162,7 @@ def _check_sekuritas_pick() -> None:
             log.info(f"_check_sekuritas_pick: skip {pick.get('ticker')} — gak lolos validasi (ticker/level/RR)")
             continue
         pick = validated
-        ticker, entry_price, target, stop_loss = pick["ticker"], pick["entry"], pick["target"], pick["stop_loss"]
+        ticker, entry_price, target, stop_loss, gaya = pick["ticker"], pick["entry"], pick["target"], pick["stop_loss"], pick["gaya"]
 
         risk_pct = round((entry_price - stop_loss) / entry_price * 100, 2)
         reward_pct = round((target - entry_price) / entry_price * 100, 2)
@@ -3152,10 +3171,9 @@ def _check_sekuritas_pick() -> None:
             "entry_low": round(entry_price * 0.99, 2), "entry_high": round(entry_price * 1.02, 2),
             "risk_pct": risk_pct, "reward_pct": reward_pct, "rr_ratio": rr_ratio, "rr_label": rr_label(rr_ratio),
         }
-        # chart+trend+pattern SAMA kayak call Swing/BPJS (user eksplisit minta
-        # format visual sama, bukan teks ringkas doang) — support/resistance
-        # yang digambar di chart pake stop_loss/target ASLI dari sekuritas
-        # (levels trade beneran), bukan support_resistance() 20-hari generik.
+        # chart+trend+pattern SAMA kayak call Swing/BPJS asli — support/
+        # resistance yang digambar di chart pake stop_loss/target ASLI dari
+        # sekuritas (levels trade beneran), bukan support_resistance() generik.
         try:
             hist = _get_history(ticker, period="6mo")
             channel = detect_trend_channel(hist)
@@ -3166,11 +3184,15 @@ def _check_sekuritas_pick() -> None:
             log.exception(f"_check_sekuritas_pick: gagal render chart {ticker}, kirim tanpa foto")
             chart_png = None
 
-        caption = _build_sekuritas_caption(ticker, pick, levels)
+        caption = _build_sekuritas_caption(ticker, gaya, pick, levels)
         message_id = send_alert_photo(chart_png, caption) if chart_png else send_alert(caption)
         if not message_id:
             continue
         sent_any = True
+        # sumber (nama channel) TETEP dicatat di faktor_pendukung — metadata
+        # internal/audit trail doang, GAK ditampilin di caption Telegram
+        # (user eksplisit: ini call NEXUS, bukan 'titip call sekuritas').
+        original_sources = [c["sumber"] for c in calls_by_ticker[ticker]["calls"]]
         try:
             supabase.table("signal_alerts").insert({
                 "ticker": ticker,
@@ -3181,8 +3203,8 @@ def _check_sekuritas_pick() -> None:
                 "stop_loss": stop_loss,
                 "status": "waiting_entry",
                 "telegram_message_id": message_id,
-                "source": "sekuritas",
-                "faktor_pendukung": {"alasan": pick.get("alasan_singkat"), "sumber": pick.get("sumber")},
+                "source": gaya,
+                "faktor_pendukung": {"alasan": pick.get("alasan_singkat"), "sumber_intel": original_sources},
             }).execute()
         except Exception:
             log.exception(f"_check_sekuritas_pick: gagal insert signal_alerts buat {ticker}")
