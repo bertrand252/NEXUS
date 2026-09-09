@@ -489,6 +489,42 @@ def generate_postmortem(summary: dict) -> dict:
     return ask_json(system_prompt, user_prompt)
 
 
+def ask_night_recap_review(context: dict) -> str:
+    """Recap Malam — jelasin KENAPA IHSG closing di harga/arah segitu hari ini,
+    ngaitin ke data yang beneran ada (top 5 big cap penggerak, berita pagi,
+    foreign flow Invezgo kalau ada, event ekonomi high-impact yang deket) —
+    BUKAN sekadar lapor angka doang. User eksplisit minta gaya penjelasan
+    kayak 'asing keluar duluan karena besok ada FED'. Return 2-4 kalimat
+    pendek Bahasa Indonesia, atau string kosong kalau Groq gagal."""
+    system_prompt = (
+        "Kamu analis saham IDX yang bikin recap penutupan pasar tiap malam. "
+        "Dikasih: harga & perubahan IHSG hari ini, top 5 saham big cap yang "
+        "paling banyak berubah (kemungkinan besar penggerak indeks), berita "
+        "pagi hari ini (kalau ada), snapshot foreign flow Invezgo top "
+        "accumulation/distribution hari ini (kalau ada, None kalau Invezgo "
+        "gak configured/gagal fetch), dan event ekonomi HIGH impact yang deket "
+        "(1-3 hari ke depan, misal rilis suku bunga Fed/data inflasi). "
+        "Tugas kamu: jelasin KEMUNGKINAN kenapa IHSG closing di arah itu hari "
+        "ini, ngaitin bukti-bukti yang ADA (misal: 'big cap X/Y naik jadi "
+        "pendorong utama', 'foreign flow nunjukin net-sell asing hari ini, "
+        "sejalan sama IHSG turun', 'ada rilis suku bunga Fed besok — kemungkinan "
+        "sebagian investor profit taking duluan sebelum itu'). SELALU pakai "
+        "kata 'kemungkinan'/'indikasi', JANGAN klaim sebab-akibat pasti "
+        "(data ini gak cukup buat mastiin sebab tunggal). Kalau data yang "
+        "dikasih gak cukup buat nyimpulkan apa-apa yang masuk akal, bilang "
+        "jujur closing-nya campuran/gak ada faktor dominan yang kebaca dari "
+        "data ini — JANGAN mengarang alasan yang gak didukung data. Bahasa "
+        "Indonesia santai, maksimal 4 kalimat pendek, JANGAN kasih "
+        "rekomendasi beli/jual. Balikin JSON persis: {\"alasan\": \"...\"}"
+    )
+    user_prompt = json.dumps(context, ensure_ascii=False)
+    try:
+        result = ask_json(system_prompt, user_prompt)
+    except Exception:
+        return ""
+    return result.get("alasan", "")
+
+
 def ask_hold_or_exit(context: dict) -> dict:
     """Pertimbangan HOLD atau EXIT buat posisi yang UDAH ke-entry (BSJP/BPJS/
     Swing), TP belum kena tapi deadline exit strategi itu udah deket (BSJP:
