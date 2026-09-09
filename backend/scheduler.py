@@ -2352,7 +2352,13 @@ def _check_bsjp_screener() -> None:
     User eksplisit gak ada indikator resmi baku dari mentor buat BSJP — kalau
     Stage-2 gak nemu yang beneran skor >0 (sesi 2 gak "terbang"), JANGAN
     kirim apa-apa. Lebih baik diam daripada maksain alert dari proxy EOD
-    doang yang belum tentu bener."""
+    doang yang belum tentu bener.
+
+    Broksum (_detect_bandar, 2026-09-09) jadi filter TAMBAHAN sebelum cap
+    MAX_BSJP_PER_DAY: kandidat yang broker top-nya lagi distribusi_meningkat
+    (jualan belakangan ini) di-skip, kontradiksi langsung sama rencana beli
+    overnight. Gak ada langkah Groq di BSJP (rule-based), jadi ini hard
+    filter, bukan konteks buat judgment call kayak Swing/BPJS/Sekuritas."""
     if _dedup_seen("bsjp", "screener"):
         log.info("_check_bsjp_screener: skip, udah ke-dedup hari ini")
         return
@@ -2410,6 +2416,35 @@ def _check_bsjp_screener() -> None:
         return  # sesi 2 gak ada yang "terbang" beneran — diam, jangan maksain
 
     scored.sort(key=lambda c: c["score"], reverse=True)
+
+    # broker paling akumulasi + trend — user eksplisit (2026-09-09) minta
+    # SEMUA gaya call pertimbangin broksum, sebelum ini BSJP satu-satunya
+    # yang belum. BSJP gak ada langkah Groq (rule-based murni), jadi
+    # pertimbangannya di sini langsung: skip kandidat kalau broker top-nya
+    # lagi JUALAN belakangan ini (distribusi_meningkat) — kontradiksi
+    # langsung sama rencana beli overnight, mending skip daripada maksain.
+    # Fetch SEBELUM cap (normalnya cuma 0-3 kandidat 'terbang' beneran per
+    # hari, murah) biar slot MAX_BSJP_PER_DAY gak kebuang ke kandidat yang
+    # bakal di-skip.
+    if invezgo_client.is_configured():
+        bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+        today_s2 = today_wib().isoformat()
+        for c in scored:
+            try:
+                c["bandar"] = _detect_bandar(c["ticker"], bandar_from, today_s2)
+            except Exception:
+                c["bandar"] = None
+        dropped = [c["ticker"] for c in scored if c.get("bandar") and c["bandar"]["trend"] == "distribusi_meningkat"]
+        if dropped:
+            log.info(f"_check_bsjp_screener: skip {dropped} — broker top lagi distribusi_meningkat")
+        scored = [c for c in scored if not (c.get("bandar") and c["bandar"]["trend"] == "distribusi_meningkat")]
+        if not scored:
+            log.info("_check_bsjp_screener: semua kandidat kena skip broksum distribusi, diam")
+            return
+    else:
+        for c in scored:
+            c["bandar"] = None
+
     scored = scored[:MAX_BSJP_PER_DAY]
 
     # BSJP dulu pake support_resistance() 20-hari (Swing) buat TP/SL — SALAH
@@ -2435,6 +2470,8 @@ def _check_bsjp_screener() -> None:
             f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}\n"
             f"   🎯 Target Rp{c['target']:,.0f} (+{c['tp_pct']:g}%) · ⛔ SL Rp{c['stop_loss']:,.0f} (-{BSJP_SL_PCT:g}%)"
         )
+        if c.get("bandar"):
+            lines.append(_format_bandar_line(c["bandar"]).rstrip("\n"))
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini — jual PAGI besok, jangan dipegang kelamaan.</b>")
 
@@ -2457,6 +2494,7 @@ def _check_bsjp_screener() -> None:
                         "price_change_pct_s2": c["takeoff"]["price_change_pct"],
                         "s1_spike_supporting": c["takeoff"].get("s1_spike_supporting"),
                         "full_day_pct": c.get("full_day_pct"),
+                        "bandar": c.get("bandar"),
                     },
                 }).execute()
                 log.info(f"_check_bsjp_screener: {c['ticker']} ke-track ke signal_alerts")
@@ -2841,6 +2879,16 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             chart_pattern = detect_chart_pattern(hist_daily)
         except Exception:
             pass
+        # broker paling akumulasi + consistency dari time series beneran —
+        # user eksplisit (2026-09-09) minta SEMUA gaya call pertimbangin
+        # broksum, sebelum ini cuma Swing/Sekuritas yang dapet field ini.
+        bandar = None
+        if invezgo_client.is_configured():
+            try:
+                bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+                bandar = _detect_bandar(ticker, bandar_from, today_wib().isoformat())
+            except Exception:
+                pass
         if momentum_score <= 0 and not mentor and not buy_on_weakness:
             continue
         candidates.append({
@@ -2856,6 +2904,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             "ma_alignment": ma_align,
             "buy_on_weakness": buy_on_weakness,
             "chart_pattern": chart_pattern,
+            "bandar": bandar,
         })
 
     candidates.sort(key=lambda c: c["momentum_score"], reverse=True)
