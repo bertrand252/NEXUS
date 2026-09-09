@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick
 from unittest.mock import patch
 
 
@@ -348,3 +348,38 @@ def test_cap_bpjs_candidates_no_truncation_under_cap():
     candidates = [_bpjs_candidate(f"T{i}", momentum_score=10 - i) for i in range(5)]
     result = _cap_bpjs_candidates(candidates, cap=15)
     assert len(result) == 5
+
+
+def test_validate_sekuritas_pick_rejects_ticker_outside_list():
+    # jaga-jaga Groq halusinasi ticker di luar daftar call asli sekuritas
+    # (user eksplisit: nyaring call ASLI, bukan bikin call baru dari nol)
+    pick = {"ticker": "GHOST", "entry": 1000, "target": 1100, "stop_loss": 950}
+    assert _validate_sekuritas_pick(pick, {"BBCA", "TLKM"}) is None
+
+
+def test_validate_sekuritas_pick_accepts_and_coerces_numeric():
+    pick = {"ticker": "BBCA", "entry": "9500", "target": "9800", "stop_loss": "9300", "alasan_singkat": "x"}
+    result = _validate_sekuritas_pick(pick, {"BBCA"})
+    assert result is not None
+    assert result["entry"] == 9500.0 and isinstance(result["entry"], float)
+    assert result["target"] == 9800.0
+    assert result["stop_loss"] == 9300.0
+
+
+def test_validate_sekuritas_pick_rejects_inconsistent_levels():
+    # target di bawah entry / SL di atas entry - level gak masuk akal
+    assert _validate_sekuritas_pick({"ticker": "BBCA", "entry": 9500, "target": 9300, "stop_loss": 9000}, {"BBCA"}) is None
+    assert _validate_sekuritas_pick({"ticker": "BBCA", "entry": 9500, "target": 9800, "stop_loss": 9600}, {"BBCA"}) is None
+
+
+def test_validate_sekuritas_pick_rejects_bad_rr():
+    # insiden #14 (BPJS, PGAS TP+0.65%): jangan percaya buta angka mentah dari
+    # sumber luar (sekuritas), guard RR minimum WAJIB - reward tipis abis
+    # kegerus fee beli+jual gak worth dikirim sebagai call
+    pick = {"ticker": "BBCA", "entry": 9500, "target": 9560, "stop_loss": 9300}  # reward 0.6%, risk 2.1%
+    assert _validate_sekuritas_pick(pick, {"BBCA"}) is None
+
+
+def test_validate_sekuritas_pick_rejects_missing_or_malformed_fields():
+    assert _validate_sekuritas_pick({"ticker": "BBCA", "entry": None, "target": 9800, "stop_loss": 9300}, {"BBCA"}) is None
+    assert _validate_sekuritas_pick({"ticker": "BBCA", "target": 9800, "stop_loss": 9300}, {"BBCA"}) is None
