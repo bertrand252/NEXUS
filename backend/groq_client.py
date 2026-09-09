@@ -393,36 +393,54 @@ def pick_sekuritas_calls(calls: list[dict]) -> dict:
     banyak call dari beberapa sekuritas sekaligus, gak semua konsisten/kuat.
     Groq nyaring jadi maksimal 2 PALING MEYAKINKAN hari ini, boleh ADJUST
     entry/target/stop_loss (bukan cuma comot mentah-mentah) kalau data
-    teknikal NEXUS sendiri (field `nexus_context`, technical_score/signal/
-    breakout_confirmed dari scanner_cache) ngasih angka yang lebih wajar —
-    TAPI ticker HARUS dari daftar `calls` yang dikasih, JANGAN mengarang
-    ticker di luar itu (user eksplisit: ini nyaring call ASLI analis, bukan
-    bikin call baru dari nol). Beberapa sekuritas independen manggil ticker
-    yang SAMA itu confluence kuat, sebut eksplisit kalau kejadian."""
+    teknikal NEXUS sendiri (field `nexus_context`) ngasih angka yang lebih
+    wajar — TAPI ticker HARUS dari daftar `calls` yang dikasih, JANGAN
+    mengarang ticker di luar itu.
+
+    PENTING (user eksplisit, 2026-09-09): ini JADI CALL NEXUS SENDIRI, bukan
+    "titip call sekuritas" — sumber cuma bahan mentah buat NEXUS nyaring,
+    HASIL AKHIRNYA harus diklasifikasi masuk salah satu GAYA yang udah ada
+    (Swing/BPJS/BSJP) biar ngikut ATURAN gaya itu (max hold, force-cut, dst
+    — scheduler.py yang eksekusi berdasarkan `gaya` ini, dipasang ke kolom
+    `source` di signal_alerts, SEMUA lifecycle existing otomatis kepake)."""
     system_prompt = (
-        "Kamu analis saham IDX yang nyaring call trading dari BEBERAPA channel "
-        "sekuritas (WhatsApp/Telegram research) yang dipantau user hari ini. "
-        "Tiap item di `calls` itu call ASLI dari analis sekuritas beneran: "
-        "ticker, entry, target, stop_loss, alasan singkat, dan sumber (nama "
-        "channel/sekuritas). Kalau ada field nexus_context (technical_score "
-        "0-20, signal, breakout_confirmed dari scanner internal NEXUS), itu "
-        "cross-check independen — cocok = lebih meyakinkan, kontradiksi "
-        "(nexus bearish/no-signal tapi sekuritas bilang buy) = WASPADA, jangan "
-        "otomatis dipercaya buta.\n\n"
-        "Tugas: pilih PALING BANYAK 2 call paling meyakinkan hari ini — boleh "
-        "kosong kalau gak ada yang cukup kuat, mending diam daripada maksain. "
-        "Kalau BEBERAPA sekuritas independen manggil ticker yang SAMA, itu "
-        "confluence kuat, prioritaskan & sebutkan eksplisit di alasan. Kamu "
-        "BOLEH sesuaikan angka entry/target/stop_loss dari yang sekuritas "
-        "kasih (misal kalau ada beberapa versi angka buat ticker yang sama, "
-        "atau angka mentahnya keliatan gak wajar) TAPI TICKER-nya WAJIB salah "
-        "satu dari daftar `calls` — JANGAN PERNAH pilih/mengarang ticker yang "
-        "gak ada di daftar itu. Jangan mengarang alasan yang gak ada dasarnya "
-        "di data. Balikin JSON persis: "
+        "Kamu analis saham IDX di NEXUS. Setiap hari kamu dikasih call trading "
+        "MENTAH dari beberapa channel sekuritas (WhatsApp/Telegram research) "
+        "yang dipantau — ticker, entry, target, stop_loss, alasan, sumber "
+        "channel. Kalau ada field nexus_context (technical_score/signal dari "
+        "scanner internal NEXUS), itu cross-check independen — cocok = lebih "
+        "meyakinkan, kontradiksi (nexus bearish/no-signal tapi sekuritas "
+        "bilang buy) = WASPADA, jangan otomatis dipercaya buta.\n\n"
+        "Tugasmu 2 lapis:\n"
+        "1. Saring PALING BANYAK 2 call paling meyakinkan hari ini (boleh "
+        "kosong — mending diam daripada maksain). Beberapa sekuritas "
+        "independen manggil ticker SAMA itu confluence kuat, prioritaskan. "
+        "Boleh sesuaikan angka entry/target/stop_loss dari yang sekuritas "
+        "kasih (misal ada beberapa versi buat ticker yang sama, atau angka "
+        "mentahnya gak wajar) TAPI ticker WAJIB dari daftar `calls` — JANGAN "
+        "PERNAH mengarang ticker di luar itu.\n"
+        "2. Klasifikasikan tiap pick masuk GAYA mana yang paling cocok dari "
+        "horizon/karakter call-nya (BUKAN sekadar comot dari sekuritas, INI "
+        "ANALISIS KAMU SENDIRI):\n"
+        "   - 'swing': thesis multi-hari/minggu, target jauh dari entry (>10%), "
+        "gak ada urgensi jual cepat — dipegang sampe TP/SL kena, gak ada limit hari.\n"
+        "   - 'bpjs': day-trade, momentum jangka pendek diharapkan lanjut 1-2 "
+        "hari ke depan, target relatif deket (~2-8%) — WAJIB dijual maksimal "
+        "2 hari kalau gak kena TP/SL.\n"
+        "   - 'bsjp': setup reaktif banget, alasan nyebut 'rebound cepat'/'buy "
+        "on support jangka pendek' tanpa horizon jelas, target SANGAT deket "
+        "(~2-3%) — WAJIB dijual besok kecuali data eksplisit masih kuat.\n"
+        "Default ke 'swing' kalau horizonnya ambigu/gak jelas — lebih aman "
+        "dipegang santai daripada maksa cepet.\n\n"
+        "Jangan mengarang alasan yang gak ada dasarnya di data. JANGAN sebut "
+        "nama sekuritas/channel sumber di alasan_singkat — ini call NEXUS "
+        "sendiri (sumbernya cuma metadata internal, gak ditampilin ke user), "
+        "tulis alasan_singkat kayak analisis kamu sendiri (boleh sebut "
+        "'beberapa sinyal independen sepakat' kalau ada confluence, TANPA "
+        "nyebut nama channel). Balikin JSON persis: "
         '{"picks": [{"ticker": "TICKER", "entry": angka, "target": angka, '
-        '"stop_loss": angka, "alasan_singkat": "1-2 kalimat, sebut sumber '
-        'sekuritas & confluence kalau ada", "sumber": ["nama channel 1"]}], '
-        '"alasan_kalau_kosong": "string atau null"}'
+        '"stop_loss": angka, "gaya": "swing"|"bpjs"|"bsjp", "alasan_singkat": '
+        '"1-2 kalimat"}], "alasan_kalau_kosong": "string atau null"}'
     )
     user_prompt = json.dumps({"calls": calls}, ensure_ascii=False)
     result = ask_json(system_prompt, user_prompt)

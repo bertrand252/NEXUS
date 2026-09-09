@@ -383,3 +383,21 @@ def test_validate_sekuritas_pick_rejects_bad_rr():
 def test_validate_sekuritas_pick_rejects_missing_or_malformed_fields():
     assert _validate_sekuritas_pick({"ticker": "BBCA", "entry": None, "target": 9800, "stop_loss": 9300}, {"BBCA"}) is None
     assert _validate_sekuritas_pick({"ticker": "BBCA", "target": 9800, "stop_loss": 9300}, {"BBCA"}) is None
+
+
+def test_validate_sekuritas_pick_keeps_valid_gaya():
+    # user eksplisit (2026-09-09): call sekuritas HARUS diklasifikasi masuk
+    # gaya existing (swing/bpjs/bsjp) biar otomatis kena aturan gaya itu
+    # (max hold, force-cut, dst) lewat kolom `source` di signal_alerts.
+    pick = {"ticker": "BBCA", "entry": 9500, "target": 9800, "stop_loss": 9300, "gaya": "bpjs"}
+    result = _validate_sekuritas_pick(pick, {"BBCA"})
+    assert result["gaya"] == "bpjs"
+
+
+def test_validate_sekuritas_pick_defaults_gaya_to_swing_when_invalid():
+    # Groq lupa isi / kasih nilai di luar 3 pilihan -> fallback aman ke swing
+    # (gak ada limit hari, paling gak agresif kalau salah klasifikasi).
+    pick = {"ticker": "BBCA", "entry": 9500, "target": 9800, "stop_loss": 9300, "gaya": "scalping"}
+    assert _validate_sekuritas_pick(pick, {"BBCA"})["gaya"] == "swing"
+    pick_missing = {"ticker": "BBCA", "entry": 9500, "target": 9800, "stop_loss": 9300}
+    assert _validate_sekuritas_pick(pick_missing, {"BBCA"})["gaya"] == "swing"

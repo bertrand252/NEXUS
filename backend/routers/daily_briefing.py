@@ -78,7 +78,7 @@ ditempelin backend dari data asli, bukan dari kamu):
   "tanggal_penting": [{"saham": "BBCA", "jenis": "RUPS", "tanggal": "2026-09-05", "detail": "ringkasan singkat"}]
 }"""
 
-CALL_SOURCE_LABEL = {"swing": "Swing", "bpjs": "BPJS", "bsjp": "BSJP", "sekuritas": "Sekuritas"}
+CALL_SOURCE_LABEL = {"swing": "Swing", "bpjs": "BPJS", "bsjp": "BSJP"}
 
 
 def _active_nexus_calls() -> list[dict]:
