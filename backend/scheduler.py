@@ -1431,6 +1431,27 @@ def _whale_outlier_threshold(trades: list[dict]) -> float | None:
     return statistics.median(values) * WHALE_OUTLIER_MULTIPLIER
 
 
+WHALE_MCAP_PCT = 0.0001  # ponytail: 0,01% market cap, heuristik belum divalidasi statistik — tuning kalau kepanjangan/pendekan
+
+
+def _market_cap(ticker: str) -> float | None:
+    """Market cap (Rp) dari yfinance fast_info — GRATIS, gak numpang kuota
+    Invezgo. Dipake nge-scale ambang whale ikut UKURAN PERUSAHAAN, bukan cuma
+    nilai transaksi/median hari itu. BUG NYATA ketemu 2026-09-09 (user lapor:
+    CUAN 6000 lot ~Rp558jt kepanggil whale): market cap CUAN ~Rp105,6 TRILIUN
+    (dites lawan yfinance asli) — Rp558jt cuma 0,0005% dari situ, gak
+    signifikan buat perusahaan sebesar itu, walau lolos ambang flat 500jt DAN
+    kadang lolos ambang median-outlier juga (median trade CUAN sendiri emang
+    udah gede semua, gorengan hiperaktif). Return None kalau data Yahoo
+    kosong/gagal — biarin fallback ke ambang lain, jangan block alert cuma
+    gara-gara 1 field opsional gagal fetch."""
+    try:
+        mcap = yf.Ticker(f"{ticker}.JK").fast_info.get("marketCap")
+        return float(mcap) if mcap else None
+    except Exception:
+        return None
+
+
 def _check_whale_alerts() -> None:
     """Kerangka Whale/Block Trade Alert — 2 pola deteksi dari running-trade
     Invezgo, cuma buat ticker di watchlist (BUKAN semua 951 saham, hemat kuota):
@@ -1523,6 +1544,9 @@ def _check_whale_alerts() -> None:
         outlier_threshold = _whale_outlier_threshold(trades)
         if outlier_threshold is not None:
             whale_threshold = max(whale_threshold, outlier_threshold)
+        mcap = _market_cap(ticker)
+        if mcap:
+            whale_threshold = max(whale_threshold, mcap * WHALE_MCAP_PCT)
 
         # pola 1: transaksi tunggal gede
         for t in trades:

@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _market_cap, WHALE_MCAP_PCT
 from unittest.mock import patch
 
 
@@ -132,6 +132,31 @@ def test_whale_outlier_threshold_flags_only_real_outlier():
     assert routine_value < threshold  # trade biasa TETEP di bawah ambang, gak ke-flag
     genuine_whale_value = 920 * 20_000_000  # trade jauh di atas tipikal
     assert genuine_whale_value > threshold
+
+
+def test_market_cap_reads_fast_info():
+    # BUG NYATA ketemu 2026-09-09: CUAN 6000 lot (~Rp558jt) kepanggil whale
+    # padahal market cap-nya ~Rp105,6 triliun (dites lawan yfinance ASLI) —
+    # Rp558jt cuma 0,0005% dari situ. _market_cap jadi basis ambang ketiga.
+    fake_ticker = type("T", (), {"fast_info": {"marketCap": 105_655_247_436_000.0}})()
+    with patch("scheduler.yf.Ticker", return_value=fake_ticker):
+        assert _market_cap("CUAN") == 105_655_247_436_000.0
+
+
+def test_market_cap_none_when_missing_or_error():
+    fake_ticker = type("T", (), {"fast_info": {}})()
+    with patch("scheduler.yf.Ticker", return_value=fake_ticker):
+        assert _market_cap("CUAN") is None
+    with patch("scheduler.yf.Ticker", side_effect=Exception("yahoo down")):
+        assert _market_cap("CUAN") is None
+
+
+def test_whale_mcap_pct_excludes_routine_trade_on_mega_cap():
+    # trade 6000 lot @930 yang user komplain — HARUS di bawah ambang mcap
+    # buat perusahaan sebesar CUAN.
+    mcap = 105_655_247_436_000.0
+    routine_trade_value = 6_000 * 100 * 930  # 6000 lot = 600.000 lembar
+    assert routine_trade_value < mcap * WHALE_MCAP_PCT
 
 
 def test_position_severity_urgent_cl_wins_over_distribusi():
