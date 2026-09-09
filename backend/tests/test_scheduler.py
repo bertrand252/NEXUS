@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT
+from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates
 from unittest.mock import patch
 
 
@@ -313,3 +313,38 @@ def test_broker_defended_support_none_when_invezgo_not_configured():
 def test_broker_defended_support_none_without_touch_dates():
     with patch("scheduler.invezgo_client.is_configured", return_value=True):
         assert _broker_defended_support("TEST", []) is None
+
+
+def _bpjs_candidate(ticker, momentum_score=0.0, mentor_call=None, buy_on_weakness=None):
+    return {"ticker": ticker, "momentum_score": momentum_score, "mentor_call": mentor_call, "buy_on_weakness": buy_on_weakness}
+
+
+def test_cap_bpjs_candidates_enforces_limit():
+    # insiden #18: pool union (scan|mentor|buy_on_weakness) numpuk sampe 48
+    # kandidat beneran di production, prompt Groq >13rb token, kelewat limit
+    # org (TPM 8000/menit), pick_bpjs_candidate 413 - _check_bpjs nyerah
+    # SILENT (bare except, gak ke-log). Cap ini yang nyegah prompt kegedean.
+    candidates = [_bpjs_candidate(f"T{i}", momentum_score=100 - i) for i in range(48)]
+    result = _cap_bpjs_candidates(candidates, cap=15)
+    assert len(result) == 15
+
+
+def test_cap_bpjs_candidates_keeps_mentor_and_buy_on_weakness_even_with_low_momentum():
+    # mentor_call/buy_on_weakness itu jalur qualify ALTERNATIF (SYARAT WAJIB
+    # di prompt Groq: momentum_score>0 ATAU mentor ATAU buy_on_weakness) -
+    # momentum_score-nya WAJAR rendah/0, jangan sampe ke-cut duluan cuma
+    # gara-gara kalah urutan momentum dibanding kandidat momentum biasa.
+    # 20 kandidat momentum tinggi + 1 mentor momentum 0 = 21 total, cap 15 -
+    # TANPA prioritas, mentor (momentum 0) pasti kalah urutan & ke-cut.
+    high_momentum = [_bpjs_candidate(f"HM{i}", momentum_score=100 - i) for i in range(20)]
+    mentor_pick = _bpjs_candidate("MENTOR1", momentum_score=0.0, mentor_call={"status": "active"})
+    candidates = high_momentum + [mentor_pick]
+    result = _cap_bpjs_candidates(candidates, cap=15)
+    assert len(result) == 15
+    assert any(c["ticker"] == "MENTOR1" for c in result)
+
+
+def test_cap_bpjs_candidates_no_truncation_under_cap():
+    candidates = [_bpjs_candidate(f"T{i}", momentum_score=10 - i) for i in range(5)]
+    result = _cap_bpjs_candidates(candidates, cap=15)
+    assert len(result) == 5

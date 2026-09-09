@@ -2668,6 +2668,14 @@ BPJS_POOL_LIMIT = 15  # lebih kecil dari pool Swing (20) — dipanggil berkali-k
                         # (tiap jam pas market buka), bukan 1x/hari kayak Swing/BSJP
 MAX_BPJS_PER_DAY = 1  # 1 pick terbaik/hari, gaya judgment-call kayak Swing (bukan checklist kayak BSJP)
 
+BPJS_CANDIDATE_CAP = 15  # insiden #18: pool FINAL (union scan volume_ratio>=1.3 | mentor |
+                           # buy_on_weakness, masing2 query sendiri2 pake BPJS_POOL_LIMIT) gak
+                           # kena cap — pas market rame beneran numpuk sampe 48 kandidat, prompt
+                           # Groq jadi >13rb token, kelewat limit org (TPM 8000/menit) -> 413 ->
+                           # pick_bpjs_candidate() exception -> BPJS gak pernah kirim call lagi,
+                           # SILENT (bare except di _check_bpjs, gak ke-log). Dites lawan Groq asli:
+                           # 15 kandidat aman (~4-7rb token tergantung isi), 48 pasti gagal.
+
 
 def _in_market_hours() -> bool:
     """09:00-15:50 WIB + hari trading — beda dari Swing (_in_offhours_window,
@@ -2798,7 +2806,19 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
         })
 
     candidates.sort(key=lambda c: c["momentum_score"], reverse=True)
-    return candidates
+    return _cap_bpjs_candidates(candidates)
+
+
+def _cap_bpjs_candidates(candidates: list[dict], cap: int = BPJS_CANDIDATE_CAP) -> list[dict]:
+    """Cap FINAL sebelum dikirim ke Groq (insiden #18, lihat BPJS_CANDIDATE_CAP)
+    — prioritasin mentor_call/buy_on_weakness (jalur qualify ALTERNATIF,
+    momentum_score-nya WAJAR rendah/0, jangan sampe kepotong duluan cuma
+    gara-gara urutan momentum), sisa slot diisi momentum_score tertinggi.
+    Asumsi input UDAH ke-sort momentum_score desc (biar priority/rest tetep
+    urut, gak perlu sort ulang)."""
+    priority = [c for c in candidates if c["mentor_call"] or c["buy_on_weakness"]]
+    rest = [c for c in candidates if not (c["mentor_call"] or c["buy_on_weakness"])]
+    return (priority + rest)[:cap]
 
 
 def _build_bpjs_caption(ticker: str, candidate: dict, pick: dict, levels: dict) -> str:
@@ -2845,6 +2865,7 @@ def _check_bpjs() -> None:
     try:
         pick = pick_bpjs_candidate(candidates)
     except Exception:
+        log.exception(f"_check_bpjs: pick_bpjs_candidate gagal ({len(candidates)} kandidat)")
         return
 
     ticker = pick.get("pilih")
