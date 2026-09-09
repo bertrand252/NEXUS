@@ -715,6 +715,8 @@ def _fetch_fundamental_summary(ticker: str) -> dict | None:
 
 
 SIGNAL_TIMEOUT_DAYS = 14  # kalau 14 hari gak kena TP/SL, tutup posisi & itung menang/kalah dari tanda outcome_pct
+BPJS_MAX_HOLD_DAYS = 2  # user eksplisit: BPJS itu day-trade/intraday, gak boleh lebih dari 2 hari —
+                          # lewat itu WAJIB cut position walau belum kena TP/SL (beda dari Swing 14 hari)
 ENTRY_WAIT_TIMEOUT_DAYS = 5  # kalau 5 hari harga gak pernah masuk zona entry, anggep "missed" (bukan "invalid" —
                               # bukan salah call, cuma harganya keburu lari sebelum sempet ke-entry)
 
@@ -789,9 +791,10 @@ def _check_entry_zone_touches() -> None:
 
 def _check_signal_outcomes() -> None:
     """Cek tiap signal_alerts yang masih 'open' — udah kena target (tp_hit),
-    stop_loss (sl_hit), atau timeout (>14 hari, belum kena dua-duanya). Dipanggil
-    tiap pagi dari run_morning_routine(), sebelum market buka (data closing
-    kemarin udah final)."""
+    stop_loss (sl_hit), atau timeout: >14 hari buat Swing/BSJP, tapi BPJS
+    (day-trade) di-cut lebih ketat >=2 hari (BPJS_MAX_HOLD_DAYS, user eksplisit
+    "gak boleh nginep lama"). Dipanggil tiap pagi dari run_morning_routine(),
+    sebelum market buka (data closing kemarin udah final)."""
     try:
         res = supabase.table("signal_alerts").select("*").eq("status", "open").execute()
     except Exception:
@@ -808,12 +811,15 @@ def _check_signal_outcomes() -> None:
         alerted_at = datetime.fromisoformat(row["alerted_at"])
         days_open = (now - alerted_at).days
 
+        is_bpjs = row.get("source") == "bpjs"
+        timed_out = days_open >= BPJS_MAX_HOLD_DAYS if is_bpjs else days_open > SIGNAL_TIMEOUT_DAYS
+
         status = None
         if price_now >= row["target"]:
             status = "tp_hit"
         elif price_now <= row["stop_loss"]:
             status = "sl_hit"
-        elif days_open > SIGNAL_TIMEOUT_DAYS:
+        elif timed_out:
             status = "timeout"
 
         if not status:
@@ -838,6 +844,8 @@ def _check_signal_outcomes() -> None:
             send_alert(f"🎯 <b>TP TERCAPAI — {_esc(row['ticker'])}</b>\n\nProfit {sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}).")
         elif status == "sl_hit":
             send_alert(f"⛔ <b>STOP LOSS KENA — {_esc(row['ticker'])}</b>\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}).")
+        elif status == "timeout" and is_bpjs:
+            send_alert(f"⏱ <b>BPJS CUT POSITION — {_esc(row['ticker'])}</b> (maks {BPJS_MAX_HOLD_DAYS} hari)\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}), gak kena TP/SL — wajib cut, day-trade gak boleh nginep lama.")
         elif status == "timeout":
             send_alert(f"⏱ <b>TIMEOUT — {_esc(row['ticker'])}</b> ({SIGNAL_TIMEOUT_DAYS} hari)\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}), gak kena TP/SL.")
 
@@ -1431,25 +1439,24 @@ def _whale_outlier_threshold(trades: list[dict]) -> float | None:
     return statistics.median(values) * WHALE_OUTLIER_MULTIPLIER
 
 
-WHALE_MCAP_PCT = 0.0001  # ponytail: 0,01% market cap, heuristik belum divalidasi statistik — tuning kalau kepanjangan/pendekan
+WHALE_MAX_ORDER_LOTS = 50_000  # ponytail: batas order TUNGGAL bursa IDX (JATS regular market) — angka dari user, belum diverifikasi ulang ke aturan resmi
+WHALE_MAX_ORDER_PCT = 0.6  # whale = transaksi tunggal >= 60% dari order semaksimal mungkin yang MUNGKIN buat ticker itu di harga saat ini
 
 
-def _market_cap(ticker: str) -> float | None:
-    """Market cap (Rp) dari yfinance fast_info — GRATIS, gak numpang kuota
-    Invezgo. Dipake nge-scale ambang whale ikut UKURAN PERUSAHAAN, bukan cuma
-    nilai transaksi/median hari itu. BUG NYATA ketemu 2026-09-09 (user lapor:
-    CUAN 6000 lot ~Rp558jt kepanggil whale): market cap CUAN ~Rp105,6 TRILIUN
-    (dites lawan yfinance asli) — Rp558jt cuma 0,0005% dari situ, gak
-    signifikan buat perusahaan sebesar itu, walau lolos ambang flat 500jt DAN
-    kadang lolos ambang median-outlier juga (median trade CUAN sendiri emang
-    udah gede semua, gorengan hiperaktif). Return None kalau data Yahoo
-    kosong/gagal — biarin fallback ke ambang lain, jangan block alert cuma
-    gara-gara 1 field opsional gagal fetch."""
-    try:
-        mcap = yf.Ticker(f"{ticker}.JK").fast_info.get("marketCap")
-        return float(mcap) if mcap else None
-    except Exception:
-        return None
+def _max_order_threshold(price: float) -> float:
+    """Ambang whale dari BATAS ORDER TUNGGAL bursa (IDX max 1 order =
+    WHALE_MAX_ORDER_LOTS lot), bukan dari market cap. BUG NYATA ketemu
+    2026-09-09: pilar market cap (0,01% x market cap) buat CUAN nuntut
+    ~113.600 lot dalam 1 TRANSAKSI — padahal batas order tunggal bursa aja
+    cuma 50.000 lot, ambang itu SECARA FISIK GAK MUNGKIN kesampean, whale
+    detector jadi mati permanen buat saham share-count raksasa/harga rendah
+    kayak CUAN (market cap gede DI SINI bukan karena tiap transaksinya gede,
+    tapi karena jumlah lembar sahamnya buanyak — 112 miliar lembar). Fix:
+    ganti basis ke batas order REAL bursa (linear ke harga, price cancel out
+    jadi efeknya = flat WHALE_MAX_ORDER_LOTS*WHALE_MAX_ORDER_PCT lot berapapun
+    harganya), bukan market cap yang gak nyambung ke mekanika transaksi
+    beneran buat saham kayak ini."""
+    return WHALE_MAX_ORDER_LOTS * 100 * price * WHALE_MAX_ORDER_PCT
 
 
 def _check_whale_alerts() -> None:
@@ -1544,16 +1551,20 @@ def _check_whale_alerts() -> None:
         outlier_threshold = _whale_outlier_threshold(trades)
         if outlier_threshold is not None:
             whale_threshold = max(whale_threshold, outlier_threshold)
-        mcap = _market_cap(ticker)
-        if mcap:
-            whale_threshold = max(whale_threshold, mcap * WHALE_MCAP_PCT)
 
-        # pola 1: transaksi tunggal gede
+        # pola 1: transaksi tunggal gede — ambang per-trade karena
+        # _max_order_threshold butuh HARGA trade itu sendiri (harga bisa
+        # geser dalam 1 sesi, jadi gak dihitung sekali doang di luar loop)
         for t in trades:
             value = _trade_value(t)
             if value is None:
                 continue
-            if value < whale_threshold:
+            try:
+                price = float(t["price"])
+            except Exception:
+                price = None
+            effective_threshold = max(whale_threshold, _max_order_threshold(price)) if price else whale_threshold
+            if value < effective_threshold:
                 continue
             key = f"{ticker}:{t.get('time')}:{t.get('price')}:{t.get('volume')}"
             if _dedup_seen("whale", key):
@@ -2805,11 +2816,11 @@ SENTIMENT_EMOJI = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪", "mixe
 
 
 def _send_morning_briefing() -> None:
-    """"Sarapan pagi" — sintesis ulang daily_briefing (bukan cuma baca cache
+    """"Market Outlook" pagi — sintesis ulang daily_briefing (bukan cuma baca cache
     jam 6 pagi, biar nangkep berita yang masuk di antara jam 6-08:45) terus
     kirim ke Telegram: ringkasan + tanggal penting + rekomendasi (ini yang
-    jadi "watchlist hari ini"). Skip diem-diem kalau hari ini bursa tutup —
-    gak ada gunanya "watchlist hari ini" kalau market gak buka."""
+    jadi "Call NEXUS Hari Ini"). Skip diem-diem kalau hari ini bursa tutup —
+    gak ada gunanya call kalau market gak buka."""
     if not is_trading_day(today_wib()):
         return
     try:
@@ -2818,7 +2829,8 @@ def _send_morning_briefing() -> None:
         return
 
     sentiment = briefing.get("market_sentiment", "")
-    lines = [f"☀️ <b>Sarapan Pagi</b> {SENTIMENT_EMOJI.get(sentiment, '')} {_esc(sentiment)}".strip()]
+    lines = ["☀️🔥 <b>MORNING! MARKET OUTLOOK HARI INI BY NEXUS</b> — ayo baca 👇"]
+    lines.append(f"{SENTIMENT_EMOJI.get(sentiment, '⚪')} Kondisi market: <b>{_esc(sentiment) or '-'}</b>")
     lines.append(_esc(briefing.get("ringkasan", "-")))
 
     berita = briefing.get("berita") or {}
@@ -2851,10 +2863,11 @@ def _send_morning_briefing() -> None:
     # try/except run_pre_market_briefing (gak ada log yang kebaca gampang).
     rekomendasi = briefing.get("rekomendasi") or []
     if rekomendasi:
-        lines.append("\n⭐ <b>Watchlist Hari Ini</b>")
+        lines.append("\n📢 <b>Call NEXUS Hari Ini</b>")
         for r in rekomendasi:
+            note = " (maks hold 2 hari)" if r.get("call_oleh") == "BPJS" else ""
             lines.append(
-                f"• <b>{_esc(r.get('ticker'))}</b> ({_esc(r.get('call_oleh'))}) — "
+                f"• <b>{_esc(r.get('ticker'))}</b> ({_esc(r.get('call_oleh'))}){note} — "
                 f"Entry Rp{r['entry_price']:,.0f} · TP Rp{r['target']:,.0f} · SL Rp{r['stop_loss']:,.0f}"
             )
 
