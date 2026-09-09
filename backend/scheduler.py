@@ -16,7 +16,7 @@ from routers.scanner import _get_history, _get_history_intraday, refresh_scanner
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
-from chart_render import render_chart
+from chart_render import render_chart, render_outcome_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT
 from intraday import daily_session_stats, session_takeoff
 from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit, pick_sekuritas_calls
@@ -855,15 +855,52 @@ def _check_signal_outcomes() -> None:
         if row.get("telegram_message_id"):
             delete_message(row["telegram_message_id"])  # unsend alert asli — posisi udah ditutup, biar chat gak numpuk
 
-        sign = "+" if outcome_pct >= 0 else ""
-        if status == "tp_hit":
-            send_alert(f"🎯 <b>TP TERCAPAI — {_esc(row['ticker'])}</b>\n\nProfit {sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}).")
-        elif status == "sl_hit":
-            send_alert(f"⛔ <b>STOP LOSS KENA — {_esc(row['ticker'])}</b>\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}).")
-        elif status == "timeout" and is_bpjs:
-            send_alert(f"⏱ <b>BPJS CUT POSITION — {_esc(row['ticker'])}</b> (maks {BPJS_MAX_HOLD_DAYS} hari)\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}), gak kena TP/SL — wajib cut, day-trade gak boleh nginep lama.")
-        elif status == "timeout":
-            send_alert(f"⏱ <b>TIMEOUT — {_esc(row['ticker'])}</b> ({SIGNAL_TIMEOUT_DAYS} hari)\n\n{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}), gak kena TP/SL.")
+        _send_outcome_notification(row, status, price_now, outcome_pct, days_open, is_bpjs)
+
+
+def _build_outcome_caption(row: dict, status: str, price_now: float, outcome_pct: float, days_open: int, is_bpjs: bool) -> str:
+    """Caption notif posisi ditutup — user eksplisit (2026-09-09) minta chart
+    entry-exit + tampilan lebih menarik, bukan teks polos 1 baris kayak dulu.
+    Badge warna, PnL, sumber gaya, lama dipegang — SAMA info kayak dulu, cuma
+    dirapiin biar konsisten sama caption call awal (Swing/BPJS/BSJP)."""
+    sign = "+" if outcome_pct >= 0 else ""
+    ticker = _esc(row["ticker"])
+    source_label = SOURCE_LABEL_ID.get(row.get("source"), (row.get("source") or "swing").upper())
+    if status == "tp_hit":
+        badge = f"🎯 <b>TP TERCAPAI — {ticker}</b>"
+    elif status == "sl_hit":
+        badge = f"⛔ <b>STOP LOSS KENA — {ticker}</b>"
+    elif is_bpjs:
+        badge = f"⏱ <b>BPJS CUT POSITION — {ticker}</b> (maks {BPJS_MAX_HOLD_DAYS} hari)"
+    else:
+        badge = f"⏱ <b>TIMEOUT — {ticker}</b> ({SIGNAL_TIMEOUT_DAYS} hari)"
+    note = "" if status in ("tp_hit", "sl_hit") else ", gak kena TP/SL"
+    return (
+        f"{badge}\n\n"
+        f"Entry Rp{row['entry_price']:,.0f} · Exit Rp{price_now:,.0f} · "
+        f"PnL {sign}{outcome_pct}%{note}\n\n"
+        f"📌 Dipegang {days_open} hari · sumber: {_esc(source_label)}"
+    )
+
+
+def _send_outcome_notification(row: dict, status: str, price_now: float, outcome_pct: float, days_open: int, is_bpjs: bool) -> None:
+    caption = _build_outcome_caption(row, status, price_now, outcome_pct, days_open, is_bpjs)
+    try:
+        # period lebih panjang dari _get_history default (2mo) — Swing GAK
+        # ADA timeout, bisa dipegang berbulan-bulan, chart journey entry->exit
+        # harus tetep nyakup seluruh rentangnya, bukan kepotong.
+        hist_chart = _get_history(row["ticker"], period="1y")
+        chart_png = render_outcome_chart(
+            row["ticker"], hist_chart, row["entry_price"], row["alerted_at"],
+            price_now, datetime.now(timezone.utc), row["target"], row["stop_loss"], status,
+        )
+    except Exception:
+        log.exception(f"_send_outcome_notification: gagal render chart {row['ticker']}, kirim tanpa foto")
+        chart_png = None
+    if chart_png:
+        send_alert_photo(chart_png, caption)
+    else:
+        send_alert(caption)
 
 
 MAX_ALERTS_PER_WEEK = 5  # Swing max 5 saham TERBAIK per MINGGU (revisi user dari 2 —
