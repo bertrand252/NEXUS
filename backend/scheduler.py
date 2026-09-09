@@ -2997,17 +2997,18 @@ def _gather_sekuritas_calls(days: int = 1) -> list[dict]:
     lihat SUMMARIZE_SYSTEM_PROMPT), grupin per ticker (biar kalau BEBERAPA
     sekuritas independen manggil ticker yang SAMA keliatan sebagai 1 entry
     dengan banyak `sumber` — itu confluence, bukan kebetulan berulang) +
-    tempelin technical_score/signal NEXUS sendiri (`scanner_cache`) sebagai
-    cross-check independen buat SEMUA ticker.
-
-    CONFLUENCE (>=2 sumber BEDA manggil ticker yang sama, bukan kebetulan)
-    dapet analisa LEBIH DALAM (user eksplisit 2026-09-09) — trend/adx/
-    bollinger/ma_alignment/chart_pattern/buy_on_weakness dari histori harga
-    + bandar (broker akumulasi, kalau Invezgo configured), SAMA depth kayak
-    kandidat Swing/BPJS biasa. Dibatasin CUMA buat confluence (bukan semua
-    ~20 ticker/hari) biar gak boros — extra fetch (yfinance historis +
-    Invezgo) itu jelas paling worth buat ticker yang UDAH ada sinyal kuat
-    (beberapa analis independen sepakat), bukan buang-buang ke semua."""
+    tempelin technical_score/signal NEXUS sendiri (`scanner_cache`) SEBAGAI
+    CROSS-CHECK independen buat SEMUA ticker — trend/adx/bollinger/
+    ma_alignment/chart_pattern/buy_on_weakness dari histori harga + bandar
+    (broker paling akumulasi + consistency_pct dari time series 30-hari
+    beneran, BUKAN snapshot hari ini doang, kalau Invezgo configured), SAMA
+    depth kayak kandidat Swing/BPJS biasa. User eksplisit (2026-09-09):
+    JANGAN cuma ticker confluence yang dapet analisa ini — semua ticker,
+    biar Groq SELALU punya dasar broker summary/teknikal sebelum milih,
+    bukan cuma pas kebetulan ada >=1 sekuritas lain yang manggil ticker
+    sama. ~20 ticker/hari, sekali panggil (16:45), murah (yfinance gratis,
+    Invezgo ada budget guard sendiri — `_check_budget()` skip diem-diem
+    kalau kepotong, gak crash)."""
     since = (today_wib() - timedelta(days=days - 1)).isoformat()
     try:
         res = supabase.table("daily_market_intel").select("tanggal,sumber,summary_ai").gte("tanggal", since).execute()
@@ -3046,27 +3047,26 @@ def _gather_sekuritas_calls(days: int = 1) -> list[dict]:
 
         distinct_sources = {c["sumber"] for c in entry["calls"]}
         nexus_context["confluence_sumber_count"] = len(distinct_sources)
-        if len(distinct_sources) >= 2:
+        try:
+            hist_daily = _get_history(t, period="1y")
+            price_now = float(hist_daily["Close"].iloc[-1])
+            nexus_context["trend"] = determine_trend(hist_daily)
+            nexus_context["adx"] = adx(hist_daily)
+            nexus_context["bollinger"] = bollinger_signal(hist_daily)
+            ma5 = float(hist_daily["Close"].tail(5).mean())
+            ma10 = float(hist_daily["Close"].tail(10).mean())
+            ma20 = float(hist_daily["Close"].tail(20).mean())
+            nexus_context["ma_alignment"] = ma_alignment(ma5, ma10, ma20)
+            nexus_context["chart_pattern"] = detect_chart_pattern(hist_daily)
+            nexus_context["buy_on_weakness"] = well_defended_support(hist_daily, price_now)
+        except Exception:
+            pass
+        if invezgo_client.is_configured():
             try:
-                hist_daily = _get_history(t, period="1y")
-                price_now = float(hist_daily["Close"].iloc[-1])
-                nexus_context["trend"] = determine_trend(hist_daily)
-                nexus_context["adx"] = adx(hist_daily)
-                nexus_context["bollinger"] = bollinger_signal(hist_daily)
-                ma5 = float(hist_daily["Close"].tail(5).mean())
-                ma10 = float(hist_daily["Close"].tail(10).mean())
-                ma20 = float(hist_daily["Close"].tail(20).mean())
-                nexus_context["ma_alignment"] = ma_alignment(ma5, ma10, ma20)
-                nexus_context["chart_pattern"] = detect_chart_pattern(hist_daily)
-                nexus_context["buy_on_weakness"] = well_defended_support(hist_daily, price_now)
+                bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+                nexus_context["bandar"] = _detect_bandar(t, bandar_from, today_wib().isoformat())
             except Exception:
                 pass
-            if invezgo_client.is_configured():
-                try:
-                    bandar_from = (today_wib() - timedelta(days=30)).isoformat()
-                    nexus_context["bandar"] = _detect_bandar(t, bandar_from, today_wib().isoformat())
-                except Exception:
-                    pass
 
         calls.append({"ticker": t, "calls": entry["calls"], "nexus_context": nexus_context})
     return calls
