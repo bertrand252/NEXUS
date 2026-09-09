@@ -15,6 +15,7 @@ DEFAULTS = {
     "notif_bpjs": True,
     "notif_weekly_postmortem": True,
     "notif_whale_alert": True,     # transaksi abnormal gede (running-trade), polling watchlist tiap jam pas market buka
+    "notif_sekuritas": True,       # saringan call trading dari channel sekuritas yang dipantau, 1x/hari abis market tutup
 }
 
 
@@ -29,6 +30,7 @@ class SettingsInput(BaseModel):
     notif_bpjs: bool = True
     notif_weekly_postmortem: bool = True
     notif_whale_alert: bool = True
+    notif_sekuritas: bool = True
 
 
 @router.get("")

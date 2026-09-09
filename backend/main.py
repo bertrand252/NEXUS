@@ -24,6 +24,7 @@ from scheduler import (
     run_fundamentals_refresh,
     run_bpjs_watcher,
     run_whale_confirm,
+    run_sekuritas_pick,
 )
 
 
@@ -46,7 +47,11 @@ async def lifespan(app: FastAPI):
     yang 1 jam, momentum hari ini makin cepet kedeteksi makin bagus),
     run_whale_confirm (18:30 WIB, abis broker_summary final — kode broker di
     alert whale siang sengaja disensor "belum diketahui" soalnya PROVISIONAL,
-    dikonfirmasi lawan data live suka berubah; ini follow-up ringkas malamnya).
+    dikonfirmasi lawan data live suka berubah; ini follow-up ringkas malamnya),
+    run_sekuritas_pick (16:45 WIB, saring call trading dari channel sekuritas
+    yang dipantau WA/Telegram — dikumpulin sepanjang hari via /intel, Groq
+    milih maks 2 paling meyakinkan + cross-check RR/teknikal, BUKAN comot
+    mentah dari analis).
     Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
@@ -63,6 +68,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_fundamentals_refresh()),
         asyncio.create_task(run_bpjs_watcher()),
         asyncio.create_task(run_whale_confirm()),
+        asyncio.create_task(run_sekuritas_pick()),
     ]
     yield
     for t in tasks:

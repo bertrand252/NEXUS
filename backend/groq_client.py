@@ -386,6 +386,51 @@ def pick_bpjs_candidate(candidates: list[dict]) -> dict:
     return result
 
 
+def pick_sekuritas_calls(calls: list[dict]) -> dict:
+    """Screening call trading dari channel sekuritas yang dipantau (WhatsApp/
+    Telegram, sumber `daily_market_intel.summary_ai.trade_calls`) — analis
+    beneran di sekuritas udah nge-riset masing-masing call, tapi tiap hari
+    banyak call dari beberapa sekuritas sekaligus, gak semua konsisten/kuat.
+    Groq nyaring jadi maksimal 2 PALING MEYAKINKAN hari ini, boleh ADJUST
+    entry/target/stop_loss (bukan cuma comot mentah-mentah) kalau data
+    teknikal NEXUS sendiri (field `nexus_context`, technical_score/signal/
+    breakout_confirmed dari scanner_cache) ngasih angka yang lebih wajar —
+    TAPI ticker HARUS dari daftar `calls` yang dikasih, JANGAN mengarang
+    ticker di luar itu (user eksplisit: ini nyaring call ASLI analis, bukan
+    bikin call baru dari nol). Beberapa sekuritas independen manggil ticker
+    yang SAMA itu confluence kuat, sebut eksplisit kalau kejadian."""
+    system_prompt = (
+        "Kamu analis saham IDX yang nyaring call trading dari BEBERAPA channel "
+        "sekuritas (WhatsApp/Telegram research) yang dipantau user hari ini. "
+        "Tiap item di `calls` itu call ASLI dari analis sekuritas beneran: "
+        "ticker, entry, target, stop_loss, alasan singkat, dan sumber (nama "
+        "channel/sekuritas). Kalau ada field nexus_context (technical_score "
+        "0-20, signal, breakout_confirmed dari scanner internal NEXUS), itu "
+        "cross-check independen — cocok = lebih meyakinkan, kontradiksi "
+        "(nexus bearish/no-signal tapi sekuritas bilang buy) = WASPADA, jangan "
+        "otomatis dipercaya buta.\n\n"
+        "Tugas: pilih PALING BANYAK 2 call paling meyakinkan hari ini — boleh "
+        "kosong kalau gak ada yang cukup kuat, mending diam daripada maksain. "
+        "Kalau BEBERAPA sekuritas independen manggil ticker yang SAMA, itu "
+        "confluence kuat, prioritaskan & sebutkan eksplisit di alasan. Kamu "
+        "BOLEH sesuaikan angka entry/target/stop_loss dari yang sekuritas "
+        "kasih (misal kalau ada beberapa versi angka buat ticker yang sama, "
+        "atau angka mentahnya keliatan gak wajar) TAPI TICKER-nya WAJIB salah "
+        "satu dari daftar `calls` — JANGAN PERNAH pilih/mengarang ticker yang "
+        "gak ada di daftar itu. Jangan mengarang alasan yang gak ada dasarnya "
+        "di data. Balikin JSON persis: "
+        '{"picks": [{"ticker": "TICKER", "entry": angka, "target": angka, '
+        '"stop_loss": angka, "alasan_singkat": "1-2 kalimat, sebut sumber '
+        'sekuritas & confluence kalau ada", "sumber": ["nama channel 1"]}], '
+        '"alasan_kalau_kosong": "string atau null"}'
+    )
+    user_prompt = json.dumps({"calls": calls}, ensure_ascii=False)
+    result = ask_json(system_prompt, user_prompt)
+    if not isinstance(result.get("picks"), list):
+        result["picks"] = []
+    return result
+
+
 def analyze_alert(ticker: str, score_breakdown: dict, levels: dict, context: dict | None = None) -> dict:
     """Generate alasan alert Telegram — dipanggil scheduler.py. `context` opsional
     (dari pick_alert_candidate + fase 2): berita, mentor call, event ekonomi global,

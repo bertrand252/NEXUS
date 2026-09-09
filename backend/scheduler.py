@@ -19,7 +19,7 @@ from levels import support_resistance, nearest_support_resistance, detect_trend_
 from chart_render import render_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT
 from intraday import daily_session_stats, session_takeoff
-from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit
+from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit, pick_sekuritas_calls
 from forex_factory import get_forex_events
 from telegram_bot import (
     send_alert_photo, send_alert, get_channel_updates, delete_message,
@@ -791,10 +791,20 @@ def _check_entry_zone_touches() -> None:
 
 def _check_signal_outcomes() -> None:
     """Cek tiap signal_alerts yang masih 'open' — udah kena target (tp_hit),
-    stop_loss (sl_hit), atau timeout: >14 hari buat Swing/BSJP, tapi BPJS
-    (day-trade) di-cut lebih ketat >=2 hari (BPJS_MAX_HOLD_DAYS, user eksplisit
-    "gak boleh nginep lama"). Dipanggil tiap pagi dari run_morning_routine(),
-    sebelum market buka (data closing kemarin udah final)."""
+    stop_loss (sl_hit), atau timeout. Beda per source (user eksplisit,
+    2026-09-09):
+    - Swing (source 'swing'/None legacy): GAK ADA timeout sama sekali — cuma
+      TP/SL yang nutup posisi. "Barang jelek" (thesis rusak) itu keputusan
+      MANUAL user dari advisory _send_running_positions_update
+      (urgent_cl/distribusi), NEXUS gak auto-cut cuma gara-gara lama dipegang.
+    - BPJS (day-trade): dipaksa cut >=2 hari (BPJS_MAX_HOLD_DAYS) — day-trade
+      emang gak boleh nginep lama.
+    - BSJP: normalnya UDAH ditutup H+1 lewat run_bsjp_hold_check
+      (_advise_hold_or_exit force_close_if_no_hold=True, jual besoknya KECUALI
+      ada bukti data konkret masih 'bagus banget') — timeout 14 hari di sini
+      cuma SAFETY NET kalau mekanisme H+1 itu somehow gak jalan, harusnya
+      hampir gak pernah kena. Dipanggil tiap pagi dari run_morning_routine(),
+      sebelum market buka (data closing kemarin udah final)."""
     try:
         res = supabase.table("signal_alerts").select("*").eq("status", "open").execute()
     except Exception:
@@ -811,8 +821,14 @@ def _check_signal_outcomes() -> None:
         alerted_at = datetime.fromisoformat(row["alerted_at"])
         days_open = (now - alerted_at).days
 
-        is_bpjs = row.get("source") == "bpjs"
-        timed_out = days_open >= BPJS_MAX_HOLD_DAYS if is_bpjs else days_open > SIGNAL_TIMEOUT_DAYS
+        source = row.get("source")
+        is_bpjs = source == "bpjs"
+        if is_bpjs:
+            timed_out = days_open >= BPJS_MAX_HOLD_DAYS
+        elif source in (None, "swing"):
+            timed_out = False  # no min/max — cuma TP/SL yang nutup, lihat docstring
+        else:  # bsjp — safety net doang, normalnya udah beres via run_bsjp_hold_check
+            timed_out = days_open > SIGNAL_TIMEOUT_DAYS
 
         status = None
         if price_now >= row["target"]:
@@ -2448,14 +2464,21 @@ def _check_bsjp_screener() -> None:
                 log.exception(f"_check_bsjp_screener: gagal insert signal_alerts buat {c['ticker']}")
 
 
-def _advise_hold_or_exit(row: dict) -> None:
+def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> None:
     """Pertimbangan HOLD/EXIT buat 1 posisi 'open' (row signal_alerts) yang TP/SL-nya
     belum kena tapi deadline exit strategi-nya (BSJP: pagi, BPJS: sore) udah deket.
     Insight user: broker paling banyak akumulasi = paling banyak PEGANG barang —
     volume hari ini jauh di atas rata-rata TAPI harga gak ikutan naik kuat = indikasi
-    DIA yang jual. Diem total kalau Invezgo gak configured/gagal fetch broker summary
-    (jangan kasih rekomendasi asal tanpa data pendukung — insight dari user sendiri:
-    lebih baik gak ngasih sinyal daripada ngasih sinyal ngasal)."""
+    DIA yang jual.
+
+    `force_close_if_no_hold` — DIPAKAI BSJP DOANG (run_bsjp_hold_check), BUKAN
+    BPJS. Aturan BSJP dari user (2026-09-09): WAJIB dijual besoknya, KECUALI
+    ada bukti data KONKRET barangnya masih 'bagus banget' (advice eksplisit
+    "hold"). Jadi beda dari BPJS yang cuma dikasih nudge doang (keputusan
+    tetep manual): kalau flag ini True, tiap kondisi yang bikin kita GAK BISA
+    mastiin "masih bagus" (data kurang, Groq gagal, dst) — bukan cuma "exit"
+    eksplisit — auto-CUT posisi (default jual, bukan default diam kayak
+    BPJS). Cuma kalau advice-nya JELAS "hold" posisi tetep dibiarin jalan."""
     ticker = row["ticker"]
     try:
         hist = _get_history(ticker)
@@ -2464,9 +2487,33 @@ def _advise_hold_or_exit(row: dict) -> None:
         volume_avg20 = float(hist["Volume"].iloc[-21:-1].mean()) if len(hist) >= 21 else None
     except Exception:
         log.exception(f"_advise_hold_or_exit({ticker}): gagal fetch histori harga")
-        return
+        return  # gak ada harga = gak bisa nutup posisi juga, coba lagi siklus berikutnya
+
+    def _force_cut(reason: str) -> None:
+        if not force_close_if_no_hold:
+            return
+        outcome_pct = round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2)
+        try:
+            supabase.table("signal_alerts").update({
+                "status": "timeout",
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "close_price": price_now,
+                "outcome_pct": outcome_pct,
+            }).eq("id", row["id"]).execute()
+        except Exception:
+            log.exception(f"_advise_hold_or_exit({ticker}): gagal force-cut BSJP")
+            return
+        if row.get("telegram_message_id"):
+            delete_message(row["telegram_message_id"])
+        sign = "+" if outcome_pct >= 0 else ""
+        send_alert(
+            f"🔻 <b>BSJP WAJIB DIJUAL — {_esc(ticker)}</b>\n\n"
+            f"{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}). {_esc(reason)}"
+        )
+
     if not volume_avg20 or not invezgo_client.is_configured():
         log.info(f"_advise_hold_or_exit({ticker}): diem, volume_avg20={volume_avg20}, invezgo_configured={invezgo_client.is_configured()}")
+        _force_cut("Belum ada data broker yang mendukung buat dipegang lebih lama.")
         return
 
     today = today_wib().isoformat()
@@ -2479,7 +2526,8 @@ def _advise_hold_or_exit(row: dict) -> None:
         top_broker = None
     if not top_broker or float(top_broker.get("net_value") or 0) <= 0:
         log.info(f"_advise_hold_or_exit({ticker}): diem, gak ada broker jelas paling akumulasi (top_broker={top_broker})")
-        return  # gak ada broker yang jelas paling akumulasi, jangan nebak siapa yang "jual"
+        _force_cut("Gak ada broker yang jelas paling akumulasi — gak ada alasan kuat buat nahan lebih lama.")
+        return  # (BPJS) gak ada broker yang jelas paling akumulasi, jangan nebak siapa yang "jual"
 
     context = {
         "ticker": ticker,
@@ -2511,9 +2559,17 @@ def _advise_hold_or_exit(row: dict) -> None:
             advice = ask_hold_or_exit(context)
         except Exception:
             log.exception(f"_advise_hold_or_exit({ticker}): ask_hold_or_exit gagal (udah retry 1x)")
+            _force_cut("Gagal analisa lebih lanjut — default jual sesuai aturan BSJP.")
             return
     if not advice or advice.get("rekomendasi") not in ("hold", "exit"):
         log.info(f"_advise_hold_or_exit({ticker}): diem, Groq balikin rekomendasi gak valid ({advice})")
+        _force_cut("Gak dapet rekomendasi jelas — default jual sesuai aturan BSJP.")
+        return
+
+    if force_close_if_no_hold and advice["rekomendasi"] == "exit":
+        log.info(f"_advise_hold_or_exit({ticker}): BSJP exit -> force cut")
+        _dedup_mark("hold_advisory_result", f"{ticker}:exit")
+        _force_cut(advice["alasan"])
         return
 
     log.info(f"_advise_hold_or_exit({ticker}): kirim {advice['rekomendasi']}")
@@ -2534,20 +2590,17 @@ def _advise_hold_or_exit(row: dict) -> None:
     send_alert(caption)
 
 
-SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing"}
+SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing", "sekuritas": "Sekuritas"}
 
 
 def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
     """Kirim pertimbangan HOLD/EXIT ke SEMUA posisi 'open' dari 1 source yang
     TP/SL-nya belum kena. `only_before_today`: buat BSJP doang (dientry KEMARIN
     sore, dicek besok siang — posisi yang di-entry HARI INI sendiri belum
-    relevan buat dicek, masih baru beberapa jam).
-
-    DIAGNOSTIC (2026-09-02): belum pernah divalidasi hidup di production —
-    signal_alerts total cuma 2 baris (source bpjs doang), NOL 'bsjp'/'swing'
-    pernah tercatat, jadi fungsi ini kemungkinan besar SELALU nemu rows==[]
-    (gak ada posisi open buat dicek), bukan berarti advisory-nya sendiri
-    error. log.info biar ketauan pasti dari log, bukan nebak."""
+    relevan buat dicek, masih baru beberapa jam). Source 'bsjp' otomatis pake
+    `force_close_if_no_hold=True` (_advise_hold_or_exit) — BSJP WAJIB dijual
+    besoknya kecuali advice-nya eksplisit 'hold' (barang masih bagus banget);
+    BPJS/Swing (kalau lewat sini) tetep advisory doang, gak auto-cut."""
     if _dedup_seen("hold_advisory", source):
         log.info(f"_check_hold_advisory({source}): skip, udah ke-dedup hari ini")
         return
@@ -2580,7 +2633,7 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
             # bersamaan bisa numpuk banyak (misal >10x60dtk = 10 menit macet).
             _sleep_secs(60)
         try:
-            _advise_hold_or_exit(row)
+            _advise_hold_or_exit(row, force_close_if_no_hold=(source == "bsjp"))
         except Exception:
             log.exception(f"_check_hold_advisory({source}): _advise_hold_or_exit gagal buat {row.get('ticker')}")
             continue
@@ -2928,6 +2981,176 @@ def _check_bpjs() -> None:
         pass
 
 
+SEKURITAS_PICK_HOUR = 16
+SEKURITAS_PICK_MINUTE = 45  # abis market tutup (15:50) — nyakup SELURUH call sekuritas
+                              # hari ini (nyicil masuk dari pagi sampe sore lewat WA/Telegram
+                              # listener -> /intel), bukan cuma yang udah masuk pas jam tertentu.
+                              # Digeser dikit dari run_scanner_refresh (16:00) & fundamentals
+                              # refresh (16:30 Senin doang) biar gak numpuk jam yang sama.
+
+MAX_SEKURITAS_PICKS = 2  # user eksplisit "1-2 call", sama semangat kayak cap BSJP/Swing
+
+
+def _gather_sekuritas_calls(days: int = 1) -> list[dict]:
+    """Kumpulin SEMUA trade_calls hari ini dari `daily_market_intel.summary_ai`
+    (diekstrak intel.py dari teks channel sekuritas WA/Telegram yang dipantau —
+    lihat SUMMARIZE_SYSTEM_PROMPT), grupin per ticker (biar kalau BEBERAPA
+    sekuritas independen manggil ticker yang SAMA keliatan sebagai 1 entry
+    dengan banyak `sumber` — itu confluence, bukan kebetulan berulang) +
+    tempelin technical_score/signal NEXUS sendiri (`scanner_cache`) sebagai
+    cross-check independen, bukan comot mentah-mentah dari analis luar."""
+    since = (today_wib() - timedelta(days=days - 1)).isoformat()
+    try:
+        res = supabase.table("daily_market_intel").select("tanggal,sumber,summary_ai").gte("tanggal", since).execute()
+    except Exception:
+        return []
+
+    by_ticker: dict[str, dict] = {}
+    for row in res.data:
+        summary = row.get("summary_ai") or {}
+        for call in summary.get("trade_calls", []):
+            t = (call.get("saham") or "").upper()
+            if not t:
+                continue
+            entry = by_ticker.setdefault(t, {"ticker": t, "calls": []})
+            entry["calls"].append({
+                "sumber": row.get("sumber"), "entry": call.get("entry"),
+                "target": call.get("target"), "stop_loss": call.get("stop_loss"),
+                "alasan": call.get("alasan"),
+            })
+    if not by_ticker:
+        return []
+
+    try:
+        scan_res = (
+            supabase.table("scanner_cache").select("ticker,technical_score,signal")
+            .in_("ticker", list(by_ticker)).execute()
+        )
+        scan_by_ticker = {r["ticker"]: r for r in scan_res.data}
+    except Exception:
+        scan_by_ticker = {}
+
+    calls = []
+    for t, entry in by_ticker.items():
+        scan = scan_by_ticker.get(t)
+        calls.append({
+            "ticker": t,
+            "calls": entry["calls"],
+            "nexus_context": (
+                {"technical_score": scan["technical_score"], "signal": scan["signal"]}
+                if scan else None
+            ),
+        })
+    return calls
+
+
+def _build_sekuritas_caption(pick: dict) -> str:
+    sumber_txt = ", ".join(pick.get("sumber") or []) or "sekuritas"
+    return (
+        f"📰 <b>Call Sekuritas — {_esc(pick['ticker'])}</b>\n\n"
+        f"Entry: Rp{pick['entry']:,.0f} · 🎯 Target: Rp{pick['target']:,.0f} · "
+        f"⛔ SL: Rp{pick['stop_loss']:,.0f}\n\n"
+        f"{_esc(pick.get('alasan_singkat') or '')}\n\n"
+        f"📌 Disaring NEXUS dari call {_esc(sumber_txt)} — bukan comot mentah, "
+        f"udah di-cross-check RR & data teknikal internal."
+    )
+
+
+def _validate_sekuritas_pick(pick: dict, valid_tickers: set[str]) -> dict | None:
+    """Guard PYTHON sebelum 1 pick Groq dipercaya kirim — jangan percaya buta
+    baik ke Groq (bisa halusinasi ticker di luar daftar) MAUPUN ke sekuritas
+    asalnya (angka entry/target/SL mentah belum tentu RR-nya masuk akal,
+    sama filosofi kayak guard BPJS insiden #14). Balikin pick dengan
+    entry/target/stop_loss udah dicoerce jadi float kalau lolos, None kalau
+    ditolak (fungsi murni, gak ada side effect/logging — caller yang log)."""
+    ticker = pick.get("ticker")
+    if ticker not in valid_tickers:
+        return None
+    try:
+        entry_price = float(pick["entry"])
+        target = float(pick["target"])
+        stop_loss = float(pick["stop_loss"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    if entry_price <= 0 or target <= entry_price or stop_loss >= entry_price:
+        return None
+    risk_pct = round((entry_price - stop_loss) / entry_price * 100, 2)
+    reward_pct = round((target - entry_price) / entry_price * 100, 2)
+    rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+    if risk_pct > MAX_RISK_PCT or reward_pct > MAX_REWARD_PCT or rr_ratio < MIN_RR_RATIO:
+        return None
+    return {**pick, "entry": entry_price, "target": target, "stop_loss": stop_loss}
+
+
+def _check_sekuritas_pick() -> None:
+    """Screening harian call sekuritas — jalan 1x/hari abis market tutup
+    (biar nyakup SELURUH call yang masuk sepanjang hari, bukan cuma pagi).
+    Gate: dedup 1x/hari -> toggle notif -> kumpul call -> Groq saring
+    maks 2 -> GUARD PYTHON (ticker WAJIB dari daftar asli + RR minimum,
+    pola sama kayak BPJS/Swing — jangan percaya buta angka dari Groq
+    ATAU dari sekuritas asalnya) -> kirim -> catat ke signal_alerts
+    (source='sekuritas', lifecycle sama kayak Swing: waiting_entry ->
+    open -> tp_hit/sl_hit/timeout, dicek _check_signal_outcomes generik)."""
+    if _dedup_seen("sekuritas", "picked"):
+        return
+    settings = _load_settings()
+    if not settings["notif_sekuritas"]:
+        return
+
+    calls = _gather_sekuritas_calls()
+    if not calls:
+        log.info("_check_sekuritas_pick: gak ada trade_calls hari ini dari channel sekuritas")
+        return
+
+    try:
+        result = pick_sekuritas_calls(calls)
+    except Exception:
+        log.exception(f"_check_sekuritas_pick: pick_sekuritas_calls gagal ({len(calls)} ticker)")
+        return
+
+    picks = (result.get("picks") or [])[:MAX_SEKURITAS_PICKS]
+    if not picks:
+        log.info(f"_check_sekuritas_pick: Groq gak milih apa-apa — {result.get('alasan_kalau_kosong')}")
+        return
+
+    valid_tickers = set(by_t["ticker"] for by_t in calls)
+    sent_any = False
+    for pick in picks:
+        validated = _validate_sekuritas_pick(pick, valid_tickers)
+        if validated is None:
+            log.info(f"_check_sekuritas_pick: skip {pick.get('ticker')} — gak lolos validasi (ticker/level/RR)")
+            continue
+        pick = validated
+        ticker, entry_price, target, stop_loss = pick["ticker"], pick["entry"], pick["target"], pick["stop_loss"]
+        caption = _build_sekuritas_caption(pick)
+        message_id = send_alert(caption)
+        if not message_id:
+            continue
+        sent_any = True
+        try:
+            supabase.table("signal_alerts").insert({
+                "ticker": ticker,
+                "entry_price": entry_price,
+                "entry_low": round(entry_price * 0.99, 2),
+                "entry_high": round(entry_price * 1.02, 2),
+                "target": target,
+                "stop_loss": stop_loss,
+                "status": "waiting_entry",
+                "telegram_message_id": message_id,
+                "source": "sekuritas",
+                "faktor_pendukung": {"alasan": pick.get("alasan_singkat"), "sumber": pick.get("sumber")},
+            }).execute()
+        except Exception:
+            log.exception(f"_check_sekuritas_pick: gagal insert signal_alerts buat {ticker}")
+
+    if sent_any:
+        _dedup_mark("sekuritas", "picked")
+
+
+async def run_sekuritas_pick() -> None:
+    await _run_scheduled(SEKURITAS_PICK_HOUR, SEKURITAS_PICK_MINUTE, "sekuritas_pick", _check_sekuritas_pick)
+
+
 PRE_MARKET_HOUR = 8
 PRE_MARKET_MINUTE = 45  # 15 menit sebelum market IDX buka jam 09:00
 
@@ -2984,7 +3207,8 @@ def _send_morning_briefing() -> None:
     if rekomendasi:
         lines.append("\n📢 <b>Call NEXUS Hari Ini</b>")
         for r in rekomendasi:
-            note = " (maks hold 2 hari)" if r.get("call_oleh") == "BPJS" else ""
+            call_oleh = r.get("call_oleh")
+            note = " (maks hold 2 hari)" if call_oleh == "BPJS" else " (jual besok, kecuali masih bagus banget)" if call_oleh == "BSJP" else ""
             lines.append(
                 f"• <b>{_esc(r.get('ticker'))}</b> ({_esc(r.get('call_oleh'))}){note} — "
                 f"Entry Rp{r['entry_price']:,.0f} · TP Rp{r['target']:,.0f} · SL Rp{r['stop_loss']:,.0f}"
