@@ -66,11 +66,15 @@ def _gather_all_trades(tickers: list[str]) -> list[dict]:
     return all_trades
 
 
-MENTOR_SLOT_PCT = 16        # tiap posisi SELALU 16% dari MODAL AWAL (fixed nominal,
-                              # BUKAN dari modal berjalan/gak compound) - money management
-                              # asli dari mentor user, beda paradigma total dari risk-based:
-                              # size gak dari jarak SL sama sekali, jadi otomatis imun dari
-                              # bug MAX_POSITION_PCT yang tadi ketemu (GRPH dkk).
+MENTOR_SLOT_PCT = 16        # tiap posisi 16% dari EQUITY BERJALAN (cash + mark open
+                              # positions), bukan modal awal fixed lagi (2026-09-10, sesi C
+                              # fix) - diagnostic nemu "capital ruin spiral": versi lama fixed
+                              # 16% dari modal awal gak pernah ngecil pas rugi beruntun, jadi
+                              # pas cash abis, JUSTRU pas sinyal terbaik muncul (avg outcome
+                              # trade yang ke-skip "modal abis" +1.39%, PALING TINGGI dari
+                              # semua grup, vs trade yang KETAMBIL cuma -0.18%). Size gak dari
+                              # jarak SL sama sekali (beda paradigma dari risk-based), jadi
+                              # otomatis imun dari bug MAX_POSITION_PCT yang tadi ketemu (GRPH dkk).
 MENTOR_MAX_POSITIONS = 5      # sinkron manual scheduler.py::MAX_CONCURRENT_SWING — keputusan
                               # user: portofolio SELALU 5 saham Swing konkuren (lebih dari itu
                               # susah diawasin "kaya supermarket"), naik dari 4 sebelumnya.
@@ -83,8 +87,8 @@ def simulate_portfolio_mentor(trades: list[dict], initial_capital: float = INITI
                                slot_pct: float = MENTOR_SLOT_PCT, max_positions: int = MENTOR_MAX_POSITIONS) -> dict:
     """Money management ala mentor user — LIHAT MENTOR_SLOT_PCT/MENTOR_MAX_POSITIONS
     di atas buat penjelasan lengkap mekanismenya. Struktur event-loop SAMA persis
-    kayak simulate_portfolio(), cuma beda di bagian sizing (fixed slot, bukan
-    risk-based) - lihat situ kalau mau ubah shared logic-nya."""
+    kayak simulate_portfolio(), cuma beda di bagian sizing (% slot dari equity
+    berjalan, bukan risk-based) - lihat situ kalau mau ubah shared logic-nya."""
     for i, t in enumerate(trades):
         t["_id"] = i
     events = []
@@ -93,7 +97,6 @@ def simulate_portfolio_mentor(trades: list[dict], initial_capital: float = INITI
         events.append({"date": t["exit_date"], "order": 0, "type": "exit", "trade": t})
     events.sort(key=lambda e: (e["date"], e["order"]))
 
-    slot_nominal = initial_capital * (slot_pct / 100)
     cash = float(initial_capital)
     open_positions: dict[int, dict] = {}
     equity_curve = []
@@ -114,6 +117,8 @@ def simulate_portfolio_mentor(trades: list[dict], initial_capital: float = INITI
         if len(open_positions) >= max_positions:
             skipped_capacity += 1
             continue
+        slot_nominal = _current_equity() * (slot_pct / 100)  # dari EQUITY BERJALAN,
+                                                                # otomatis ngecil pas rugi beruntun
         if cash < slot_nominal:
             skipped_capital += 1  # reserve abis (bisa kejadian abis serangkaian CL beruntun)
             continue
