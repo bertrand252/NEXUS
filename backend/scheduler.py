@@ -1813,6 +1813,10 @@ def _check_portfolio_risk() -> None:
         if bandar:
             lines.append(_format_bandar_line(bandar))
 
+        flip = _check_broker_flip(kode, today)
+        if flip:
+            lines.append(_format_flip_line(flip))
+
     if result.get("overall_risk") == "high":
         lines.append(f"\n🚨 <b>OVERALL RISK: HIGH</b>\n{_esc(result.get('portfolio_impact_summary', '-'))}")
     rekomendasi = result.get("rekomendasi_aksi") or []
@@ -2159,6 +2163,58 @@ def _format_bandar_line(bandar: dict) -> str:
     if bandar.get("steady_accumulation_sideways"):
         line += f"   🎯 Sideways + akumulasi STEADY ({bandar['consistency_pct']}% hari net-buy) — breakout berpotensi lebih ringan\n"
     return line
+
+
+def _check_broker_flip(ticker: str, today: str) -> dict | None:
+    """Bandingin top net-buyer 3 hari terakhir (exclude hari ini) lawan transaksi
+    HARI INI — nemuin broker yang belakangan rajin beli tapi HARI INI malah net
+    JUAL gede (flip jadi distribusi jangka pendek). Beda dari _detect_bandar yang
+    liat trend PERIODE PANJANG (30 hari) — ini nangkep sinyal harian yang kelewat
+    kalau cuma liat cumulative. Ketemu dari kasus nyata JECX 2026-09-10: broker
+    top net-buyer 3 hari (XL, BK) ternyata jadi net-seller GEDE pas hari H, padahal
+    broker paling akumulasi (LG) sendiri diem — insight yang gak kebaca dari
+    _detect_bandar doang. None kalau Invezgo gak configured/gagal fetch/gak ada
+    broker yang flip."""
+    if not invezgo_client.is_configured():
+        return None
+
+    def _num(v) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    try:
+        prev_day = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+        window_from = (date.fromisoformat(today) - timedelta(days=3)).isoformat()
+        recent = invezgo_client.get_broker_summary(ticker, window_from, prev_day)
+        today_summary = invezgo_client.get_broker_summary(ticker, today, today)
+    except Exception:
+        return None
+    if not recent or not today_summary:
+        return None
+
+    today_net = {r.get("code"): _num(r.get("net_value")) for r in today_summary}
+    top_recent = sorted(recent, key=lambda r: -_num(r.get("net_value")))[:3]
+
+    flips = []
+    for r in top_recent:
+        code = r.get("code")
+        recent_net = _num(r.get("net_value"))
+        t_net = today_net.get(code)
+        if recent_net > 0 and t_net is not None and t_net < 0:
+            flips.append({"broker": code, "recent_net": recent_net, "today_net": t_net})
+
+    if not flips:
+        return None
+    return {"flips": flips}
+
+
+def _format_flip_line(flip: dict) -> str:
+    """Baris digest buat _check_broker_flip — dipake bareng _format_bandar_line
+    di _check_portfolio_risk."""
+    parts = [f"{_esc(f['broker'])} (jual Rp{abs(f['today_net']):,.0f} hari ini, padahal 3 hari terakhir net beli)" for f in flip["flips"]]
+    return f"   ⚠️ Ada broker flip jual hari ini: {', '.join(parts)}\n"
 
 
 def _position_severity(verdict: str, bandar: dict | None, exit_advised_today: bool = False) -> str:
