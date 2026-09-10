@@ -2415,6 +2415,8 @@ def _check_bsjp_screener() -> None:
         return
     if not pool_res.data:
         log.info("_check_bsjp_screener: Stage-1 kosong, gak ada ticker cocok_bsjp=True hari ini")
+        _send_no_call_notice("bsjp", "Stage-1 kosong — gak ada ticker yang cocok kriteria BSJP proxy EOD hari ini.")
+        _dedup_mark("bsjp", "screener")
         return
     log.info(f"_check_bsjp_screener: Stage-1 {len(pool_res.data)} kandidat, lanjut Stage-2 intraday")
 
@@ -2450,7 +2452,9 @@ def _check_bsjp_screener() -> None:
 
     if not scored:
         log.info(f"_check_bsjp_screener: Stage-2 dari {len(pool_res.data)} kandidat, NOL yang 'terbang' sesi 2 (score>0)")
-        return  # sesi 2 gak ada yang "terbang" beneran — diam, jangan maksain
+        _send_no_call_notice("bsjp", f"Udah dicek {len(pool_res.data)} kandidat, gak ada yang 'terbang' di sesi 2 hari ini — semua momentum-nya negatif/datar.")
+        _dedup_mark("bsjp", "screener")
+        return  # sesi 2 gak ada yang "terbang" beneran — diam soal CALL-nya, tapi tetep kasih kabar
 
     scored.sort(key=lambda c: c["score"], reverse=True)
 
@@ -2477,6 +2481,8 @@ def _check_bsjp_screener() -> None:
         scored = [c for c in scored if not (c.get("bandar") and c["bandar"]["trend"] == "distribusi_meningkat")]
         if not scored:
             log.info("_check_bsjp_screener: semua kandidat kena skip broksum distribusi, diam")
+            _send_no_call_notice("bsjp", "Ada yang 'terbang' sesi 2, tapi SEMUA broker top-nya lagi distribusi (jualan) — kontradiksi sama rencana beli overnight, di-skip semua.")
+            _dedup_mark("bsjp", "screener")
             return
     else:
         for c in scored:
@@ -2666,6 +2672,16 @@ def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> Non
 
 
 SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing"}
+
+
+def _send_no_call_notice(source: str, reason: str) -> None:
+    """Kabar singkat pas screener SEKALI/HARI (BSJP, Sekuritas) gak nemu apa-apa
+    — user eksplisit (2026-09-10): diem total bikin gak bisa bedain "emang gak
+    ada setup" vs "sistemnya mati". BUKAN buat check yang RECURRING kayak BPJS
+    (tiap 15 menit pas market buka) — diem itu wajar di situ, masih nyoba lagi
+    sebentar, kirim notice tiap 15 menit bakal spam doang."""
+    label = SOURCE_LABEL_ID.get(source, source.upper())
+    send_alert(f"ℹ️ <b>{_esc(label)} — Gak Ada Call Hari Ini</b>\n\n{_esc(reason)}")
 
 
 def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
@@ -3254,17 +3270,23 @@ def _check_sekuritas_pick() -> None:
     calls = _gather_sekuritas_calls()
     if not calls:
         log.info("_check_sekuritas_pick: gak ada trade_calls hari ini dari channel sekuritas")
+        _send_no_call_notice("sekuritas", "Gak ada call trading yang masuk dari channel sekuritas yang dipantau hari ini.")
+        _dedup_mark("sekuritas", "picked")
         return
 
     try:
         result = pick_sekuritas_calls(calls)
     except Exception:
         log.exception(f"_check_sekuritas_pick: pick_sekuritas_calls gagal ({len(calls)} ticker)")
+        _send_no_call_notice("sekuritas", f"Ada {len(calls)} ticker dari sekuritas hari ini, tapi proses saringnya gagal teknis — coba lagi besok.")
         return
 
     picks = (result.get("picks") or [])[:MAX_SEKURITAS_PICKS]
     if not picks:
         log.info(f"_check_sekuritas_pick: Groq gak milih apa-apa — {result.get('alasan_kalau_kosong')}")
+        alasan = result.get("alasan_kalau_kosong") or "gak ada yang cukup meyakinkan."
+        _send_no_call_notice("sekuritas", f"Ada {len(calls)} ticker dari sekuritas hari ini, tapi {alasan}")
+        _dedup_mark("sekuritas", "picked")
         return
 
     calls_by_ticker = {c["ticker"]: c for c in calls}
@@ -3324,6 +3346,9 @@ def _check_sekuritas_pick() -> None:
             log.exception(f"_check_sekuritas_pick: gagal insert signal_alerts buat {ticker}")
 
     if sent_any:
+        _dedup_mark("sekuritas", "picked")
+    else:
+        _send_no_call_notice("sekuritas", f"Groq milih {len(picks)} ticker dari sekuritas, tapi semuanya gak lolos validasi (RR/level gak masuk akal).")
         _dedup_mark("sekuritas", "picked")
 
 
