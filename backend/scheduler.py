@@ -2788,6 +2788,14 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
 
 
 def _run_bsjp_screener_steps() -> None:
+    # BUG ketemu 2026-09-11 (user lapor): _check_bsjp_screener/_check_hold_advisory
+    # gak pernah cek is_trading_day sama sekali — Sabtu/Minggu/libur bursa
+    # scanner_cache/data intraday-nya BASI (dari hari trading terakhir), tapi
+    # loop-nya tetep jalan tiap hari kalender (bukan cuma hari trading),
+    # ujung-ujungnya ngirim "BSJP — Gak Ada Call Hari Ini" (atau lebih parah,
+    # call ngaco dari data basi) pas market emang gak buka sama sekali.
+    if not is_trading_day(today_wib()):
+        return
     try:
         _check_bsjp_screener()
     except Exception:
@@ -2811,11 +2819,14 @@ BSJP_HOLD_CHECK_HOUR = 12  # midday break IDX (12:00-13:30) — BSJP HARUSNYA
 BSJP_HOLD_CHECK_MINUTE = 5  # udah dijual PAGI, kalau siang gini masih 'open' berarti belum resolve
 
 
+def _run_bsjp_hold_check_step() -> None:
+    if not is_trading_day(today_wib()):
+        return
+    _check_hold_advisory("bsjp", only_before_today=True)
+
+
 async def run_bsjp_hold_check() -> None:
-    await _run_scheduled(
-        BSJP_HOLD_CHECK_HOUR, BSJP_HOLD_CHECK_MINUTE, "bsjp_hold_check",
-        lambda: _check_hold_advisory("bsjp", only_before_today=True),
-    )
+    await _run_scheduled(BSJP_HOLD_CHECK_HOUR, BSJP_HOLD_CHECK_MINUTE, "bsjp_hold_check", _run_bsjp_hold_check_step)
 
 
 MARKET_OPEN = time(9, 0)
@@ -3317,6 +3328,8 @@ def _check_sekuritas_pick() -> None:
     — biar OTOMATIS kepake seluruh aturan existing gaya itu (max hold BPJS
     2 hari, force-cut BSJP H+1, Swing gak ada timeout) TANPA plumbing
     tambahan, semua mekanisme itu emang udah generik di kolom `source`."""
+    if not is_trading_day(today_wib()):  # gak ada call sekuritas baru di hari bursa tutup
+        return
     if _dedup_seen("sekuritas", "picked"):
         return
     settings = _load_settings()
