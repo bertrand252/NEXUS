@@ -17,7 +17,7 @@ from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
 from chart_render import render_chart, render_outcome_chart
-from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT
+from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT, bsjp_criteria
 from intraday import daily_session_stats, session_takeoff
 from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit, pick_sekuritas_calls
 from forex_factory import get_forex_events
@@ -2428,19 +2428,36 @@ BSJP_SCREENER_MINUTE = 30  # SEBELUM market tutup, bukan sesudah — BSJP beli-n
 MAX_BSJP_PER_DAY = 2  # user eksplisit minta dibatesin — jangan kirim SEMUA yang lolos syarat,
                         # cuma yang PALING kuat, sama semangatnya kayak cap Swing 1-2/minggu
 
-BSJP_POOL_LIMIT = 20  # pool kandidat Stage-1 (proxy EOD murah), BUKAN final list —
-                        # Stage-2 intraday di bawah yang mutusin siapa beneran "terbang" sesi 2
+BSJP_LIVE_POOL_LIMIT = 60  # pool AWAL (order by volume_ratio KEMARIN, basi tapi cuma
+                             # dipake buat naikin peluang nangkep saham yang lagi aktif,
+                             # bukan gate lolos-gaknya) — dilebarin 3x dari BSJP_POOL_LIMIT
+                             # lama (20) karena Stage-1 sekarang dihitung LIVE per kandidat
+                             # (insiden #19, lihat docstring _check_bsjp_screener), jadi butuh
+                             # net lebih lebar biar gak kelewatan saham yang breakout HARI INI
+                             # tapi kemarin gak masuk top-20 volume_ratio.
 
 
 def _check_bsjp_screener() -> None:
     """2 tahap, sama pola _gather_candidates (screen murah ke semua 951 ->
-    hitung berat cuma ke pool kecil): Stage-1 `scoring.py::bsjp_criteria`
-    (proxy EOD, udah jalan di scanner_cache.cocok_bsjp) nyaring pool kandidat
-    murah dari 951 ticker. Stage-2 di sini beneran ngukur intraday sesi 1 vs
-    sesi 2 (teknik asli mentor: sahamnya "terbang" di sesi 2, sesi 1 spike
-    cuma pendukung) via intraday.py + scoring.py::bsjp_intraday_score — cuma
-    jalan ke pool kecil (BSJP_POOL_LIMIT), sequential (bukan ThreadPoolExecutor,
-    sekelas jumlah ticker sama _gather_candidates).
+    hitung berat cuma ke pool kecil). Stage-2 di sini beneran ngukur intraday
+    sesi 1 vs sesi 2 (teknik asli mentor: sahamnya "terbang" di sesi 2, sesi 1
+    spike cuma pendukung) via intraday.py + scoring.py::bsjp_intraday_score —
+    cuma jalan ke pool kecil, sequential (bukan ThreadPoolExecutor, sekelas
+    jumlah ticker sama _gather_candidates).
+
+    BUG ketemu 2026-09-11 (user lapor BSJP hampir gak pernah qualify):
+    Stage-1 DULU pake `scanner_cache.cocok_bsjp` — kolom itu cuma di-refresh
+    1x/hari jam SCANNER_REFRESH_HOUR (16:00), SETELAH screener BSJP ini jalan
+    (jam 15:30). Jadi pool-nya sebenernya "breakout KEMARIN", bukan hari ini
+    — Stage-2 jadinya nanya "apa saham yang breakout KEMARIN ini JUGA lagi
+    terbang sesi 2 HARI INI", minta 2 hari bagus BERTURUT-TURUT (jarang
+    kejadian, saham yang breakout biasanya profit-taking besoknya), BUKAN
+    teknik asli mentor (breakout+terbang sesi 2 di HARI YANG SAMA). Fix:
+    Stage-1 dihitung LIVE per kandidat di sini (`bsjp_criteria`, scoring.py)
+    pake harga/volume HARI INI — `scanner_cache.volume_ratio` (walau basi 1
+    hari) cuma dipake buat naikin pool AWAL jadi lebih lebar (BSJP_LIVE_POOL_
+    LIMIT, bukan cocok_bsjp yang udah pasti basi), bukan buat nentuin lolos-
+    gaknya — itu keputusan LIVE checknya di bawah.
 
     User eksplisit gak ada indikator resmi baku dari mentor buat BSJP — kalau
     Stage-2 gak nemu yang beneran skor >0 (sesi 2 gak "terbang"), JANGAN
@@ -2463,18 +2480,18 @@ def _check_bsjp_screener() -> None:
     try:
         pool_res = (
             supabase.table("scanner_cache").select("ticker,price,volume_ratio")
-            .eq("cocok_bsjp", True).order("volume_ratio", desc=True).limit(BSJP_POOL_LIMIT)
+            .order("volume_ratio", desc=True).limit(BSJP_LIVE_POOL_LIMIT)
             .execute()
         )
     except Exception:
         log.exception("_check_bsjp_screener: gagal query scanner_cache Stage-1")
         return
     if not pool_res.data:
-        log.info("_check_bsjp_screener: Stage-1 kosong, gak ada ticker cocok_bsjp=True hari ini")
-        _send_no_call_notice("bsjp", "Stage-1 kosong — gak ada ticker yang cocok kriteria BSJP proxy EOD hari ini.")
+        log.info("_check_bsjp_screener: scanner_cache kosong")
+        _send_no_call_notice("bsjp", "scanner_cache kosong — belum ada data buat disaring hari ini.")
         _dedup_mark("bsjp", "screener")
         return
-    log.info(f"_check_bsjp_screener: Stage-1 {len(pool_res.data)} kandidat, lanjut Stage-2 intraday")
+    log.info(f"_check_bsjp_screener: {len(pool_res.data)} kandidat awal, cek live Stage-1+Stage-2")
 
     scored = []
     for row in pool_res.data:
@@ -2487,11 +2504,26 @@ def _check_bsjp_screener() -> None:
             continue
         if takeoff is None:
             continue
-        # harga LIVE dari intraday yang BARU di-fetch — row["price"] itu dari
-        # scanner_cache, basi kalau belum di-refresh manual hari ini (kejadian
-        # nyata: user dapet call BSJP jam 15:30 tapi harganya dari refresh
-        # pagi). Data intraday-nya sendiri udah fresh, tinggal dipake.
+        # harga LIVE dari intraday yang BARU di-fetch — jauh lebih fresh dari
+        # row["price"] (scanner_cache, basi sampe 1 hari, lihat docstring).
         price_now = float(hist_15m["Close"].iloc[-1])
+
+        # Stage-1 LIVE: bsjp_criteria() dihitung pake data HARI INI, bukan
+        # cache basi — price_prev dari days[-2] (closing KEMARIN, udah kebawa
+        # 1x fetch intraday di atas, gak nambah request), volume_avg20/ma5
+        # butuh histori harian asli (gak kebaca dari 15-menit doang).
+        try:
+            hist_daily = _get_history(ticker)
+            price_prev = float(days[-2].get("s2_close") or days[-2]["s1_close"]) if len(days) >= 2 else None
+            volume_today = days[-1]["s1_volume"] + days[-1]["s2_volume"]
+            volume_avg20 = float(hist_daily["Volume"].tail(20).mean())
+            ma5 = float(hist_daily["Close"].tail(5).mean())
+            value_traded_today = price_now * volume_today
+            if not bsjp_criteria(price_now, price_prev, volume_today, volume_avg20, ma5, value_traded_today):
+                continue
+        except Exception:
+            continue
+
         value_traded_idr = price_now * days[-1]["s2_volume"]
         score = bsjp_intraday_score(takeoff, value_traded_idr)
         if score > 0:
