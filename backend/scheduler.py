@@ -1578,16 +1578,19 @@ def _check_whale_alerts() -> None:
             resume_from = _whale_resume_page(prev_total_pages, total_pages)
             if total_pages == 1:
                 trades = list(first.get("data") or [])
+                _whale_page_cache[ticker] = (today, total_pages)
             else:
                 trades = []
                 page = total_pages
                 pages_fetched = 0
+                last_page_covered = total_pages + 1
                 while page >= resume_from and page >= 1 and pages_fetched < WHALE_MAX_PAGES_PER_TICKER:
                     resp = first if page == 1 else invezgo_client.get_running_trade(
                         ticker, today, limit=100, page=page)
                     page_trades = list(resp.get("data") or [])
                     trades.extend(page_trades)
                     pages_fetched += 1
+                    last_page_covered = page
                     oldest = min(
                         (dt for t in page_trades if (dt := _trade_dt(t, today_date))),
                         default=None,
@@ -1595,7 +1598,20 @@ def _check_whale_alerts() -> None:
                     if oldest is None or oldest <= cutoff:
                         break
                     page -= 1
-            _whale_page_cache[ticker] = (today, total_pages)
+                # BUG NYATA ketemu 2026-09-11: CUAN 449 halaman/44.900 transaksi
+                # SEHARI — walk mentok WHALE_MAX_PAGES_PER_TICKER jauh SEBELUM
+                # nyampe resume_from, tapi baris cache di bawah ini dulu SELALU
+                # nulis total_pages walau gak kesampean beneran — cek jam
+                # berikutnya nganggep RATUSAN halaman yang GAK PERNAH DIFETCH
+                # itu "udah aman diskip", data ilang PERMANEN diem-diem (whale
+                # alert "gak ada" padahal transaksinya ada, cuma gak pernah
+                # kecek). Fix: cache CUMA boleh ngaku "covered sampe
+                # total_pages" kalau BENERAN kesampean turun ke resume_from —
+                # kalau kepotong cap duluan, JANGAN advance cache sama sekali
+                # (biarin resume_from tetep nunjuk ke backlog asli), biar cek
+                # berikutnya tetep nyoba nutupin gap itu, bukan nganggep beres.
+                if last_page_covered <= resume_from:
+                    _whale_page_cache[ticker] = (today, total_pages)
         except Exception:
             continue
 
