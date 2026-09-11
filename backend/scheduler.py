@@ -2437,6 +2437,29 @@ BSJP_LIVE_POOL_LIMIT = 60  # pool AWAL (order by volume_ratio KEMARIN, basi tapi
                              # tapi kemarin gak masuk top-20 volume_ratio.
 
 
+def _ihsg_today_change_pct() -> float | None:
+    """Perubahan IHSG HARI INI — konteks resiko buat BSJP (overnight): saham
+    individual 'terbang' pas market luas lagi lemah lebih rawan sympathy-
+    selling besok paginya. Daily EOD ^JKSE suka bolong/telat >=1 hari
+    (insiden #10 CLAUDE.md), makanya price SEKARANG dari intraday 15-menit
+    (kebukti fresh, gak kena bug yang sama) sementara prev_close dari baris
+    daily TERAKHIR yang tanggalnya SEBELUM hari ini (jaga-jaga kalau daily
+    kebetulan udah gak bolong, jangan sampe prev_close ke-anggep hari ini
+    juga). None kalau data gak cukup — caller skip warning-nya diem-diem,
+    JANGAN nebak angka."""
+    try:
+        daily = yf.Ticker("^JKSE").history(period="5d", auto_adjust=False).dropna(subset=["Close"])
+        daily = daily[daily.index.date < today_wib()]
+        intraday = yf.Ticker("^JKSE").history(period="1d", interval="15m", auto_adjust=False).dropna(subset=["Close"])
+        if daily.empty or intraday.empty:
+            return None
+        prev_close = float(daily["Close"].iloc[-1])
+        price_now = float(intraday["Close"].iloc[-1])
+        return round((price_now - prev_close) / prev_close * 100, 2)
+    except Exception:
+        return None
+
+
 def _check_bsjp_screener() -> None:
     """2 tahap, sama pola _gather_candidates (screen murah ke semua 951 ->
     hitung berat cuma ke pool kecil). Stage-2 di sini beneran ngukur intraday
@@ -2591,6 +2614,18 @@ def _check_bsjp_screener() -> None:
         c["target"] = round(c["price"] * (1 + tp_pct / 100), 2)
         c["stop_loss"] = round(c["price"] * (1 - BSJP_SL_PCT / 100), 2)
 
+    # user eksplisit (2026-09-11, abis liat call IFII/MUTU pas IHSG lagi
+    # lemah): saham individual "terbang" pas market LUAS lagi turun itu
+    # anomali worth di-flag eksplisit — TETEP kirim (bisa jadi sinyal kuat
+    # beneran, atau perlu extra hati-hati, user yang nilai sendiri), bukan
+    # di-skip diem-diem.
+    ihsg_chg = _ihsg_today_change_pct()
+    ihsg_warning = (
+        f"\n⚠️ <b>IHSG hari ini {ihsg_chg:+.2f}%</b> — market luas lagi lemah, saham-saham "
+        f"di atas 'terbang' MELAWAN arus, extra hati-hati (bisa sinyal kuat, bisa juga anomali)."
+        if ihsg_chg is not None and ihsg_chg <= -1.0 else ""
+    )
+
     lines = ["🌆 <b>BSJP — Beli Sore Jual Pagi</b>\n", "Terkonfirmasi \"terbang\" di sesi 2 hari ini:"]
     for c in scored:
         t = c["takeoff"]
@@ -2605,6 +2640,8 @@ def _check_bsjp_screener() -> None:
             lines.append(_format_bandar_line(c["bandar"]).rstrip("\n"))
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
     lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini — jual PAGI besok, jangan dipegang kelamaan.</b>")
+    if ihsg_warning:
+        lines.append(ihsg_warning)
 
     log.info(f"_check_bsjp_screener: {len(scored)} kandidat 'terbang' sesi 2, kirim alert")
     if send_alert("\n".join(lines)):
