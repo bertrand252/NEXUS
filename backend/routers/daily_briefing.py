@@ -48,6 +48,21 @@ spesifik 1 saham), tulis SEKALI SAJA dengan "saham":"IHSG", jangan ditempel-
 tempel ke ticker-ticker individual yang gak disebut di teks aslinya sama
 sekali. Lebih baik 3 item jujur daripada 8 item basi-basi.
 
+BERITA HARUS SOAL PERUSAHAANNYA, BUKAN SAHAMNYA — field "sentiment" per intel
+itu SENTIMENT KESELURUHAN teks itu, BUKAN berita per-saham. JANGAN generate
+item "berita" yang isinya cuma nyebut ticker + label sentiment tanpa substansi
+konkret (POLA TERLARANG, JANGAN TULIS APAPUN mirip ini: "X berada dalam
+sentimen bullish hari ini", "X lagi positif", "X menguat", "momentum X
+bagus") — kalimat kayak gitu itu bukan berita, itu SINYAL TEKNIKAL/MOMENTUM,
+dan itu BUKAN tugas kamu (NEXUS udah punya sistem CALL terpisah yang
+pertimbangin momentum/sentiment buat conviction, lihat instruksi di atas soal
+gak boleh bahas teknikal). Cuma tulis 1 item "berita" per saham KALAU ada
+FAKTA KONKRET soal perusahaannya di poin_penting (laporan keuangan, aksi
+korporasi, kontrak/ekspansi, regulasi, kejadian spesifik) — kalau ticker cuma
+nongol di "saham_disebut" (level konteks/sentiment doang, gak ada fakta
+spesifik apa-apa tentang perusahaannya), JANGAN dipaksain jadi item berita
+sendiri, SKIP aja ticker itu.
+
 KONTEKS GLOBAL: kalau ada baris "[Konteks global semalam]" di input, itu
 perubahan real index AS (S&P 500/Dow/Nasdaq) semalem — boleh disebut di
 ringkasan KALAU relevan (IHSG suka kebawa arah global pas buka), tapi JANGAN
