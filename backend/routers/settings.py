@@ -16,6 +16,7 @@ DEFAULTS = {
     "notif_weekly_postmortem": True,
     "notif_whale_alert": True,     # transaksi abnormal gede (running-trade), polling watchlist tiap jam pas market buka
     "notif_sekuritas": True,       # saringan call trading dari channel sekuritas yang dipantau, 1x/hari abis market tutup
+    "notif_group_signal": True,    # broker sama konsisten akumulasi di >=2 ticker 1 grup emiten, 1x/hari 19:00 WIB
 }
 
 
@@ -31,6 +32,7 @@ class SettingsInput(BaseModel):
     notif_weekly_postmortem: bool = True
     notif_whale_alert: bool = True
     notif_sekuritas: bool = True
+    notif_group_signal: bool = True
 
 
 @router.get("")

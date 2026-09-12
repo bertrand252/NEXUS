@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick
+from scheduler import _format_bandar_line, _detect_bandar, _detect_group_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick
 from unittest.mock import patch
 
 
@@ -255,6 +255,37 @@ def test_detect_bandar_not_confused_by_cumulative_growth():
         result = _detect_bandar("TEST", "2026-08-01", "2026-08-06")
     assert result["cumulative_net_value"] == 9000
     assert result["consistency_pct"] == 20.0
+
+
+def _steady_inv(broker: str):
+    return {
+        "price": [{"close": c} for c in [100, 101, 99, 100, 102, 100]],  # sideways
+        "broker": [{
+            "broker": broker,
+            "data": [{"date": f"2026-08-{d:02d}", "value": v} for d, v in zip(range(1, 6), [1000, 2000, 3000, 4000, 5000])],
+        }],
+    }
+
+
+def test_detect_group_bandar_same_broker_consistent_returns_signal():
+    with patch("scheduler.invezgo_client.is_configured", return_value=True), \
+         patch("scheduler.invezgo_client.get_inventory_chart_stock", return_value=_steady_inv("PD")), \
+         patch("scheduler.invezgo_client.get_running_trade", return_value={"data": []}):
+        result = _detect_group_bandar(["MDKA", "MBMA"], "2026-08-01", "2026-08-06")
+    assert result["broker"] == "PD"
+    assert set(result["consistent_tickers"]) == {"MDKA", "MBMA"}
+    assert set(result["tickers"]) == {"MDKA", "MBMA"}
+
+
+def test_detect_group_bandar_different_brokers_returns_none():
+    def fake_inv(ticker, from_date, to_date, *a, **kw):
+        return _steady_inv("PD" if ticker == "MDKA" else "AG")
+
+    with patch("scheduler.invezgo_client.is_configured", return_value=True), \
+         patch("scheduler.invezgo_client.get_inventory_chart_stock", side_effect=fake_inv), \
+         patch("scheduler.invezgo_client.get_running_trade", return_value={"data": []}):
+        result = _detect_group_bandar(["MDKA", "MBMA"], "2026-08-01", "2026-08-06")
+    assert result is None
 
 
 def test_detect_bandar_trend_not_akumulasi_melambat_when_prior_is_selling():

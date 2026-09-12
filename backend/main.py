@@ -25,6 +25,7 @@ from scheduler import (
     run_bpjs_watcher,
     run_whale_confirm,
     run_sekuritas_pick,
+    run_group_signal_alert,
 )
 
 
@@ -51,7 +52,9 @@ async def lifespan(app: FastAPI):
     run_sekuritas_pick (16:45 WIB, saring call trading dari channel sekuritas
     yang dipantau WA/Telegram — dikumpulin sepanjang hari via /intel, Groq
     milih maks 2 paling meyakinkan + cross-check RR/teknikal, BUKAN comot
-    mentah dari analis).
+    mentah dari analis), run_group_signal_alert (19:00 WIB, cek broker yang
+    SAMA konsisten akumulasi di >=2 ticker 1 grup emiten curated manual —
+    lihat ticker_groups.py, seed pertama Grup Merdeka MDKA+MBMA).
     Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
@@ -69,6 +72,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_bpjs_watcher()),
         asyncio.create_task(run_whale_confirm()),
         asyncio.create_task(run_sekuritas_pick()),
+        asyncio.create_task(run_group_signal_alert()),
     ]
     yield
     for t in tasks:

@@ -659,6 +659,20 @@ export default function StockDetail() {
 
           {brokerFlow?.configured && (
             <>
+            {brokerFlow.group_signal && (
+              <div className="glow-border rounded-2xl bg-card border border-border p-4">
+                <p className="text-sm text-slate-200">
+                  🔗 <span className="font-bold">{brokerFlow.group_signal.group_name}</span>: Broker{' '}
+                  <span className="font-bold text-emerald-400">{brokerFlow.group_signal.broker}</span> juga top accumulator
+                  konsisten di{' '}
+                  {Object.keys(brokerFlow.group_signal.tickers)
+                    .filter((t) => t !== ticker)
+                    .map((t) => `${t} (${brokerFlow.group_signal.tickers[t].consistency_pct}%)`)
+                    .join(', ')}
+                  .
+                </p>
+              </div>
+            )}
             <div className="glow-border rounded-2xl bg-card border border-border p-5">
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <h3 className="text-sm font-bold text-white tracking-tight">Broker Summary (Net Value)</h3>
