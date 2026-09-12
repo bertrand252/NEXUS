@@ -24,6 +24,7 @@ const SETTINGS_DEFAULTS = {
   notif_weekly_postmortem: true,
   notif_whale_alert: true,
   notif_sekuritas: true,
+  notif_group_signal: true,
 };
 
 function thresholdLabel(v) {
@@ -269,6 +270,7 @@ export default function Settings() {
             <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Weekly postmortem</span><Toggle checked={settings.notif_weekly_postmortem} onChange={() => saveSettings({ ...settings, notif_weekly_postmortem: !settings.notif_weekly_postmortem })} /></div>
             <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Whale/Block Trade alert</span><Toggle checked={settings.notif_whale_alert} onChange={() => saveSettings({ ...settings, notif_whale_alert: !settings.notif_whale_alert })} /></div>
             <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Call Sekuritas (saringan harian)</span><Toggle checked={settings.notif_sekuritas} onChange={() => saveSettings({ ...settings, notif_sekuritas: !settings.notif_sekuritas })} /></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-slate-300">Grup Signal (broker sama akumulasi lintas emiten)</span><Toggle checked={settings.notif_group_signal} onChange={() => saveSettings({ ...settings, notif_group_signal: !settings.notif_group_signal })} /></div>
           </div>
         </div>
 

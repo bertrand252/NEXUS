@@ -14,6 +14,7 @@ from groq_client import translate_to_indonesian, explain_levels
 from rate_limit import limiter
 from forex_factory import get_forex_events
 import invezgo_client
+from ticker_groups import TICKER_GROUPS, GROUP_BY_TICKER
 
 router = APIRouter()
 
@@ -467,7 +468,7 @@ def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to
             "configured": False,
             "broker_summary": None, "top_broker_stalker": None, "insider_activity": None,
             "notation": None, "price_table": None, "financial_statement": None, "price_seasonality": None,
-            "sankey_chart": None, "shareholder_above": None,
+            "sankey_chart": None, "shareholder_above": None, "group_signal": None,
         }
 
     today = today_wib().isoformat()
@@ -540,6 +541,17 @@ def get_broker_flow(ticker: str, days: int = 7, from_date: str | None = None, to
         result["price_seasonality"] = invezgo_client.get_price_seasonality(ticker)
     except Exception:
         result["price_seasonality"] = None
+    try:
+        group_name = GROUP_BY_TICKER.get(ticker)
+        if group_name:
+            from scheduler import _detect_group_bandar  # lazy import, hindari circular import (scheduler.py import routers.scanner di top-level)
+            result["group_signal"] = _detect_group_bandar(TICKER_GROUPS[group_name], from_date, to_date)
+            if result["group_signal"]:
+                result["group_signal"]["group_name"] = group_name
+        else:
+            result["group_signal"] = None
+    except Exception:
+        result["group_signal"] = None
     return result
 
 

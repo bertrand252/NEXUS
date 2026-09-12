@@ -33,6 +33,7 @@ from config import TELEGRAM_CHANNEL_IDS, TELEGRAM_SCRAPE_CHANNELS
 from logger import get_logger
 import invezgo_client
 from invezgo_client import trim_financial_statement
+from ticker_groups import TICKER_GROUPS
 
 log = get_logger("scheduler")
 
@@ -2109,6 +2110,37 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
     }
 
 
+BANDAR_CONSISTENCY_PCT_THRESHOLD = 70  # sama kayak threshold steady_accumulation_sideways di atas
+
+
+def _detect_group_bandar(tickers: list[str], from_date: str, to_date: str) -> dict | None:
+    """Cek broker yang SAMA jadi top accumulator DAN konsisten di >=2 ticker
+    dalam 1 grup emiten (lihat ticker_groups.py) — reuse _detect_bandar per
+    ticker, JANGAN reimplement cumulative-diff logic-nya. None kalau broker
+    beda-beda per ticker atau cuma konsisten di 1 ticker — jangan fabricate
+    sinyal grup kalau gak ada overlap beneran."""
+    per_ticker = {t: _detect_bandar(t, from_date, to_date) for t in tickers}
+    broker_tickers: dict[str, list[str]] = {}
+    for t, bandar in per_ticker.items():
+        if bandar:
+            broker_tickers.setdefault(bandar["broker"], []).append(t)
+    best_broker, best_tickers = max(broker_tickers.items(), key=lambda kv: len(kv[1]), default=(None, []))
+    if best_broker is None or len(best_tickers) < 2:
+        return None
+    consistent = [t for t in best_tickers if (per_ticker[t]["consistency_pct"] or 0) >= BANDAR_CONSISTENCY_PCT_THRESHOLD]
+    if len(consistent) < 2:
+        return None
+    return {
+        "broker": best_broker,
+        "consistent_tickers": consistent,
+        "tickers": {t: {
+            "consistency_pct": per_ticker[t]["consistency_pct"],
+            "steady_accumulation_sideways": per_ticker[t]["steady_accumulation_sideways"],
+            "trend": per_ticker[t]["trend"],
+        } for t in tickers if per_ticker.get(t)},
+    }
+
+
 def _broker_defended_support(ticker: str, touch_dates: list[str]) -> dict | None:
     """Cross-check levels.py::well_defended_support (pola HARGA doang, dari
     swing-low pivot) lawan TAPE READING beneran (running-trade Invezgo) —
@@ -3508,6 +3540,48 @@ def _check_sekuritas_pick() -> None:
 
 async def run_sekuritas_pick() -> None:
     await _run_scheduled(SEKURITAS_PICK_HOUR, SEKURITAS_PICK_MINUTE, "sekuritas_pick", _check_sekuritas_pick)
+
+
+GROUP_SIGNAL_HOUR = 19  # abis broker data settle ~17:00-18:00 WIB, sebelum Night Recap jam 20:00
+
+
+def _check_group_signals() -> None:
+    if not is_trading_day(today_wib()):
+        return
+    settings = _load_settings()
+    if not settings["notif_group_signal"]:
+        return
+    bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+    today = today_wib().isoformat()
+    for group_name, tickers in TICKER_GROUPS.items():
+        try:
+            signal = _detect_group_bandar(tickers, bandar_from, today)
+        except Exception:
+            continue
+        if not signal:
+            continue
+        key = f"{signal['broker']}|{','.join(sorted(signal['consistent_tickers']))}"
+        category = f"group_signal_sent:{group_name}"
+        try:
+            prev = (
+                supabase.table("alert_dedup").select("key")
+                .eq("category", category).order("dedup_date", desc=True).limit(1).execute()
+            )
+        except Exception:
+            prev = None
+        if prev and prev.data and prev.data[0]["key"] == key:
+            continue  # sinyal sama kayak terakhir kali, jangan spam tiap hari
+        text = (
+            f"🔗 <b>GRUP SIGNAL — {_esc(group_name)}</b>\n\n"
+            f"🏦 Broker {_esc(signal['broker'])} konsisten top accumulator di "
+            f"{_esc(', '.join(signal['consistent_tickers']))}."
+        )
+        if send_alert(text):
+            _dedup_mark(category, key)
+
+
+async def run_group_signal_alert() -> None:
+    await _run_scheduled(GROUP_SIGNAL_HOUR, 0, "group_signal", _check_group_signals)
 
 
 PRE_MARKET_HOUR = 8
