@@ -2097,6 +2097,8 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
         return None
     ranked.sort(key=lambda r: r[1], reverse=True)
     top_broker, top_total, top_deltas = ranked[0]
+    bottom_broker, bottom_total, _ = ranked[-1]
+    top_distributor = bottom_broker if bottom_total < 0 else None  # broker paling net-JUAL periode ini, buat konteks "siapa yang distribusi"
     if top_total <= 0:
         return None  # gak ada broker yang net-BUY sepanjang periode, jangan nunjuk "bandar" ngasal
 
@@ -2162,6 +2164,8 @@ def _detect_bandar(ticker: str, from_date: str, to_date: str) -> dict | None:
         "trend": trend,
         "consistency_pct": consistency_pct,
         "steady_accumulation_sideways": steady_accumulation_sideways,
+        "top_distributor": top_distributor,  # broker paling net-JUAL (None kalau gak ada yang net-sell) — BUKAN klaim market maker resmi, cuma posisi net terbesar
+        "top_distributor_value": round(bottom_total, 0) if top_distributor else None,
     }
 
 
@@ -2194,6 +2198,113 @@ def _detect_group_bandar(tickers: list[str], from_date: str, to_date: str) -> di
             "trend": per_ticker[t]["trend"],
         } for t in tickers if per_ticker.get(t)},
     }
+
+
+BROKER_WATCH_WINDOW_DAYS = 90   # user: "amati berbulan-bulan" — cukup nangkep base/akumulasi multi-bulan,
+                                 # masih murah 1 get_inventory_chart_stock call/ticker/malam (_detect_bandar generik)
+BROKER_WATCH_TIMEOUT_DAYS = 120  # gak pernah promoted/dropped abis 4 bulan -> auto-drop, jangan numpuk selamanya
+
+
+def _queue_broker_watchlist(ticker: str, source: str, reason: str) -> None:
+    """Kandidat BPJS/sekuritas yang MENARIK (lolos momentum/RR sekuritas) tapi
+    levelnya belum layak call (SL kepepet/RR jelek) — daripada didiemin abis
+    itu (dulu: reject = ilang, gak pernah diliat lagi), masukin observasi
+    jangka panjang. `_check_broker_watchlist` (nightly) yang neken lanjut/
+    promote/drop dari data broker beneran, BUKAN dari harga doang. Gak nge-
+    reset observasi yang UDAH jalan (status masih 'observing') — cuma re-queue
+    kalau row belum ada / udah final (promoted/dropped) sebelumnya."""
+    try:
+        existing = supabase.table("broker_watchlist").select("status").eq("ticker", ticker).limit(1).execute()
+        if existing.data and existing.data[0]["status"] == "observing":
+            return
+        supabase.table("broker_watchlist").upsert({
+            "ticker": ticker, "source": source, "reason": reason,
+            "added_at": datetime.now(timezone.utc).isoformat(), "status": "observing",
+            "last_checked_at": None, "last_bandar": None,
+        }, on_conflict="ticker").execute()
+    except Exception:
+        log.exception(f"_queue_broker_watchlist({ticker}): gagal simpan")
+
+
+def _broker_watch_decision(bandar: dict | None, age_days: int) -> str:
+    """Fungsi murni — pisah dari _check_broker_watchlist biar testable tanpa
+    mock Supabase/Invezgo. 'promote' kalau akumulasi confirmed kuat, 'drop'
+    kalau distribusi/gak ada sinyal/kelamaan (timeout {BROKER_WATCH_TIMEOUT_DAYS}
+    hari), 'keep' kalau masih ambigu (lanjut diamatin)."""
+    if bandar and bandar["steady_accumulation_sideways"] and bandar["trend"] != "distribusi_meningkat":
+        return "promote"
+    if not bandar or bandar["trend"] == "distribusi_meningkat" or age_days >= BROKER_WATCH_TIMEOUT_DAYS:
+        return "drop"
+    return "keep"
+
+
+def _check_broker_watchlist() -> None:
+    """Nightly re-check semua ticker 'observing' — pake _detect_bandar YANG
+    SAMA (window {BROKER_WATCH_WINDOW_DAYS} hari, bukan reimplement), reuse
+    total. Promote (kirim notif) kalau pola akumulasi udah confirmed KUAT
+    (sideways+konsisten>=70%, trend gak lagi netral-doang). Drop DIAM-DIAM
+    (gak ada alert) kalau ternyata distribusi atau timeout — prinsip user:
+    mending gak ngasih sinyal daripada ngasih sinyal ngasal, drop bukan
+    kegagalan, itu observasi ngasih jawaban 'ternyata bukan'."""
+    if not invezgo_client.is_configured():
+        return
+    try:
+        rows = supabase.table("broker_watchlist").select("*").eq("status", "observing").execute().data
+    except Exception:
+        log.exception("_check_broker_watchlist: gagal query")
+        return
+    if not rows:
+        return
+
+    settings = _load_settings()
+    notify = settings["notif_broker_watchlist"]
+    today = today_wib()
+    from_date = (today - timedelta(days=BROKER_WATCH_WINDOW_DAYS)).isoformat()
+    to_date = today.isoformat()
+
+    for row in rows:
+        ticker = row["ticker"]
+        age_days = (today - date.fromisoformat(row["added_at"][:10])).days
+        try:
+            bandar = _detect_bandar(ticker, from_date, to_date)
+        except Exception:
+            log.exception(f"_check_broker_watchlist({ticker}): _detect_bandar gagal")
+            continue
+
+        update = {"last_checked_at": datetime.now(timezone.utc).isoformat(), "last_bandar": bandar}
+        decision = _broker_watch_decision(bandar, age_days)
+        if decision == "promote":
+            update["status"] = "promoted"
+            if notify:
+                text = (
+                    f"🔎 <b>Observasi Broker — {_esc(ticker)}</b>\n\n"
+                    f"Udah {age_days} hari diamati (awalnya: {_esc(row['reason'])}). Sekarang pola akumulasi "
+                    f"CONFIRMED: broker <b>{_esc(bandar['broker'])}</b> konsisten net-buy {bandar['consistency_pct']}% "
+                    f"hari dalam {BROKER_WATCH_WINDOW_DAYS} hari terakhir, harga masih sideways (base terjaga).\n\n"
+                    f"⚠️ Perkiraan posisi broker, BUKAN konfirmasi resmi siapa 'bandar'-nya. Cek manual sebelum entry — "
+                    f"ini heads-up observasi, bukan call TP/SL siap pakai."
+                )
+                if not send_alert(text):
+                    log.warning(f"_check_broker_watchlist({ticker}): send_alert promote gagal")
+        elif decision == "drop":
+            update["status"] = "dropped"
+        try:
+            supabase.table("broker_watchlist").update(update).eq("ticker", ticker).execute()
+        except Exception:
+            log.exception(f"_check_broker_watchlist({ticker}): gagal update status")
+
+
+BROKER_WATCHLIST_HOUR = 19  # abis jam update broker summary Invezgo (17:00-18:00 WIB), sebelum night_recap (20:00)
+
+
+async def run_broker_watchlist_check() -> None:
+    await _run_scheduled(BROKER_WATCHLIST_HOUR, 0, "broker_watchlist_check", _run_broker_watchlist_check_step)
+
+
+def _run_broker_watchlist_check_step() -> None:
+    if not is_trading_day(today_wib()):
+        return
+    _check_broker_watchlist()
 
 
 def _broker_defended_support(ticker: str, touch_dates: list[str]) -> dict | None:
@@ -3411,8 +3522,10 @@ def _check_bpjs() -> None:
     if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
         return  # SL/TP kejauhan dari harga sekarang, sama sanity check kayak Swing — jangan kirim angka ngaco
     if levels["risk_pct"] < MIN_SL_PCT_DAYTRADE:
+        _queue_broker_watchlist(ticker, "bpjs", "SL kepepet (<2%) buat day-trade, belum layak call sekarang")
         return  # SL kepepet banget (insiden GDST) — gampang whipsaw noise harian, bukan thesis invalid
     if levels["rr_ratio"] < MIN_RR_RATIO:
+        _queue_broker_watchlist(ticker, "bpjs", "RR di bawah minimum, saham menarik tapi levelnya belum pas")
         return  # kejadian nyata: PGAS TP +0.65% (RR "Buruk") lolos kirim — biaya beli+jual
         # broker retail Indonesia aja udah ~0.5-0.7% roundtrip, TP situ abis kegerus fee doang.
         # Groq milih ticker SEBELUM levels dihitung (gak pernah liat RR), jadi guard Python di
@@ -3659,6 +3772,8 @@ def _check_sekuritas_pick() -> None:
         validated = _validate_sekuritas_pick(pick, valid_tickers)
         if validated is None:
             log.info(f"_check_sekuritas_pick: skip {pick.get('ticker')} — gak lolos validasi (ticker/level/RR)")
+            if pick.get("ticker") in valid_tickers and pick.get("gaya") == "bpjs":
+                _queue_broker_watchlist(pick["ticker"], "sekuritas", "call sekuritas gaya BPJS tapi gak lolos guard SL/RR")
             continue
         pick = validated
         ticker, entry_price, target, stop_loss, gaya = pick["ticker"], pick["entry"], pick["target"], pick["stop_loss"], pick["gaya"]

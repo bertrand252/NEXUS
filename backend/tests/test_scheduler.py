@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _detect_group_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick
+from scheduler import _format_bandar_line, _detect_bandar, _detect_group_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick, _broker_watch_decision, BROKER_WATCH_TIMEOUT_DAYS
 from unittest.mock import patch
 
 
@@ -219,6 +219,47 @@ def test_detect_bandar_flags_steady_accumulation_when_sideways_and_consistent():
     assert result["steady_accumulation_sideways"] is True
     assert result["consistency_pct"] == 100.0
     assert result["cumulative_net_value"] == 5000  # value TERAKHIR, bukan di-sum
+
+
+def test_detect_bandar_reports_top_distributor():
+    # broker AG net-buy (top), broker CC net-sell terbanyak -> top_distributor
+    inv = {
+        "price": [{"close": c} for c in [100, 101, 99, 100, 102, 100]],
+        "broker": [
+            {"broker": "AG", "data": [{"date": f"2026-08-{d:02d}", "value": v} for d, v in zip(range(1, 6), [1000, 2000, 3000, 4000, 5000])]},
+            {"broker": "CC", "data": [{"date": f"2026-08-{d:02d}", "value": v} for d, v in zip(range(1, 6), [-500, -1500, -2500, -3500, -4500])]},
+        ],
+    }
+    with patch("scheduler.invezgo_client.is_configured", return_value=True), \
+         patch("scheduler.invezgo_client.get_inventory_chart_stock", return_value=inv), \
+         patch("scheduler.invezgo_client.get_running_trade", return_value={"data": []}):
+        result = _detect_bandar("TEST", "2026-08-01", "2026-08-06")
+    assert result["top_distributor"] == "CC"
+    assert result["top_distributor_value"] == -4500
+
+
+def test_broker_watch_decision_promotes_confirmed_accumulation():
+    bandar = {"steady_accumulation_sideways": True, "trend": "akumulasi_meningkat"}
+    assert _broker_watch_decision(bandar, age_days=30) == "promote"
+
+
+def test_broker_watch_decision_drops_on_distribution():
+    bandar = {"steady_accumulation_sideways": True, "trend": "distribusi_meningkat"}  # flip: dulu confirmed, sekarang jual
+    assert _broker_watch_decision(bandar, age_days=30) == "drop"
+
+
+def test_broker_watch_decision_drops_on_no_data():
+    assert _broker_watch_decision(None, age_days=30) == "drop"
+
+
+def test_broker_watch_decision_drops_on_timeout_even_if_neutral():
+    bandar = {"steady_accumulation_sideways": False, "trend": "netral"}
+    assert _broker_watch_decision(bandar, age_days=BROKER_WATCH_TIMEOUT_DAYS) == "drop"
+
+
+def test_broker_watch_decision_keeps_ambiguous_within_timeout():
+    bandar = {"steady_accumulation_sideways": False, "trend": "netral"}
+    assert _broker_watch_decision(bandar, age_days=30) == "keep"
 
 
 def test_detect_bandar_no_flag_when_not_sideways():
