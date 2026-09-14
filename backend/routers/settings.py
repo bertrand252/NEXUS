@@ -18,6 +18,7 @@ DEFAULTS = {
     "notif_sekuritas": True,       # saringan call trading dari channel sekuritas yang dipantau, 1x/hari abis market tutup
     "notif_group_signal": True,    # broker sama konsisten akumulasi di >=2 ticker 1 grup emiten, 1x/hari 19:00 WIB
     "notif_weekly_research": True,  # outlook mingguan (sector rotation + top accum/foreign + event minggu ini), Senin pagi
+    "notif_broker_watchlist": True,  # observasi broker jangka panjang (BPJS/sekuritas yang gagal guard) confirmed akumulasi
 }
 
 
@@ -35,6 +36,7 @@ class SettingsInput(BaseModel):
     notif_sekuritas: bool = True
     notif_group_signal: bool = True
     notif_weekly_research: bool = True
+    notif_broker_watchlist: bool = True
 
 
 @router.get("")
