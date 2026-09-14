@@ -394,6 +394,13 @@ MIN_CONVICTION_BPJS = 3  # day-trade, gate lebih longgar sesuai sifatnya (lihat 
 MAX_RISK_PCT = 20
 MAX_REWARD_PCT = 50
 
+MIN_SL_PCT_DAYTRADE = 2  # BPJS doang (day-trade 1 sesi) — kejadian nyata (GDST): SL 1,55% dari
+                          # nearest_support_resistance() kepepet banget ke harga sekarang, gampang
+                          # kena whipsaw noise harian biasa (bukan invalidasi thesis beneran),
+                          # padahal TP-nya jauh (RR lolos MIN_RR_RATIO tapi RR lebar itu dari SL
+                          # yang gak realistis, bukan target yang emang deket). 2% ~3-4x biaya
+                          # roundtrip broker retail (~0.5-0.7%), lantai wajar buat noise 1 sesi.
+
 
 _levels_cache: dict[str, dict] = {}  # {ticker: levels lengkap} dari _gather_candidates, dibaca check_and_alert()
 _invezgo_enrich_cache: dict[str, dict] = {}  # {ticker: {"date": str, "fields": dict}} — 1x fetch/ticker/hari, lihat komentar di _gather_candidates
@@ -3079,6 +3086,135 @@ def _in_whale_check_window() -> bool:
     return is_trading_day(now.date()) and MARKET_OPEN <= now.time() < WHALE_CHECK_CLOSE
 
 
+def _bpjs_pool_tickers(pool_limit: int = BPJS_POOL_LIMIT) -> set[str]:
+    """Union ticker Stage-1 BPJS (volume_ratio tinggi | mentor call aktif |
+    buy-on-weakness) — DIPISAH dari _gather_bpjs_candidates biar bisa dipake
+    ULANG sama _capture_iep() (perlu tau ticker mana yang bakal jadi kandidat
+    SEBELUM market buka jam 08:58, biar IEP open-nya sempet ke-capture). Aman
+    dipake sebelum market buka — scanner_cache & mentor sheet cuma refresh 1x
+    pagi (run_morning_routine), gak berubah intraday, jadi pool ini KONSISTEN
+    dipanggil jam berapapun hari yang sama."""
+    try:
+        scan_res = (
+            supabase.table("scanner_cache").select("ticker")
+            .gte("volume_ratio", 1.3).order("volume_ratio", desc=True).limit(pool_limit)
+            .execute()
+        )
+        scan_tickers = {r["ticker"] for r in scan_res.data}
+    except Exception:
+        scan_tickers = set()
+
+    # "buy on weakness" — SAMA jalur alternatif kayak Swing (support berkali-
+    # kali disentuh & mantul), user eksplisit minta diperluas ke BPJS juga.
+    # Query TERPISAH tanpa gate volume_ratio (kandidat ini JUSTRU lagi tenang/
+    # gak rame volume, itu poinnya).
+    try:
+        support_res = (
+            supabase.table("scanner_cache").select("ticker")
+            .eq("cocok_buy_on_weakness", True).limit(pool_limit).execute()
+        )
+        support_tickers = {r["ticker"] for r in support_res.data}
+    except Exception:
+        support_tickers = set()
+
+    return scan_tickers | set(_active_mentor_calls()) | support_tickers
+
+
+def _fetch_iep(ticker: str, session: str) -> float | None:
+    """IEP (Indicative Equilibrium Price, harga hasil match auction pra-buka/
+    pra-tutup) dari running-trade Invezgo — WAJIB dipanggil TEPAT jam capture
+    (08:58 open / 16:00 close, lihat _capture_iep), IEP bisa direvisi terus
+    sampe auction freeze jadi kepagian fetch = data basi/beda (permintaan
+    eksplisit user, dari sini jangan dimundurin).
+
+    Diverifikasi manual lawan API asli (BBRI 2026-09-11 & 09-14): banyak trade
+    dengan timestamp IDENTIK ('08:58:00'/'16:00:00') + harga IDENTIK di
+    running-trade pas jam itu — itu hasil auction match (banyak lawan transaksi
+    ke-fill bareng di 1 harga equilibrium), BUKAN rangkaian trade reguler biasa.
+    session='open': halaman PERTAMA (trade paling awal hari itu = hasil match
+    pra-buka). session='close': halaman TERAKHIR SAAT DIPANGGIL (kalau tepat
+    jam 16:00:0x, belum ada trade post-closing 16:00-16:25 yang numpuk lagi)
+    — pola pengambilan halaman terakhir sama kayak _check_whale_alerts."""
+    today = today_wib().isoformat()
+    try:
+        first = invezgo_client.get_running_trade(ticker, today, page=1, limit=50)
+    except Exception:
+        return None
+    rows = first.get("data") or []
+    if not rows:
+        return None
+    if session == "open":
+        return float(rows[0]["price"])
+    total_page = first.get("totalPage") or 1
+    page_data = first
+    if total_page > 1:
+        try:
+            page_data = invezgo_client.get_running_trade(ticker, today, page=total_page, limit=50)
+        except Exception:
+            return None
+    rows2 = page_data.get("data") or []
+    return float(rows2[-1]["price"]) if rows2 else None
+
+
+def _capture_iep(session: str) -> None:
+    """Snapshot IEP hari ini buat SEMUA ticker pool BPJS Stage-1, upsert ke
+    `iep_snapshots` (ticker, tanggal, iep_open, iep_close). Dipanggil dari 2
+    job _run_scheduled TERPISAH jam 08:58 & 16:00 persis (lihat run_iep_*_
+    capture) — session cuma nentuin kolom mana yang ditulis, gak nge-touch
+    kolom lainnya (upsert partial column, aman dipanggil 2x beda jam tanpa
+    saling nimpa)."""
+    if not invezgo_client.is_configured() or not is_trading_day(today_wib()):
+        return
+    tickers = _bpjs_pool_tickers()
+    if not tickers:
+        return
+    tanggal = today_wib().isoformat()
+    col = "iep_open" if session == "open" else "iep_close"
+    for ticker in tickers:
+        price = _fetch_iep(ticker, session)
+        if price is None:
+            continue
+        try:
+            supabase.table("iep_snapshots").upsert(
+                {"ticker": ticker, "tanggal": tanggal, col: price}, on_conflict="ticker,tanggal"
+            ).execute()
+        except Exception:
+            pass
+
+
+async def run_iep_open_capture() -> None:
+    await _run_scheduled(8, 58, "iep_open_capture", lambda: _capture_iep("open"))
+
+
+async def run_iep_close_capture() -> None:
+    await _run_scheduled(16, 0, "iep_close_capture", lambda: _capture_iep("close"))
+
+
+def _iep_gap_pct(ticker: str) -> float | None:
+    """Gap % IEP open HARI INI vs IEP close hari trading TERAKHIR yang ada
+    datanya (bukan bandingin ke harga close candle harian biasa) — settlement
+    resmi pra-buka/pra-tutup, jadi konteks gap yang lebih presisi buat Groq
+    BPJS. None (bukan 0) kalau salah satu datanya belum ke-capture — jangan
+    nebak gap kalau gak ada datanya."""
+    try:
+        res = (
+            supabase.table("iep_snapshots").select("tanggal,iep_open,iep_close")
+            .eq("ticker", ticker).order("tanggal", desc=True).limit(5).execute()
+        )
+    except Exception:
+        return None
+    rows = res.data
+    today_str = today_wib().isoformat()
+    today_row = next((r for r in rows if r["tanggal"] == today_str and r.get("iep_open")), None)
+    if not today_row:
+        return None
+    prev_row = next((r for r in rows if r["tanggal"] != today_str and r.get("iep_close")), None)
+    if not prev_row:
+        return None
+    prev_close = prev_row["iep_close"]
+    return round((today_row["iep_open"] - prev_close) / prev_close * 100, 2)
+
+
 def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
     """Stage-1 murah: scanner_cache yang ada aktivitas hari ini (volume_ratio
     >=1.3, longgar — ponytail heuristic cuma nyaring saham 'lagi hidup') ATAU
@@ -3091,30 +3227,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
     news_by_ticker = _recent_news_by_ticker()
     channel_calls_by_ticker = _recent_trade_calls_by_ticker()
 
-    try:
-        scan_res = (
-            supabase.table("scanner_cache").select("ticker,price,volume_ratio")
-            .gte("volume_ratio", 1.3).order("volume_ratio", desc=True).limit(pool_limit)
-            .execute()
-        )
-        scan_by_ticker = {r["ticker"]: r for r in scan_res.data}
-    except Exception:
-        scan_by_ticker = {}
-
-    # "buy on weakness" — SAMA jalur alternatif kayak Swing (support berkali-
-    # kali disentuh & mantul), user eksplisit minta diperluas ke BPJS juga.
-    # Query TERPISAH tanpa gate volume_ratio (kandidat ini JUSTRU lagi tenang/
-    # gak rame volume, itu poinnya).
-    try:
-        support_res = (
-            supabase.table("scanner_cache").select("ticker,price,volume_ratio")
-            .eq("cocok_buy_on_weakness", True).limit(pool_limit).execute()
-        )
-        support_defended_tickers = {r["ticker"] for r in support_res.data}
-    except Exception:
-        support_defended_tickers = set()
-
-    pool = set(scan_by_ticker) | set(mentor_by_ticker) | support_defended_tickers
+    pool = _bpjs_pool_tickers(pool_limit)
     session = "s2" if _now_wib().time() >= time(13, 0) else "s1"
 
     candidates = []
@@ -3174,6 +3287,15 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
                 bandar = _detect_bandar(ticker, bandar_from, today_wib().isoformat())
             except Exception:
                 pass
+        # gap IEP open hari ini vs IEP close hari sebelumnya — cuma keisi
+        # kalau _capture_iep udah jalan jam 08:58 (lihat run_iep_open_capture),
+        # None kalau belum/gagal, JANGAN nebak.
+        iep_gap_pct = None
+        if invezgo_client.is_configured():
+            try:
+                iep_gap_pct = _iep_gap_pct(ticker)
+            except Exception:
+                pass
         if momentum_score <= 0 and not mentor and not buy_on_weakness:
             continue
         candidates.append({
@@ -3190,6 +3312,7 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
             "buy_on_weakness": buy_on_weakness,
             "chart_pattern": chart_pattern,
             "bandar": bandar,
+            "iep_gap_pct": iep_gap_pct,
         })
 
     candidates.sort(key=lambda c: c["momentum_score"], reverse=True)
@@ -3218,9 +3341,11 @@ def _build_bpjs_caption(ticker: str, candidate: dict, pick: dict, levels: dict) 
     faktor_line = f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor))}\n\n" if faktor else ""
     session_label = "Sesi 2 (siang-sore)" if candidate["session"] == "s2" else "Sesi 1 (pagi)"
     mentor_line = "\n👤 Ada call aktif mentor trading." if candidate.get("mentor_call") else ""
+    iep_gap = candidate.get("iep_gap_pct")
+    iep_line = f"\n📐 Gap IEP pra-buka: {iep_gap:+.2f}%." if iep_gap is not None else ""
     return (
         f"⚡ <b>BPJS — Day Trade — {_esc(ticker)}</b>\n\n"
-        f"Momentum terdeteksi di {session_label}, skor relatif {candidate['momentum_score']}x rata-rata sesi.{mentor_line}\n\n"
+        f"Momentum terdeteksi di {session_label}, skor relatif {candidate['momentum_score']}x rata-rata sesi.{mentor_line}{iep_line}\n\n"
         f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f}-Rp{levels['entry_high']:,.0f}\n"
         f"🎯 <b>TARGET</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%)\n"
         f"⛔ <b>STOP LOSS</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
@@ -3285,6 +3410,8 @@ def _check_bpjs() -> None:
         return
     if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
         return  # SL/TP kejauhan dari harga sekarang, sama sanity check kayak Swing — jangan kirim angka ngaco
+    if levels["risk_pct"] < MIN_SL_PCT_DAYTRADE:
+        return  # SL kepepet banget (insiden GDST) — gampang whipsaw noise harian, bukan thesis invalid
     if levels["rr_ratio"] < MIN_RR_RATIO:
         return  # kejadian nyata: PGAS TP +0.65% (RR "Buruk") lolos kirim — biaya beli+jual
         # broker retail Indonesia aja udah ~0.5-0.7% roundtrip, TP situ abis kegerus fee doang.
@@ -3476,9 +3603,11 @@ def _validate_sekuritas_pick(pick: dict, valid_tickers: set[str]) -> dict | None
     risk_pct = round((entry_price - stop_loss) / entry_price * 100, 2)
     reward_pct = round((target - entry_price) / entry_price * 100, 2)
     rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+    gaya = pick.get("gaya") if pick.get("gaya") in SEKURITAS_STYLE_META else "swing"
     if risk_pct > MAX_RISK_PCT or reward_pct > MAX_REWARD_PCT or rr_ratio < MIN_RR_RATIO:
         return None
-    gaya = pick.get("gaya") if pick.get("gaya") in SEKURITAS_STYLE_META else "swing"
+    if gaya == "bpjs" and risk_pct < MIN_SL_PCT_DAYTRADE:
+        return None  # sama guard kayak _check_bpjs — SL kepepet gampang whipsaw noise 1 sesi
     return {**pick, "entry": entry_price, "target": target, "stop_loss": stop_loss, "gaya": gaya}
 
 
@@ -3649,6 +3778,7 @@ def _send_morning_briefing() -> None:
     try:
         briefing = _generate_briefing()
     except Exception:
+        log.exception("_send_morning_briefing: _generate_briefing gagal, briefing pagi gak kekirim")
         return
 
     sentiment = briefing.get("market_sentiment", "")
@@ -3699,7 +3829,8 @@ def _send_morning_briefing() -> None:
                 f"Entry Rp{r['entry_price']:,.0f} · TP Rp{r['target']:,.0f} · SL Rp{r['stop_loss']:,.0f}"
             )
 
-    send_alert("\n".join(lines))
+    if not send_alert("\n".join(lines)):
+        log.warning("_send_morning_briefing: send_alert gagal/gak ada chat_id tersimpan")
 
 
 async def run_pre_market_briefing() -> None:
@@ -3859,3 +3990,92 @@ def _send_weekly_postmortem() -> None:
 
 async def run_weekly_postmortem() -> None:
     await _run_scheduled(WEEKLY_POSTMORTEM_HOUR, 0, "weekly_postmortem", _send_weekly_postmortem, weekday=6)
+
+
+WEEKLY_RESEARCH_HOUR = 7  # Senin pagi WIB, sebelum pre-market briefing (08:45) & market buka (09:00)
+
+
+def _last_trading_day_before(d: date) -> str:
+    cur = d - timedelta(days=1)
+    for _ in range(7):
+        if is_trading_day(cur):
+            return cur.isoformat()
+        cur -= timedelta(days=1)
+    return cur.isoformat()  # fallback, gak bakal kepake normalnya
+
+
+def _send_weekly_research() -> None:
+    """Outlook mingguan gaya 'Weekly Market Pulse' (contoh Mirae Asset) — TAPI
+    diadaptasi ke data yang NEXUS BENERAN punya (prinsip anti-fabrikasi #3),
+    bukan tiru struktur persis (foreign flow per saham granular ala sekuritas
+    gak ada datanya). 3 section, SEMUA data asli: Sector Rotation (RRG
+    mingguan Invezgo), Top Accumulation/Foreign Flow (snapshot hari bursa
+    TERAKHIR, dilabelin jujur tanggalnya — bukan agregat sepekan, Invezgo cuma
+    ngasih snapshot per-hari), Event Ekonomi High Impact minggu ini (Forex
+    Factory). BUKAN rekap performa call NEXUS (itu udah ada, Weekly
+    Postmortem Minggu malam) — ini forward-looking doang."""
+    if not is_trading_day(today_wib()):
+        return
+    settings = _load_settings()
+    if not settings["notif_weekly_research"]:
+        return
+
+    today = today_wib()
+    lines = [f"🧭 <b>WEEKLY MARKET OUTLOOK</b> | {_tanggal_display(today)}\n"]
+
+    if invezgo_client.is_configured():
+        try:
+            since = (today - timedelta(days=90)).isoformat()
+            rot = invezgo_client.get_sector_rotation(since, today.isoformat())
+            rows = rot.get("data") or []
+            leading = [r["name"] for r in rows if r.get("quadrant") == "leading"]
+            lagging = [r["name"] for r in rows if r.get("quadrant") == "lagging"]
+            if leading or lagging:
+                lines.append("🌐 <b>SECTOR ROTATION</b>")
+                if leading:
+                    lines.append(f"🟢 Leading: {_esc(', '.join(leading))}")
+                if lagging:
+                    lines.append(f"🔴 Lagging: {_esc(', '.join(lagging))}")
+                lines.append("")
+        except Exception:
+            log.exception("_send_weekly_research: sector rotation gagal")
+
+        try:
+            snap_date = _last_trading_day_before(today)
+            acc = invezgo_client.get_top_accumulation(snap_date)
+            frn = invezgo_client.get_top_foreign(snap_date)
+            top_accum = (acc.get("accum") or [])[:3]
+            top_dist = (acc.get("dist") or [])[:3]
+            top_foreign_buy = (frn.get("accum") or [])[:3]
+            top_foreign_sell = (frn.get("dist") or [])[:3]
+            if top_accum or top_dist or top_foreign_buy or top_foreign_sell:
+                lines.append(f"📊 <b>BROKER FLOW SNAPSHOT</b> (data {_esc(snap_date)})")
+                if top_accum:
+                    lines.append("🟢 Top Akumulasi: " + _esc(", ".join(f"{r['code']}" for r in top_accum)))
+                if top_dist:
+                    lines.append("🔴 Top Distribusi: " + _esc(", ".join(f"{r['code']}" for r in top_dist)))
+                if top_foreign_buy:
+                    lines.append("🌏 Top Foreign Buy: " + _esc(", ".join(f"{r['code']}" for r in top_foreign_buy)))
+                if top_foreign_sell:
+                    lines.append("🌏 Top Foreign Sell: " + _esc(", ".join(f"{r['code']}" for r in top_foreign_sell)))
+                lines.append("")
+        except Exception:
+            log.exception("_send_weekly_research: broker flow snapshot gagal")
+
+    try:
+        events = [e for e in get_forex_events() if e.get("impact") == "High" and e["date"] >= today.isoformat()]
+    except Exception:
+        events = []
+    if events:
+        lines.append("📅 <b>EVENT HIGH IMPACT MINGGU INI</b>")
+        for e in events[:10]:
+            lines.append(f"{e['flag']} {e['date']} {e['time_wib']} WIB — {_esc(e['event'])}")
+
+    if len(lines) <= 1:
+        return  # gak ada data apapun (Invezgo gak configured + gak ada event high impact) — jangan kirim kosongan
+    if not send_alert("\n".join(lines)):
+        log.warning("_send_weekly_research: send_alert gagal/gak ada chat_id tersimpan")
+
+
+async def run_weekly_research() -> None:
+    await _run_scheduled(WEEKLY_RESEARCH_HOUR, 0, "weekly_research", _send_weekly_research, weekday=0)

@@ -411,6 +411,18 @@ def test_validate_sekuritas_pick_rejects_bad_rr():
     assert _validate_sekuritas_pick(pick, {"BBCA"}) is None
 
 
+def test_validate_sekuritas_pick_rejects_too_tight_sl_for_bpjs():
+    # insiden GDST (2026-09-14): SL 1.55% dari nearest_support_resistance()
+    # kepepet banget ke harga sekarang buat day-trade 1 sesi, gampang kena
+    # whipsaw noise harian biasa walau RR-nya lolos (TP jauh, bukan SL deket
+    # yang wajar). MIN_SL_PCT_DAYTRADE cuma berlaku buat gaya bpjs.
+    pick = {"ticker": "BBCA", "entry": 9500, "target": 10200, "stop_loss": 9400, "gaya": "bpjs"}  # SL 1.05%, RR ~7.4
+    assert _validate_sekuritas_pick(pick, {"BBCA"}) is None
+    # gaya lain (swing/bsjp) gak kena floor ini
+    pick_swing = {**pick, "gaya": "swing"}
+    assert _validate_sekuritas_pick(pick_swing, {"BBCA"}) is not None
+
+
 def test_validate_sekuritas_pick_rejects_missing_or_malformed_fields():
     assert _validate_sekuritas_pick({"ticker": "BBCA", "entry": None, "target": 9800, "stop_loss": 9300}, {"BBCA"}) is None
     assert _validate_sekuritas_pick({"ticker": "BBCA", "target": 9800, "stop_loss": 9300}, {"BBCA"}) is None

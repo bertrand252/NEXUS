@@ -17,6 +17,7 @@ from scheduler import (
     run_bsjp_screener,
     run_bsjp_hold_check,
     run_weekly_postmortem,
+    run_weekly_research,
     run_telegram_channel_listener,
     run_telegram_scrape_listener,
     run_entry_zone_watcher,
@@ -26,6 +27,8 @@ from scheduler import (
     run_whale_confirm,
     run_sekuritas_pick,
     run_group_signal_alert,
+    run_iep_open_capture,
+    run_iep_close_capture,
 )
 
 
@@ -54,7 +57,11 @@ async def lifespan(app: FastAPI):
     milih maks 2 paling meyakinkan + cross-check RR/teknikal, BUKAN comot
     mentah dari analis), run_group_signal_alert (19:00 WIB, cek broker yang
     SAMA konsisten akumulasi di >=2 ticker 1 grup emiten curated manual —
-    lihat ticker_groups.py, seed pertama Grup Merdeka MDKA+MBMA).
+    lihat ticker_groups.py, seed pertama Grup Merdeka MDKA+MBMA),
+    run_iep_open_capture/run_iep_close_capture (08:58/16:00 WIB PERSIS —
+    snapshot IEP/Indicative Equilibrium Price hasil auction pra-buka/pra-tutup
+    buat pool ticker BPJS, dipake sebagai iep_gap_pct di pick_bpjs_candidate;
+    WAJIB tepat jam itu karena IEP bisa direvisi terus sampe auction freeze).
     Semua skip diem-diem kalau config/setting terkait kosong/off."""
     tasks = [
         asyncio.create_task(run_scheduler()),
@@ -64,6 +71,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_bsjp_hold_check()),
         asyncio.create_task(run_night_recap()),
         asyncio.create_task(run_weekly_postmortem()),
+        asyncio.create_task(run_weekly_research()),
         asyncio.create_task(run_telegram_channel_listener()),
         asyncio.create_task(run_telegram_scrape_listener()),
         asyncio.create_task(run_entry_zone_watcher()),
@@ -73,6 +81,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_whale_confirm()),
         asyncio.create_task(run_sekuritas_pick()),
         asyncio.create_task(run_group_signal_alert()),
+        asyncio.create_task(run_iep_open_capture()),
+        asyncio.create_task(run_iep_close_capture()),
     ]
     yield
     for t in tasks:
