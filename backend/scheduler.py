@@ -1856,6 +1856,41 @@ BIG_CAP_TICKERS = [
 ]
 
 
+BULAN_ID = ["", "JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"]
+
+
+def _tanggal_display(d: date) -> str:
+    """Format tanggal gaya 'Closing Bell' Mirae Asset, mis. '14 SEP 2026'."""
+    return f"{d.day} {BULAN_ID[d.month]} {d.year}"
+
+
+def _stock_highlights(berita_items: list[dict], limit: int = 6) -> list[dict]:
+    """Gabungin berita per-saham (`{saham, berita}` dari daily_briefing) sama
+    harga/persen closing hari ini (scanner_cache) — bahan section 'STOCK
+    HIGHLIGHTS' gaya Closing Bell yang user minta (contoh Mirae Asset: ticker
+    + harga + persen + 1 kalimat katalis). Ticker yang gak ketemu row-nya di
+    scanner_cache (mis. label level-index kayak 'IHSG') tetep ditampilin,
+    cuma tanpa baris harga — bukan di-skip diem-diem."""
+    tickers = [b["saham"] for b in berita_items[:limit] if b.get("saham")]
+    if not tickers:
+        return []
+    try:
+        res = supabase.table("scanner_cache").select("ticker,price,change_pct").in_("ticker", tickers).execute()
+        price_map = {r["ticker"]: r for r in res.data}
+    except Exception:
+        price_map = {}
+    out = []
+    for b in berita_items[:limit]:
+        row = price_map.get(b.get("saham"))
+        out.append({
+            "saham": b.get("saham"),
+            "berita": b.get("berita"),
+            "price": row["price"] if row else None,
+            "change_pct": row["change_pct"] if row else None,
+        })
+    return out
+
+
 def _top_ihsg_movers(limit: int = 5) -> list[dict]:
     """Top saham big cap (dari BIG_CAP_TICKERS) yang paling banyak berubah
     hari ini, proxy buat 'penggerak utama IHSG' — dari scanner_cache (udah
@@ -1942,19 +1977,7 @@ def _send_night_recap() -> None:
 
     stats = get_signal_track_stats()
     movers = _top_ihsg_movers()
-
-    lines = ["🌙 <b>Market Close Report — NEXUS</b>\n"]
-    if ihsg:
-        arrow = "🟢" if ihsg["change_pct"] >= 0 else "🔴"
-        lines.append(f"{arrow} IHSG closing: <b>{ihsg['price']:,.0f}</b> ({ihsg['change_pct']:+.2f}%)")
-    else:
-        lines.append("⚪ IHSG: data gak ketemu hari ini.")
-
-    if movers:
-        lines.append("\n<b>Top Penggerak Big Cap</b>")
-        for m in movers:
-            arrow = "🟢" if m["change_pct"] >= 0 else "🔴"
-            lines.append(f"{arrow} {_esc(m['ticker'])} {m['change_pct']:+.2f}% (Rp{m['price']:,.0f})")
+    berita_today = _today_morning_berita()
 
     try:
         upcoming_events = [
@@ -1964,19 +1987,44 @@ def _send_night_recap() -> None:
     except Exception:
         upcoming_events = []
 
+    alasan = ""
     if ihsg or movers:
         alasan = ask_night_recap_review({
             "ihsg_price": ihsg["price"] if ihsg else None,
             "ihsg_change_pct": ihsg["change_pct"] if ihsg else None,
             "top_movers": movers,
-            "berita_pagi": _today_morning_berita(),
+            "berita_pagi": berita_today,
             "foreign_flow_top": _today_foreign_flow_snapshot(),
             "event_ekonomi_dekat": upcoming_events,
-        })
-        if alasan:
-            lines.append(f"\n🧠 <b>Kenapa bisa gini?</b>\n{_esc(alasan)}")
+        }) or ""
 
-    lines.append(f"\n📈 Strong signal hari ini: <b>{strong_count}</b> ticker")
+    # Headline paragraph gaya "Closing Bell" Mirae Asset — kalimat IHSG + kenapa-
+    # nya (Groq) + penggerak utama digabung jadi 1 paragraf pembuka, bukan
+    # section-section terpisah kayak format lama.
+    lines = [f"🔔 <b>CLOSING BELL</b> | {_tanggal_display(today_wib())}\n"]
+    headline = []
+    if ihsg:
+        headline.append(f"IHSG closing di <b>{ihsg['price']:,.0f}</b> ({ihsg['change_pct']:+.2f}%).")
+    else:
+        headline.append("IHSG: data closing gak ketemu hari ini.")
+    if alasan:
+        headline.append(_esc(alasan))
+    if movers:
+        penggerak = ", ".join(f"{_esc(m['ticker'])} ({m['change_pct']:+.2f}%)" for m in movers[:3])
+        headline.append(f"Penggerak utama: {penggerak}.")
+    lines.append(" ".join(headline))
+
+    highlights = _stock_highlights(berita_today)
+    if highlights:
+        lines.append("\n📌 <b>STOCK HIGHLIGHTS</b>")
+        for h in highlights:
+            if h["price"] is not None:
+                lines.append(f"\n<b>{_esc(h['saham'])} Rp{h['price']:,.0f} ({h['change_pct']:+.2f}%)</b>")
+            else:
+                lines.append(f"\n<b>{_esc(h['saham'])}</b>")
+            lines.append(_esc(h["berita"]))
+
+    lines.append(f"\n📊 Strong signal hari ini: <b>{strong_count}</b> ticker")
     if stats.get("win_rate_pct") is not None:
         lines.append(f"🎯 Win rate NEXUS: <b>{stats['win_rate_pct']}%</b> ({stats['tp_hit']} TP / {stats['sl_hit']} SL)")
     send_alert("\n".join(lines))
@@ -3604,18 +3652,22 @@ def _send_morning_briefing() -> None:
         return
 
     sentiment = briefing.get("market_sentiment", "")
-    lines = ["☀️🔥 <b>MORNING! MARKET OUTLOOK HARI INI BY NEXUS</b> — ayo baca 👇"]
-    lines.append(f"{SENTIMENT_EMOJI.get(sentiment, '⚪')} Kondisi market: <b>{_esc(sentiment) or '-'}</b>")
-    lines.append(_esc(briefing.get("ringkasan", "-")))
+    # Headline paragraph gaya "Closing Bell" Mirae Asset (versi pagi) — kondisi
+    # market + ringkasan digabung jadi 1 paragraf pembuka, bukan section terpisah.
+    lines = [f"🔔 <b>MARKET OPEN</b> | {_tanggal_display(today_wib())}\n"]
+    lines.append(f"{SENTIMENT_EMOJI.get(sentiment, '⚪')} {_esc(briefing.get('ringkasan', '-'))}")
 
     berita = briefing.get("berita") or {}
-    BERITA_SECTIONS = [("positive", "🟢 Positive"), ("negative", "🔴 Negative"), ("netral", "⚪ Netral")]
-    for key, label in BERITA_SECTIONS:
-        items = berita.get(key) or []
-        if not items:
-            continue
-        lines.append(f"\n<b>{label}</b>")
-        for it in items:
+    highlights = (berita.get("positive") or []) + (berita.get("negative") or [])
+    if highlights:
+        lines.append("\n📌 <b>STOCK HIGHLIGHTS</b>")
+        for it in highlights:
+            lines.append(f"\n<b>{_esc(it.get('saham', '-'))}</b>")
+            lines.append(_esc(it.get("berita", "-")))
+    netral = berita.get("netral") or []
+    if netral:
+        lines.append("\n⚪ <b>Lainnya</b>")
+        for it in netral:
             lines.append(f"• <b>{_esc(it.get('saham', '-'))}</b>: {_esc(it.get('berita', '-'))}")
 
     tanggal_penting = briefing.get("tanggal_penting") or []
