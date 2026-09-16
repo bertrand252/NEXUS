@@ -3044,15 +3044,18 @@ def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> Non
 SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing"}
 
 
-def _send_no_call_notice(source: str, reason: str) -> None:
+def _send_no_call_notice(source: str, reason: str, title: str = "Gak Ada Call Hari Ini") -> None:
     """Kabar singkat pas check SEKALI/HARI (BSJP screener, Sekuritas,
     _check_hold_advisory) gak nemu apa-apa — user eksplisit (2026-09-10): diem
     total bikin gak bisa bedain "emang gak ada setup" vs "sistemnya mati".
     BUKAN buat check yang RECURRING kayak _check_bpjs (candidate picker, tiap
     15 menit pas market buka) — diem itu wajar di situ, masih nyoba lagi
-    sebentar, kirim notice tiap 15 menit bakal spam doang."""
+    sebentar, kirim notice tiap 15 menit bakal spam doang. `title` override-able
+    — default-nya cuma pas buat "gak ada CALL baru", _check_hold_advisory
+    (ngecek posisi LAMA, bukan nyari call baru) pake judul beda biar gak
+    kesannya "gak ada call" padahal call-nya ADA, cuma udah keburu resolve."""
     label = SOURCE_LABEL_ID.get(source, source.upper())
-    send_alert(f"ℹ️ <b>{_esc(label)} — Gak Ada Call Hari Ini</b>\n\n{_esc(reason)}")
+    send_alert(f"ℹ️ <b>{_esc(label)} — {_esc(title)}</b>\n\n{_esc(reason)}")
 
 
 def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
@@ -3081,7 +3084,10 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
         # ini rows kosong = diem TOTAL, gak kebedain dari sistem yang mati.
         # Sama prinsip kayak _send_no_call_notice (BSJP screener/Sekuritas):
         # check yang jalan 1x/hari WAJIB ninggalin jejak walau hasilnya nihil.
-        _send_no_call_notice(source, "Gak ada posisi 'open' yang perlu dipertimbangkan hold/exit-nya hari ini (kemungkinan udah resolve TP/SL duluan pagi ini).")
+        _send_no_call_notice(
+            source, "Gak ada posisi 'open' yang perlu dipertimbangkan hold/exit-nya hari ini (kemungkinan udah resolve TP/SL duluan pagi ini).",
+            title="Gak Ada Posisi Perlu Dicek",
+        )
         _dedup_mark("hold_advisory", source)
         return
     log.info(f"_check_hold_advisory({source}): {len(rows)} posisi open, kirim advisory")
