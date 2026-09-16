@@ -63,6 +63,10 @@ nongol di "saham_disebut" (level konteks/sentiment doang, gak ada fakta
 spesifik apa-apa tentang perusahaannya), JANGAN dipaksain jadi item berita
 sendiri, SKIP aja ticker itu.
 
+JANGAN masukin pengumuman UMA (Unusual Market Activity) suspend/unsuspend BEI
+sebagai item berita — itu notifikasi administratif bursa, bukan berita
+perusahaan yang relevan buat briefing ini, SKIP total kalau ada di poin_penting.
+
 KONTEKS GLOBAL: kalau ada baris "[Konteks global semalam]" di input, itu
 perubahan real index AS (S&P 500/Dow/Nasdaq) semalem — boleh disebut di
 ringkasan KALAU relevan (IHSG suka kebawa arah global pas buka), tapi JANGAN
