@@ -15,7 +15,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
+from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, price_plus_ticks
 from chart_render import render_chart, render_outcome_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT, bsjp_criteria
 from intraday import daily_session_stats, session_takeoff
@@ -2463,7 +2463,17 @@ def _send_running_positions_update() -> None:
         log.info("_send_running_positions_update: skip, notif_strong_signal off di Settings")
         return
     try:
-        res = supabase.table("signal_alerts").select("*").eq("status", "open").execute()
+        # BUG ketemu 2026-09-16 (user lapor DFAM baru di-call BSJP jam 16:30
+        # sore, jam 20:00 malam yang SAMA udah nongol di sini sebagai "lanjut,
+        # target TP" — kayak posisi Swing yang lagi dipegang berhari-hari).
+        # BSJP source di-exclude: posisi overnight ini punya jalur advisory
+        # SENDIRI (_advise_hold_or_exit besok siang jam 12:05, lihat
+        # run_bsjp_hold_check) yang emang dirancang default JUAL kecuali ada
+        # bukti kuat buat nahan — night recap HARI YANG SAMA nawarin "lanjut"
+        # ke posisi yang instruksinya sendiri bilang "jangan dipegang
+        # kelamaan, jual besok pagi" itu kontradiksi langsung, bukan cuma
+        # membingungkan.
+        res = supabase.table("signal_alerts").select("*").eq("status", "open").neq("source", "bsjp").execute()
     except Exception:
         log.exception("_send_running_positions_update: gagal query signal_alerts")
         return
@@ -2634,9 +2644,16 @@ async def run_whale_confirm() -> None:
 
 
 BSJP_SCREENER_HOUR = 15
-BSJP_SCREENER_MINUTE = 30  # SEBELUM market tutup, bukan sesudah — BSJP beli-nya
-                            # maksimal ~15:57, jadi alert-nya kudu ada buffer buat
-                            # dibaca+eksekusi, bukan telat udah gak bisa beli
+BSJP_SCREENER_MINUTE = 50  # digeser dari 15:30 (user, 2026-09-16) — geser MEPET ke
+                            # MARKET_CLOSE (15:50) biar "harga sekarang" yang dipake
+                            # jadi acuan udah SEDEKET mungkin ke closing beneran, bukan
+                            # snapshot 20 menit sebelum closing yang masih bisa jauh
+                            # meleset (concern user: beli di menit 40 eh menit 50-nya
+                            # ARB). BUKAN pindah ke 16:00/IEP resmi (_fetch_iep) —
+                            # itu buat auction yang UDAH freeze, telat buat submit
+                            # order BSJP hari ini (continuous trading udah tutup).
+                            # Estimasi 15:50 ini yang dipake jadi dasar harga LIMIT
+                            # BELI (bukan harga pasti), lihat price_plus_ticks di bawah.
 
 
 MAX_BSJP_PER_DAY = 2  # user eksplisit minta dibatesin — jangan kirim SEMUA yang lolos syarat,
@@ -2827,6 +2844,18 @@ def _check_bsjp_screener() -> None:
         c["tp_pct"] = tp_pct
         c["target"] = round(c["price"] * (1 + tp_pct / 100), 2)
         c["stop_loss"] = round(c["price"] * (1 - BSJP_SL_PCT / 100), 2)
+        # user (2026-09-16): beli di harga live yang lagi jalan itu rawan —
+        # bisa aja kebeli menit ke-40 eh menit ke-50 ARB. Fix-nya BUKAN nunggu
+        # closing resmi (continuous trading udah tutup, gak bisa order baru
+        # lagi hari ini) — submit LIMIT beli pas pre-closing auction (yang
+        # nentuin IEP) di harga SEDIKIT di atas estimasi closing (c["price"],
+        # diambil mepet jam 15:50). Mekanisme auction: SEMUA order yang lolos
+        # (limit >= IEP) ke-fill di HARGA IEP itu sendiri, bukan di harga limit
+        # yang dipasang — jadi limit ke atas ini nambah peluang KEBELI tanpa
+        # bikin harga beli aktual jadi lebih mahal. target/stop_loss TETEP
+        # dari c["price"] (estimasi), bukan dari buy_limit, biar RR gak ke-drift
+        # cuma gara-gara buffer order.
+        c["buy_limit"] = price_plus_ticks(c["price"], 3)
 
     # user eksplisit (2026-09-11, abis liat call IFII/MUTU pas IHSG lagi
     # lemah): saham individual "terbang" pas market LUAS lagi turun itu
@@ -2846,14 +2875,15 @@ def _check_bsjp_screener() -> None:
         support_note = " (+ sesi 1 juga spike, pendukung)" if t.get("s1_spike_supporting") else ""
         day_pct_txt = f", harga hari ini {c['full_day_pct']:+g}%" if c["full_day_pct"] is not None else ""
         lines.append(
-            f"✅ <b>{_esc(c['ticker'])}</b> — Rp{c['price']:,.0f} "
+            f"✅ <b>{_esc(c['ticker'])}</b> — estimasi closing Rp{c['price']:,.0f} "
             f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}\n"
+            f"   💰 Pasang LIMIT BELI Rp{c['buy_limit']:,.0f} (3 tick di atas estimasi closing — auction bakal fill di harga IEP asli, bukan di angka ini, ini cuma buffer biar gak ketinggalan/ARB)\n"
             f"   🎯 Target Rp{c['target']:,.0f} (+{c['tp_pct']:g}%) · ⛔ SL Rp{c['stop_loss']:,.0f} (-{BSJP_SL_PCT:g}%)"
         )
         if c.get("bandar"):
             lines.append(_format_bandar_line(c["bandar"]).rstrip("\n"))
     lines.append("\n📌 Sinyal relatif dari data intraday hari ini, bukan indikator resmi mentor.")
-    lines.append("⏰ <b>Buruan, beli maksimal jam 15:57 buat kejar BSJP hari ini — jual PAGI besok, jangan dipegang kelamaan.</b>")
+    lines.append("⏰ <b>Buruan, submit limit beli SEBELUM jam 16:00 (pre-closing auction) — jual PAGI besok, jangan dipegang kelamaan.</b>")
     if ihsg_warning:
         lines.append(ihsg_warning)
 
@@ -2877,6 +2907,7 @@ def _check_bsjp_screener() -> None:
                         "s1_spike_supporting": c["takeoff"].get("s1_spike_supporting"),
                         "full_day_pct": c.get("full_day_pct"),
                         "bandar": c.get("bandar"),
+                        "buy_limit": c.get("buy_limit"),
                     },
                 }).execute()
                 log.info(f"_check_bsjp_screener: {c['ticker']} ke-track ke signal_alerts")
@@ -3014,10 +3045,11 @@ SOURCE_LABEL_ID = {"bsjp": "BSJP", "bpjs": "BPJS", "swing": "Swing"}
 
 
 def _send_no_call_notice(source: str, reason: str) -> None:
-    """Kabar singkat pas screener SEKALI/HARI (BSJP, Sekuritas) gak nemu apa-apa
-    — user eksplisit (2026-09-10): diem total bikin gak bisa bedain "emang gak
-    ada setup" vs "sistemnya mati". BUKAN buat check yang RECURRING kayak BPJS
-    (tiap 15 menit pas market buka) — diem itu wajar di situ, masih nyoba lagi
+    """Kabar singkat pas check SEKALI/HARI (BSJP screener, Sekuritas,
+    _check_hold_advisory) gak nemu apa-apa — user eksplisit (2026-09-10): diem
+    total bikin gak bisa bedain "emang gak ada setup" vs "sistemnya mati".
+    BUKAN buat check yang RECURRING kayak _check_bpjs (candidate picker, tiap
+    15 menit pas market buka) — diem itu wajar di situ, masih nyoba lagi
     sebentar, kirim notice tiap 15 menit bakal spam doang."""
     label = SOURCE_LABEL_ID.get(source, source.upper())
     send_alert(f"ℹ️ <b>{_esc(label)} — Gak Ada Call Hari Ini</b>\n\n{_esc(reason)}")
@@ -3045,6 +3077,12 @@ def _check_hold_advisory(source: str, only_before_today: bool = False) -> None:
         rows = [r for r in rows if str(r.get("alerted_at") or "") < today_s]
     if not rows:
         log.info(f"_check_hold_advisory({source}): NOL posisi 'open' buat dicek (only_before_today={only_before_today})")
+        # user lapor "seperti biasa jam 12 siang gak ada update BSJP" — sebelum
+        # ini rows kosong = diem TOTAL, gak kebedain dari sistem yang mati.
+        # Sama prinsip kayak _send_no_call_notice (BSJP screener/Sekuritas):
+        # check yang jalan 1x/hari WAJIB ninggalin jejak walau hasilnya nihil.
+        _send_no_call_notice(source, "Gak ada posisi 'open' yang perlu dipertimbangkan hold/exit-nya hari ini (kemungkinan udah resolve TP/SL duluan pagi ini).")
+        _dedup_mark("hold_advisory", source)
         return
     log.info(f"_check_hold_advisory({source}): {len(rows)} posisi open, kirim advisory")
     for i, row in enumerate(rows):
@@ -3083,19 +3121,32 @@ def _run_bsjp_screener_steps() -> None:
         _check_bsjp_screener()
     except Exception:
         log.exception("_check_bsjp_screener gagal")
-    # BPJS deadline-nya SAMA jam ini (15:30, sebelum market tutup, "harus
-    # dijual sore ini") — panggilan TERPISAH dari _check_bsjp_screener()
-    # (fungsi itu banyak early-return kalau BSJP sendiri gak nemu apa-apa
-    # hari itu — "diam lebih baik daripada maksain" — BPJS hold-check
-    # harus tetep jalan walau BSJP-nya gak nemu apa-apa).
+
+
+async def run_bsjp_screener() -> None:
+    await _run_scheduled(BSJP_SCREENER_HOUR, BSJP_SCREENER_MINUTE, "bsjp_screener", _run_bsjp_screener_steps)
+
+
+BPJS_HOLD_CHECK_HOUR = 15
+BPJS_HOLD_CHECK_MINUTE = 30  # DIPISAH dari BSJP_SCREENER_MINUTE (2026-09-16) — dulu numpang
+                               # 1 jadwal yang sama (kebetulan sama-sama 15:30), tapi BSJP
+                               # digeser ke 15:50 buat alesan lain (estimasi closing lebih
+                               # akurat, lihat BSJP_SCREENER_MINUTE) yang GAK ADA hubungannya
+                               # sama deadline BPJS ("harus dijual sore ini, sebelum market
+                               # tutup 15:50") — 2 hal beda, jangan digabung lagi.
+
+
+def _run_bpjs_hold_check_step() -> None:
+    if not is_trading_day(today_wib()):
+        return
     try:
         _check_hold_advisory("bpjs")
     except Exception:
         log.exception("_check_hold_advisory(bpjs) gagal")
 
 
-async def run_bsjp_screener() -> None:
-    await _run_scheduled(BSJP_SCREENER_HOUR, BSJP_SCREENER_MINUTE, "bsjp_screener", _run_bsjp_screener_steps)
+async def run_bpjs_hold_check() -> None:
+    await _run_scheduled(BPJS_HOLD_CHECK_HOUR, BPJS_HOLD_CHECK_MINUTE, "bpjs_hold_check", _run_bpjs_hold_check_step)
 
 
 BSJP_HOLD_CHECK_HOUR = 12  # midday break IDX (12:00-13:30) — BSJP HARUSNYA

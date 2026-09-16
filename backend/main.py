@@ -16,6 +16,7 @@ from scheduler import (
     run_pre_market_briefing,
     run_bsjp_screener,
     run_bsjp_hold_check,
+    run_bpjs_hold_check,
     run_weekly_postmortem,
     run_weekly_research,
     run_broker_watchlist_check,
@@ -35,11 +36,14 @@ from scheduler import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """14 task background (lihat scheduler.py buat detail tiap fungsi):
+    """15 task background (lihat scheduler.py buat detail tiap fungsi):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
-    (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:30, screener BSJP +
-    pertimbangan hold/exit BPJS yang masih open), run_bsjp_hold_check (12:00,
-    pertimbangan hold/exit BSJP yang di-entry kemarin & masih open), run_night_recap,
+    (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:50 — digeser dari 15:30,
+    2026-09-16, biar estimasi closing yang dipake lebih deket ke closing beneran),
+    run_bpjs_hold_check (15:30, pertimbangan hold/exit BPJS yang masih open — DIPISAH
+    dari run_bsjp_screener biar jadwalnya independen, kebetulan aja dulu sama-sama
+    15:30), run_bsjp_hold_check (12:00, pertimbangan hold/exit BSJP yang di-entry
+    kemarin & masih open), run_night_recap,
     run_weekly_postmortem (Minggu 21:00, rekap Swing+BPJS seminggu),
     run_telegram_channel_listener (channel yang bot-nya admin),
     run_telegram_scrape_listener (channel yang cuma di-subscribe biasa, di-scrape
@@ -69,6 +73,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_morning_routine()),
         asyncio.create_task(run_pre_market_briefing()),
         asyncio.create_task(run_bsjp_screener()),
+        asyncio.create_task(run_bpjs_hold_check()),
         asyncio.create_task(run_bsjp_hold_check()),
         asyncio.create_task(run_night_recap()),
         asyncio.create_task(run_weekly_postmortem()),

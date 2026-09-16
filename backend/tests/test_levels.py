@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support
+from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, idx_tick_size, price_plus_ticks
 
 
 def test_rr_label_bands():
@@ -9,6 +9,23 @@ def test_rr_label_bands():
     assert rr_label(1.5) == "Cukup"
     assert rr_label(2.5) == "Bagus"
     assert rr_label(4.0) == "Sangat Bagus"
+
+
+def test_idx_tick_size_bands():
+    assert idx_tick_size(93) == 1
+    assert idx_tick_size(199) == 1
+    assert idx_tick_size(200) == 2
+    assert idx_tick_size(499) == 2
+    assert idx_tick_size(500) == 5
+    assert idx_tick_size(1999) == 5
+    assert idx_tick_size(2000) == 10
+    assert idx_tick_size(4999) == 10
+    assert idx_tick_size(5000) == 25
+
+
+def test_price_plus_ticks_uses_band_at_base_price():
+    assert price_plus_ticks(93, 3) == 96  # tick Rp1 di bawah Rp200
+    assert price_plus_ticks(1780, 3) == 1795  # tick Rp5 di rentang Rp500-2000
 
 
 def _make_hist(closes: list[float]) -> pd.DataFrame:

@@ -21,6 +21,28 @@ def rr_label(rr_ratio: float) -> str:
     return "Sangat Bagus"
 
 
+def idx_tick_size(price: float) -> int:
+    """Fraksi harga resmi BEI (Peraturan II-A) — beda rentang harga beda
+    kelipatan tick, dipake mastiin harga limit order (misal BSJP) valid di
+    grid harga bursa, bukan hasil pembulatan % yang bisa jatuh di angka
+    yang gak bisa diinput sama sistem broker."""
+    if price < 200:
+        return 1
+    if price < 500:
+        return 2
+    if price < 2000:
+        return 5
+    if price < 5000:
+        return 10
+    return 25
+
+
+def price_plus_ticks(price: float, n_ticks: int) -> int:
+    """Bulatkan price ke integer dulu (harga saham IDX selalu rupiah bulat),
+    baru tambah N tick sesuai fraksi harga di level itu."""
+    return round(price) + idx_tick_size(price) * n_ticks
+
+
 def support_resistance(hist) -> dict:
     # resistance/support dari 20 hari SEBELUM hari ini (exclude hari ini) —
     # kalau ikut ngitung hari ini, pas lagi breakout (bikin high baru) resistance
