@@ -1,6 +1,6 @@
 """Test unit buat scheduler.py — cuma fungsi murni (gak nyentuh Supabase/yfinance/Telegram)."""
 from datetime import date, datetime
-from scheduler import _format_bandar_line, _detect_bandar, _detect_group_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick, _broker_watch_decision, BROKER_WATCH_TIMEOUT_DAYS
+from scheduler import _format_bandar_line, _detect_bandar, _detect_group_bandar, _is_due_now, _broker_defended_support, _whale_threshold, WHALE_MIN_VALUE, WHALE_ABSOLUTE_FLOOR, _position_severity, _trade_dt, _whale_resume_page, _whale_outlier_threshold, WHALE_OUTLIER_MIN_SAMPLES, _max_order_threshold, WHALE_MAX_ORDER_LOTS, WHALE_MAX_ORDER_PCT, _cap_bpjs_candidates, _validate_sekuritas_pick, _average_down_recalc
 from unittest.mock import patch
 
 
@@ -238,30 +238,6 @@ def test_detect_bandar_reports_top_distributor():
     assert result["top_distributor_value"] == -4500
 
 
-def test_broker_watch_decision_promotes_confirmed_accumulation():
-    bandar = {"steady_accumulation_sideways": True, "trend": "akumulasi_meningkat"}
-    assert _broker_watch_decision(bandar, age_days=30) == "promote"
-
-
-def test_broker_watch_decision_drops_on_distribution():
-    bandar = {"steady_accumulation_sideways": True, "trend": "distribusi_meningkat"}  # flip: dulu confirmed, sekarang jual
-    assert _broker_watch_decision(bandar, age_days=30) == "drop"
-
-
-def test_broker_watch_decision_drops_on_no_data():
-    assert _broker_watch_decision(None, age_days=30) == "drop"
-
-
-def test_broker_watch_decision_drops_on_timeout_even_if_neutral():
-    bandar = {"steady_accumulation_sideways": False, "trend": "netral"}
-    assert _broker_watch_decision(bandar, age_days=BROKER_WATCH_TIMEOUT_DAYS) == "drop"
-
-
-def test_broker_watch_decision_keeps_ambiguous_within_timeout():
-    bandar = {"steady_accumulation_sideways": False, "trend": "netral"}
-    assert _broker_watch_decision(bandar, age_days=30) == "keep"
-
-
 def test_detect_bandar_no_flag_when_not_sideways():
     inv = {
         "price": [{"close": c} for c in [100, 110, 120, 130, 140, 150]],  # trending, gak sideways
@@ -485,3 +461,23 @@ def test_validate_sekuritas_pick_defaults_gaya_to_swing_when_invalid():
     assert _validate_sekuritas_pick(pick, {"BBCA"})["gaya"] == "swing"
     pick_missing = {"ticker": "BBCA", "entry": 9500, "target": 9800, "stop_loss": 9300}
     assert _validate_sekuritas_pick(pick_missing, {"BBCA"})["gaya"] == "swing"
+
+
+def test_average_down_recalc_weighted_avg_and_stop_below_fib786():
+    # entry 1000 (1 lot), price_now 850 (retrace), tambah 1x lot -> avg = (1000+850)/2
+    fib_zone = {"fib_786": 800}
+    calc = _average_down_recalc(entry_price=1000, target=1300, stop_loss=900, price_now=850, ratio=1.0, fib_zone=fib_zone)
+    assert calc["new_entry"] == 925.0
+    # SL original (900) di ATAS fib_786 (800) -> WAJIB turun ke fib_786 (mentor:
+    # titik batal SELURUH posisi di bawah 0,786), bukan ikut SL original yang lebih ketat
+    assert calc["new_stop_loss"] == 800
+
+
+def test_average_down_recalc_keeps_original_stop_if_already_below_fib786():
+    # SL original (650) udah LEBIH RENDAH dari fib_786 (700) — udah lebih
+    # konservatif dari syarat minimum mentor, gak perlu diturunin lagi
+    fib_zone = {"fib_786": 700}
+    calc = _average_down_recalc(entry_price=1000, target=1300, stop_loss=650, price_now=850, ratio=0.5, fib_zone=fib_zone)
+    assert calc["new_stop_loss"] == 650
+    # avg = (1000 + 0.5*850) / 1.5
+    assert calc["new_entry"] == round((1000 + 0.5 * 850) / 1.5, 2)

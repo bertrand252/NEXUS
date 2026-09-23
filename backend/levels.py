@@ -21,19 +21,21 @@ def classify_tp_sl_touch(daily_high: float, daily_low: float, daily_close: float
     intraday buat nentuin mana yang kejadian DULUAN — urusan caller, fungsi
     ini gak akses data intraday, biar tetep murni & gampang dites).
 
-    exit_price: buat "tp" pake max(close, target) — kalau close MASIH di
-    atas target (overshoot beneran, kejadian nyata ULTJ/GDST), pake harga
-    asli itu; kalau close udah jatuh lagi di bawah target (kasus AGAR), pake
-    target (asumsi order limit ke-fill di situ). Simetris buat "sl" pake
-    min(close, stop_loss)."""
+    exit_price SELALU diklem ke target/stop_loss PLAN, bukan harga akhir
+    beneran (user eksplisit, 2026-09-24 — kasus NASI/IFII: "win terbesar"
+    kepampang 24,79% padahal itu cuma harga closing pas dicek, bukan
+    keputusan trading beneran; "kita gak tau" apa kita bakal tahan sampe
+    situ atau enggak). Kalau harga LEWAT target/SL, dianggep planning-nya
+    emang exit di situ — overshoot/undershoot sesudahnya BUKAN bagian dari
+    hasil yang dicatat."""
     hit_tp = daily_high >= target
     hit_sl = daily_low <= stop_loss
     if hit_tp and hit_sl:
         return "ambiguous", None
     if hit_tp:
-        return "tp", max(daily_close, target)
+        return "tp", target
     if hit_sl:
-        return "sl", min(daily_close, stop_loss)
+        return "sl", stop_loss
     return None, daily_close
 
 
@@ -306,6 +308,32 @@ def _fibonacci_extensions(hist) -> list[dict]:
         {"price": round(swing_high + diff * (r - 1), 2), "source": "fibonacci_extension", "ratio": r, "type": "resistance"}
         for r in (1.272, 1.618, 2.618)
     ]
+
+
+def mentor_fib_zone(hist_before_entry, entry_price: float, lookback_days: int = 90) -> dict | None:
+    """Retracement ala mentor (CUMA 0,5/0,618/0,786 — BEDA dari _fibonacci_levels
+    yang pake window rolling + 5 rasio), dipake KHUSUS deteksi zona average-down
+    (scheduler.py::_check_average_down_candidates). swing_high = entry_price
+    (breakout kejadian deket situ), swing_low = low terendah {lookback_days}
+    hari SEBELUM entry (base sebelum breakout) — `hist_before_entry` WAJIB
+    udah dipotong caller ke tanggal sebelum entry, fungsi ini gak tau tanggal
+    entry-nya kapan.
+    ponytail: swing_high pake entry_price sebagai proksi breakout peak (bukan
+    pivot-detection presisi) — cukup buat deteksi zona kasar, upgrade ke pivot
+    asli kalau kurang akurat di praktik. None kalau histori kurang."""
+    if len(hist_before_entry) < lookback_days:
+        return None
+    swing_low = float(hist_before_entry["Low"].tail(lookback_days).min())
+    swing_high = entry_price
+    diff = swing_high - swing_low
+    if diff <= 0:
+        return None
+    return {
+        "swing_low": round(swing_low, 2), "swing_high": round(swing_high, 2),
+        "fib_50": round(swing_high - diff * 0.5, 2),
+        "fib_618": round(swing_high - diff * 0.618, 2),
+        "fib_786": round(swing_high - diff * 0.786, 2),
+    }
 
 
 def _swing_clusters_with_roles(hist, swing_window: int = 3, cluster_pct: float = 0.02) -> list[dict]:

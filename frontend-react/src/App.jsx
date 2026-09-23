@@ -14,9 +14,9 @@ import Settings from './pages/Settings';
 import { useAuth } from './hooks/useAuth';
 
 function RequireAuth({ children }) {
-  const { session, loading } = useAuth();
+  const { mfaPassed, loading } = useAuth();
   if (loading) return null;
-  if (!session) return <Navigate to="/login" replace />;
+  if (!mfaPassed) return <Navigate to="/login" replace />;
   return children;
 }
 

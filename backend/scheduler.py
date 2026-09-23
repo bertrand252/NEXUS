@@ -15,7 +15,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, price_plus_ticks, classify_tp_sl_touch, resolve_ambiguous_touch
+from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, price_plus_ticks, classify_tp_sl_touch, resolve_ambiguous_touch, mentor_fib_zone
 from chart_render import render_chart, render_outcome_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT, bsjp_criteria, bsjp_looks_ara_locked
 from intraday import daily_session_stats, session_takeoff
@@ -270,6 +270,226 @@ def _check_invalidated() -> None:
             f"call ini kita anggap salah, gak dipaksain.\n{body}"
         )
         _dedup_mark("invalidated", row["ticker"])
+
+
+AVG_DOWN_FIB_LOOKBACK_DAYS = 90  # base sebelum breakout yang dianggep swing low (ponytail:
+                                   # window tetap, bukan pivot-detection presisi — cukup buat
+                                   # proksi kasar zona retracement, upgrade kalau kurang akurat)
+
+
+def _average_down_recalc(entry_price: float, target: float, stop_loss: float,
+                          price_now: float, ratio: float, fib_zone: dict) -> dict:
+    """Avg/SL/TP baru KALAU average down dieksekusi rasio `ratio` (tambahan
+    lot = ratio x lot awal — gak perlu tau lot ABSOLUT, cuma proporsi lot
+    lama:baru yang ngaruh ke weighted average, matematisnya sama). Target
+    TETEP resistance original (level chart independen dari avg price kita).
+    Stop baru = min(SL original, fib_786) — mentor: titik batal buat SELURUH
+    posisi WAJIB di bawah 0,786 (atau swing low, versi lebih aman — belum
+    dipake di sini, ponytail: 0,786 doang cukup buat MVP), walau itu berarti
+    NURUNIN stop dibanding SL original yang lebih ketat."""
+    new_entry = round((entry_price + ratio * price_now) / (1 + ratio), 2)
+    new_stop_loss = min(stop_loss, fib_zone["fib_786"])
+    risk_pct = round((new_entry - new_stop_loss) / new_entry * 100, 2)
+    reward_pct = round((target - new_entry) / new_entry * 100, 2)
+    rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+    return {
+        "new_entry": new_entry, "new_stop_loss": new_stop_loss, "target": target,
+        "risk_pct": risk_pct, "reward_pct": reward_pct, "rr_ratio": rr_ratio, "rr_label": rr_label(rr_ratio),
+    }
+
+
+def _hist_before_date(hist, cutoff: datetime):
+    """Potong hist ke baris SEBELUM tanggal cutoff — via string compare (bukan
+    Timestamp) biar gak kesandung tz-aware vs naive index (hist dari yfinance
+    suka beda-beda tz)."""
+    cutoff_s = cutoff.strftime("%Y-%m-%d")
+    return hist[hist.index.strftime("%Y-%m-%d") < cutoff_s]
+
+
+def _check_average_down_candidates() -> None:
+    """Nightly (bareng _check_invalidated, off-hours abis broker data update
+    ~17:00-18:00 WIB): cek posisi Swing 'open' yang harganya RETRACE ke zona
+    average-down ala mentor (Fibonacci 0,5-0,786 dari swing low sebelum entry
+    ke entry_price) DAN broker top-nya BUKAN lagi distribusi ("gak ada
+    penjualan masif", syarat eksplisit user). Kalau lolos, tawarin lewat
+    Telegram (tombol tambah 0,5x/1x lot awal ATAU enggak) — keputusan FINAL
+    tetep user, NEXUS gak pernah auto-eksekusi. Scope Swing doang (user
+    eksplisit 2026-09-23) — BPJS/BSJP day-trade, gak masuk akal average down
+    dalam hitungan jam."""
+    if not invezgo_client.is_configured():
+        return  # syarat "gak ada penjualan masif" WAJIB data broker beneran, gak ada fallback ngasal
+    try:
+        res = (
+            supabase.table("signal_alerts").select("*")
+            .in_("source", [None, "swing"]).eq("status", "open")
+            .execute()
+        )
+    except Exception:
+        return
+    rows = [r for r in res.data if not r.get("avg_down_declined")]
+    if not rows:
+        return
+
+    today_s = today_wib().isoformat()
+    bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+
+    for row in rows:
+        ticker = row["ticker"]
+        if _dedup_seen("avg_down_proposed", ticker):
+            continue
+        try:
+            hist = _get_history(ticker, period="1y")
+            price_now = float(hist["Close"].iloc[-1])
+        except Exception:
+            continue
+        if price_now >= row["entry_price"] or price_now <= row["stop_loss"]:
+            continue  # gak lagi turun dari entry, atau udah kena SL (bakal ditutup normal)
+
+        alerted_at = datetime.fromisoformat(row["alerted_at"])
+        fib_zone = mentor_fib_zone(_hist_before_date(hist, alerted_at), row["entry_price"], AVG_DOWN_FIB_LOOKBACK_DAYS)
+        if not fib_zone or not (fib_zone["fib_786"] <= price_now <= fib_zone["fib_50"]):
+            continue  # histori kurang, atau belum masuk zona 0,5-0,786, atau udah jebol 0,786
+
+        try:
+            bandar = _detect_bandar(ticker, bandar_from, today_s)
+        except Exception:
+            bandar = None
+        if not bandar or bandar["trend"] == "distribusi_meningkat":
+            continue  # gak ada data broker ATAU lagi distribusi — mending diem (prinsip user)
+
+        options = {}
+        for ratio in (0.5, 1.0):
+            calc = _average_down_recalc(row["entry_price"], row["target"], row["stop_loss"], price_now, ratio, fib_zone)
+            if calc["risk_pct"] <= MAX_RISK_PCT and calc["rr_ratio"] >= MIN_RR_RATIO:
+                options[ratio] = calc
+        if not options:
+            continue  # kedua rasio gagal guard risk/RR — jangan tawarin angka yang ngaco
+
+        _dedup_mark("avg_down_proposed", ticker)
+        _send_average_down_proposal(row, price_now, fib_zone, bandar, options)
+
+
+def _send_average_down_proposal(row: dict, price_now: float, fib_zone: dict, bandar: dict, options: dict) -> None:
+    ticker = row["ticker"]
+    near_618 = abs(price_now - fib_zone["fib_618"]) <= abs(price_now - fib_zone["fib_786"])
+    fib_label = "0,618" if near_618 else "0,786"
+    lines = [
+        f"📉 <b>Peluang Average Down — {_esc(ticker)}</b>\n",
+        f"Harga sekarang Rp{price_now:,.0f}, retrace ke area Fibonacci ~{fib_label} "
+        f"(swing Rp{fib_zone['swing_low']:,.0f}–Rp{fib_zone['swing_high']:,.0f}).",
+        _format_bandar_line(bandar).rstrip("\n"),
+        f"\nEntry awal Rp{row['entry_price']:,.0f}. Kalau nambah:",
+    ]
+    for ratio in sorted(options):
+        calc = options[ratio]
+        lines.append(
+            f"\n<b>{ratio:g}x lot awal</b> → avg baru Rp{calc['new_entry']:,.0f} · "
+            f"SL Rp{calc['new_stop_loss']:,.0f} (risk {calc['risk_pct']}%) · "
+            f"TP Rp{calc['target']:,.0f} (RR {calc['rr_ratio']}, {calc['rr_label']})"
+        )
+    lines.append("\n⚠️ Ini SARAN teknikal+broker doang, bukan jaminan. Keputusan tetep di lu — beli beneran di sekuritas lu sendiri.")
+    buttons = [
+        [{"text": f"➕ {ratio:g}x lot awal", "callback_data": f"avgdn_yes:{row['id']}:{ratio}"} for ratio in sorted(options)],
+        [{"text": "❌ Enggak", "callback_data": f"avgdn_no:{row['id']}"}],
+    ]
+    send_alert_with_buttons("\n".join(lines), buttons)
+
+
+def _handle_average_down_callback(callback: dict) -> None:
+    """Proses klik tombol average-down dari _send_average_down_proposal.
+    callback_data format 'avgdn_yes:<signal_alert_id>:<ratio>' / 'avgdn_no:<signal_alert_id>'.
+    Re-fetch harga & fib zone SAAT KLIK (bukan pake angka snapshot proposal —
+    user bisa aja baru sempet klik berjam-jam/berhari kemudian, harga geser),
+    re-cek zona+guard risk/RR — kalau udah gak valid lagi, kasih tau gagal,
+    JANGAN eksekusi paksa (pola sama kayak _handle_rotation_callback)."""
+    data = callback.get("data", "")
+    callback_id = callback.get("id")
+    message_id = (callback.get("message") or {}).get("message_id")
+
+    if not data.startswith(("avgdn_yes:", "avgdn_no:")):
+        return  # bukan tombol average-down
+
+    parts = data.split(":")
+    action, signal_alert_id = parts[0], int(parts[1])
+
+    try:
+        res = supabase.table("signal_alerts").select("*").eq("id", signal_alert_id).limit(1).execute()
+        row = res.data[0] if res.data else None
+    except Exception:
+        row = None
+    if not row or row["status"] != "open":
+        if callback_id:
+            answer_callback_query(callback_id, "Posisi ini udah gak aktif lagi (mungkin udah TP/SL/timeout duluan).")
+        return
+
+    if action == "avgdn_no":
+        try:
+            supabase.table("signal_alerts").update({"avg_down_declined": True}).eq("id", signal_alert_id).execute()
+        except Exception:
+            pass
+        if callback_id:
+            answer_callback_query(callback_id, "Oke, gak average down.")
+        if message_id:
+            edit_message_text(message_id, f"❌ <b>Average down dilewatin — {_esc(row['ticker'])}</b>")
+        return
+
+    ratio = float(parts[2])
+    ticker = row["ticker"]
+    try:
+        hist = _get_history(ticker, period="1y")
+        price_now = float(hist["Close"].iloc[-1])
+    except Exception:
+        if callback_id:
+            answer_callback_query(callback_id, "Gagal ambil harga terbaru, coba lagi nanti.")
+        return
+
+    alerted_at = datetime.fromisoformat(row["alerted_at"])
+    fib_zone = mentor_fib_zone(_hist_before_date(hist, alerted_at), row["entry_price"], AVG_DOWN_FIB_LOOKBACK_DAYS)
+    if not fib_zone or not (fib_zone["fib_786"] <= price_now <= fib_zone["fib_50"]):
+        if callback_id:
+            answer_callback_query(callback_id, "Harga udah gak di zona average-down lagi (kadung mantul/jebol) — gak dieksekusi.")
+        if message_id:
+            edit_message_text(message_id, f"⚠️ <b>Average down batal — {_esc(ticker)}</b>\nHarga udah gerak keluar zona sejak ditawarin.")
+        return
+
+    calc = _average_down_recalc(row["entry_price"], row["target"], row["stop_loss"], price_now, ratio, fib_zone)
+    if calc["risk_pct"] > MAX_RISK_PCT or calc["rr_ratio"] < MIN_RR_RATIO:
+        if callback_id:
+            answer_callback_query(callback_id, "Angka baru gak lolos guard risk/RR — gak dieksekusi.")
+        if message_id:
+            edit_message_text(message_id, f"⚠️ <b>Average down batal — {_esc(ticker)}</b>\nAngka baru gak lolos guard risk/RR.")
+        return
+
+    faktor = row.get("faktor_pendukung") or {}
+    if not isinstance(faktor, dict):
+        faktor = {}
+    history_log = faktor.get("avg_down_history") or []
+    history_log.append({
+        "at": datetime.now(timezone.utc).isoformat(), "ratio": ratio,
+        "old_entry": row["entry_price"], "price_now": price_now, "new_entry": calc["new_entry"],
+    })
+    faktor["avg_down_history"] = history_log
+
+    try:
+        supabase.table("signal_alerts").update({
+            "entry_price": calc["new_entry"], "stop_loss": calc["new_stop_loss"],
+            "faktor_pendukung": faktor,
+        }).eq("id", signal_alert_id).execute()
+    except Exception:
+        if callback_id:
+            answer_callback_query(callback_id, "Gagal simpen ke database, coba lagi.")
+        return
+
+    if callback_id:
+        answer_callback_query(callback_id, f"Average down dicatat — avg baru Rp{calc['new_entry']:,.0f}.")
+    if message_id:
+        edit_message_text(
+            message_id,
+            f"✅ <b>Average Down Dicatat — {_esc(ticker)}</b>\n\n"
+            f"Avg baru Rp{calc['new_entry']:,.0f} · SL baru Rp{calc['new_stop_loss']:,.0f} "
+            f"(risk {calc['risk_pct']}%) · TP tetep Rp{calc['target']:,.0f} (RR {calc['rr_ratio']}, {calc['rr_label']})\n\n"
+            f"Inget: tetep beli beneran di sekuritas lu sendiri sesuai rasio {ratio:g}x, NEXUS cuma nyatet.",
+        )
 
 
 SOURCE_LABEL = {
@@ -1359,6 +1579,10 @@ def check_and_alert() -> None:
         return  # udah kena limit sinyal BARU minggu ini
 
     _check_invalidated()
+    try:
+        _check_average_down_candidates()
+    except Exception:
+        log.exception("_check_average_down_candidates gagal")
 
     macro_events = [e for e in get_forex_events() if e["impact"] in ("High", "Medium")]
     candidates = _gather_candidates(macro_events, settings)
@@ -2319,112 +2543,6 @@ def _detect_group_bandar(tickers: list[str], from_date: str, to_date: str) -> di
         } for t in tickers if per_ticker.get(t)},
     }
 
-
-BROKER_WATCH_WINDOW_DAYS = 90   # user: "amati berbulan-bulan" — cukup nangkep base/akumulasi multi-bulan,
-                                 # masih murah 1 get_inventory_chart_stock call/ticker/malam (_detect_bandar generik)
-BROKER_WATCH_TIMEOUT_DAYS = 120  # gak pernah promoted/dropped abis 4 bulan -> auto-drop, jangan numpuk selamanya
-
-
-def _queue_broker_watchlist(ticker: str, source: str, reason: str) -> None:
-    """Kandidat BPJS/sekuritas yang MENARIK (lolos momentum/RR sekuritas) tapi
-    levelnya belum layak call (SL kepepet/RR jelek) — daripada didiemin abis
-    itu (dulu: reject = ilang, gak pernah diliat lagi), masukin observasi
-    jangka panjang. `_check_broker_watchlist` (nightly) yang neken lanjut/
-    promote/drop dari data broker beneran, BUKAN dari harga doang. Gak nge-
-    reset observasi yang UDAH jalan (status masih 'observing') — cuma re-queue
-    kalau row belum ada / udah final (promoted/dropped) sebelumnya."""
-    try:
-        existing = supabase.table("broker_watchlist").select("status").eq("ticker", ticker).limit(1).execute()
-        if existing.data and existing.data[0]["status"] == "observing":
-            return
-        supabase.table("broker_watchlist").upsert({
-            "ticker": ticker, "source": source, "reason": reason,
-            "added_at": datetime.now(timezone.utc).isoformat(), "status": "observing",
-            "last_checked_at": None, "last_bandar": None,
-        }, on_conflict="ticker").execute()
-    except Exception:
-        log.exception(f"_queue_broker_watchlist({ticker}): gagal simpan")
-
-
-def _broker_watch_decision(bandar: dict | None, age_days: int) -> str:
-    """Fungsi murni — pisah dari _check_broker_watchlist biar testable tanpa
-    mock Supabase/Invezgo. 'promote' kalau akumulasi confirmed kuat, 'drop'
-    kalau distribusi/gak ada sinyal/kelamaan (timeout {BROKER_WATCH_TIMEOUT_DAYS}
-    hari), 'keep' kalau masih ambigu (lanjut diamatin)."""
-    if bandar and bandar["steady_accumulation_sideways"] and bandar["trend"] != "distribusi_meningkat":
-        return "promote"
-    if not bandar or bandar["trend"] == "distribusi_meningkat" or age_days >= BROKER_WATCH_TIMEOUT_DAYS:
-        return "drop"
-    return "keep"
-
-
-def _check_broker_watchlist() -> None:
-    """Nightly re-check semua ticker 'observing' — pake _detect_bandar YANG
-    SAMA (window {BROKER_WATCH_WINDOW_DAYS} hari, bukan reimplement), reuse
-    total. Promote (kirim notif) kalau pola akumulasi udah confirmed KUAT
-    (sideways+konsisten>=70%, trend gak lagi netral-doang). Drop DIAM-DIAM
-    (gak ada alert) kalau ternyata distribusi atau timeout — prinsip user:
-    mending gak ngasih sinyal daripada ngasih sinyal ngasal, drop bukan
-    kegagalan, itu observasi ngasih jawaban 'ternyata bukan'."""
-    if not invezgo_client.is_configured():
-        return
-    try:
-        rows = supabase.table("broker_watchlist").select("*").eq("status", "observing").execute().data
-    except Exception:
-        log.exception("_check_broker_watchlist: gagal query")
-        return
-    if not rows:
-        return
-
-    settings = _load_settings()
-    notify = settings["notif_broker_watchlist"]
-    today = today_wib()
-    from_date = (today - timedelta(days=BROKER_WATCH_WINDOW_DAYS)).isoformat()
-    to_date = today.isoformat()
-
-    for row in rows:
-        ticker = row["ticker"]
-        age_days = (today - date.fromisoformat(row["added_at"][:10])).days
-        try:
-            bandar = _detect_bandar(ticker, from_date, to_date)
-        except Exception:
-            log.exception(f"_check_broker_watchlist({ticker}): _detect_bandar gagal")
-            continue
-
-        update = {"last_checked_at": datetime.now(timezone.utc).isoformat(), "last_bandar": bandar}
-        decision = _broker_watch_decision(bandar, age_days)
-        if decision == "promote":
-            update["status"] = "promoted"
-            if notify:
-                text = (
-                    f"🔎 <b>Observasi Broker — {_esc(ticker)}</b>\n\n"
-                    f"Udah {age_days} hari diamati (awalnya: {_esc(row['reason'])}). Sekarang pola akumulasi "
-                    f"CONFIRMED: broker <b>{_esc(bandar['broker'])}</b> konsisten net-buy {bandar['consistency_pct']}% "
-                    f"hari dalam {BROKER_WATCH_WINDOW_DAYS} hari terakhir, harga masih sideways (base terjaga).\n\n"
-                    f"⚠️ Perkiraan posisi broker, BUKAN konfirmasi resmi siapa 'bandar'-nya. Cek manual sebelum entry — "
-                    f"ini heads-up observasi, bukan call TP/SL siap pakai."
-                )
-                if not send_alert(text):
-                    log.warning(f"_check_broker_watchlist({ticker}): send_alert promote gagal")
-        elif decision == "drop":
-            update["status"] = "dropped"
-        try:
-            supabase.table("broker_watchlist").update(update).eq("ticker", ticker).execute()
-        except Exception:
-            log.exception(f"_check_broker_watchlist({ticker}): gagal update status")
-
-
-BROKER_WATCHLIST_HOUR = 19  # abis jam update broker summary Invezgo (17:00-18:00 WIB), sebelum night_recap (20:00)
-
-
-async def run_broker_watchlist_check() -> None:
-    await _run_scheduled(BROKER_WATCHLIST_HOUR, 0, "broker_watchlist_check", _run_broker_watchlist_check_step)
-
-
-def _run_broker_watchlist_check_step() -> None:
-    if not is_trading_day(today_wib()):
-        return
-    _check_broker_watchlist()
 
 
 def _broker_defended_support(ticker: str, touch_dates: list[str]) -> dict | None:
@@ -3864,10 +3982,8 @@ def _check_bpjs() -> None:
     if levels["risk_pct"] > MAX_RISK_PCT or levels["reward_pct"] > MAX_REWARD_PCT:
         return  # SL/TP kejauhan dari harga sekarang, sama sanity check kayak Swing — jangan kirim angka ngaco
     if levels["risk_pct"] < MIN_SL_PCT_DAYTRADE:
-        _queue_broker_watchlist(ticker, "bpjs", "SL kepepet (<2%) buat day-trade, belum layak call sekarang")
         return  # SL kepepet banget (insiden GDST) — gampang whipsaw noise harian, bukan thesis invalid
     if levels["rr_ratio"] < MIN_RR_RATIO:
-        _queue_broker_watchlist(ticker, "bpjs", "RR di bawah minimum, saham menarik tapi levelnya belum pas")
         return  # kejadian nyata: PGAS TP +0.65% (RR "Buruk") lolos kirim — biaya beli+jual
         # broker retail Indonesia aja udah ~0.5-0.7% roundtrip, TP situ abis kegerus fee doang.
         # Groq milih ticker SEBELUM levels dihitung (gak pernah liat RR), jadi guard Python di
@@ -4114,8 +4230,6 @@ def _check_sekuritas_pick() -> None:
         validated = _validate_sekuritas_pick(pick, valid_tickers)
         if validated is None:
             log.info(f"_check_sekuritas_pick: skip {pick.get('ticker')} — gak lolos validasi (ticker/level/RR)")
-            if pick.get("ticker") in valid_tickers and pick.get("gaya") == "bpjs":
-                _queue_broker_watchlist(pick["ticker"], "sekuritas", "call sekuritas gaya BPJS tapi gak lolos guard SL/RR")
             continue
         pick = validated
         ticker, entry_price, target, stop_loss, gaya = pick["ticker"], pick["entry"], pick["target"], pick["stop_loss"], pick["gaya"]
@@ -4321,6 +4435,10 @@ async def run_telegram_channel_listener() -> None:
                     _handle_rotation_callback(callback)
                 except Exception:
                     log.exception("_handle_rotation_callback gagal")
+                try:
+                    _handle_average_down_callback(callback)
+                except Exception:
+                    log.exception("_handle_average_down_callback gagal")
                 continue
 
             if not TELEGRAM_CHANNEL_IDS:

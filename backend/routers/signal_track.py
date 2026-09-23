@@ -85,20 +85,3 @@ def get_signal_track_history():
     except Exception:
         return {"data": [], "warning": "Tabel signal_alerts belum ada / gak bisa diakses — jalanin SQL setup dulu di Supabase."}
     return {"data": res.data, "warning": None}
-
-
-@router.get("/broker-watchlist")
-def get_broker_watchlist():
-    """List observasi broker jangka panjang (scheduler.py::_check_broker_watchlist)
-    — kandidat BPJS/sekuritas yang gagal guard SL/RR tapi menarik, dipantau
-    nightly sampe confirmed (promoted) atau ternyata bukan (dropped)."""
-    try:
-        res = (
-            supabase.table("broker_watchlist")
-            .select("ticker,source,reason,added_at,last_checked_at,status,last_bandar")
-            .order("added_at", desc=True)
-            .execute()
-        )
-    except Exception:
-        return {"data": [], "warning": "Tabel broker_watchlist belum ada / gak bisa diakses — jalanin SQL setup dulu di Supabase."}
-    return {"data": res.data, "warning": None}

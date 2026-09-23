@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, idx_tick_size, price_plus_ticks, classify_tp_sl_touch, resolve_ambiguous_touch
+from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, idx_tick_size, price_plus_ticks, classify_tp_sl_touch, resolve_ambiguous_touch, mentor_fib_zone
 
 
 def test_rr_label_bands():
@@ -52,18 +52,20 @@ def test_resolve_ambiguous_touch_agar_gap_up_then_arb_resolves_to_tp():
     assert resolve_ambiguous_touch(bars, target=2874, stop_loss=2734) == "tp"
 
 
-def test_classify_tp_sl_touch_overshoot_still_above_target_uses_actual_close():
-    """Kasus ULTJ/GDST — Close MASIH di atas target pas dicek (gak sempet
-    jatuh lagi), exit_price pake harga asli (overshoot), bukan diklem ke target."""
+def test_classify_tp_sl_touch_overshoot_still_clamped_to_target():
+    """Kasus NASI (2026-09-24, user eksplisit): dulu overshoot (Close masih
+    di atas target) dilaporin pake harga asli, jadi "win terbesar" kepampang
+    24,79% padahal itu cuma harga closing pas dicek, bukan keputusan trading
+    beneran. Sekarang SELALU diklem ke target trading plan."""
     kind, exit_price = classify_tp_sl_touch(daily_high=139, daily_low=134, daily_close=139, target=138, stop_loss=131)
     assert kind == "tp"
-    assert exit_price == 139
+    assert exit_price == 138
 
 
-def test_classify_tp_sl_touch_sl_symmetric():
+def test_classify_tp_sl_touch_sl_clamped_to_stop_loss():
     kind, exit_price = classify_tp_sl_touch(daily_high=105, daily_low=90, daily_close=95, target=120, stop_loss=98)
     assert kind == "sl"
-    assert exit_price == 95  # Close masih di bawah stop_loss, pake harga asli
+    assert exit_price == 98  # diklem ke stop_loss plan, bukan Close asli (95)
 
 
 def test_classify_tp_sl_touch_sl_bounced_back_above_stop_loss():
@@ -281,3 +283,26 @@ def test_detect_chart_pattern_none_for_parallel_channel():
     # upper & lower dua-duanya NAIK bareng — channel paralel biasa, bukan triangle
     hist = _make_hist(_zigzag([100, 115, 108, 123, 116, 131, 124]))
     assert detect_chart_pattern(hist) is None
+
+
+def test_mentor_fib_zone_computes_retracement_levels():
+    hist = _make_hist([1000, 950, 900, 960, 980, 1000, 1010, 1020, 1030, 1040])
+    zone = mentor_fib_zone(hist, entry_price=2000, lookback_days=10)
+    assert zone is not None
+    swing_low = round(900 * 0.99, 2)  # Low kolom = close*0.99 (lihat _make_hist)
+    diff = 2000 - swing_low
+    assert zone["swing_low"] == swing_low
+    assert zone["swing_high"] == 2000
+    assert zone["fib_50"] == round(2000 - diff * 0.5, 2)
+    assert zone["fib_618"] == round(2000 - diff * 0.618, 2)
+    assert zone["fib_786"] == round(2000 - diff * 0.786, 2)
+
+
+def test_mentor_fib_zone_none_if_not_enough_history():
+    hist = _make_hist([1000, 950, 900])
+    assert mentor_fib_zone(hist, entry_price=2000, lookback_days=10) is None
+
+
+def test_mentor_fib_zone_none_if_entry_at_or_below_swing_low():
+    hist = _make_hist([1000, 950, 900, 960, 980, 1000, 1010, 1020, 1030, 1040])
+    assert mentor_fib_zone(hist, entry_price=500, lookback_days=10) is None
