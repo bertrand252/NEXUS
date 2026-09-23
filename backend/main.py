@@ -41,11 +41,12 @@ async def lifespan(app: FastAPI):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
     (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:50 — digeser dari 15:30,
     2026-09-16, biar estimasi closing yang dipake lebih deket ke closing beneran),
-    run_bsjp_confirm (16:05, 5 menit abis IEP close freeze — konfirmasi kandidat BSJP
-    beneran ke-fill atau enggak lawan IEP closing ASLI, bukan estimasi 15:50; kasus
-    GDST 2026-09-23: estimasi Rp134 tapi IEP beneran loncat ke Rp139, di atas limit
-    beli kita, order gak ke-fill — sebelum ini sistem tetep nganggep 'open' apapun
-    yang kejadian),
+    run_bsjp_confirm (16:30, buffer abis IEP close freeze 16:00 — konfirmasi kandidat
+    BSJP beneran ke-fill atau enggak lawan IEP closing ASLI, bukan estimasi 15:50;
+    kasus GDST 2026-09-23: estimasi Rp134 tapi IEP beneran loncat ke Rp139, di atas
+    limit beli kita, order gak ke-fill — sebelum ini sistem tetep nganggep 'open'
+    apapun yang kejadian. Kalau ke-fill, target/SL BARU dihitung di sini dari harga
+    fill BENERAN, bukan dari estimasi 15:50),
     run_bpjs_hold_check (15:30, pertimbangan hold/exit BPJS yang masih open — DIPISAH
     dari run_bsjp_screener biar jadwalnya independen, kebetulan aja dulu sama-sama
     15:30), run_bsjp_hold_check (12:00, pertimbangan hold/exit BSJP yang di-entry

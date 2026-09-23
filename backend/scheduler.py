@@ -15,7 +15,7 @@ from config import supabase, WIB, today_wib
 from routers.scanner import _get_history, _get_history_intraday, refresh_scanner_data, refresh_fundamentals_data
 from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
-from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, price_plus_ticks
+from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, price_plus_ticks, classify_tp_sl_touch, resolve_ambiguous_touch
 from chart_render import render_chart, render_outcome_chart
 from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT, bsjp_criteria, bsjp_looks_ara_locked
 from intraday import daily_session_stats, session_takeoff
@@ -841,10 +841,73 @@ def _check_entry_zone_touches() -> None:
             )
 
 
+def _resolve_tp_sl(ticker: str, hist_row, target: float, stop_loss: float) -> tuple[str | None, float]:
+    """Wrapper I/O buat levels.py::classify_tp_sl_touch — kalau hasilnya
+    'ambiguous' (target DAN stop_loss dua-duanya kesentuh hari yang sama,
+    kejadian nyata: AGAR gap-up +13% pagi lalu ARB), tarik bar 15-menit hari
+    itu buat nentuin mana yang kesentuh DULUAN (levels.py::resolve_ambiguous_
+    touch). Gagal/gak ada data intraday -> fallback konservatif 'sl' (bawaan
+    resolve_ambiguous_touch kalau dikasih list kosong)."""
+    kind, exit_price = classify_tp_sl_touch(
+        float(hist_row["High"]), float(hist_row["Low"]), float(hist_row["Close"]), target, stop_loss,
+    )
+    if kind == "ambiguous":
+        day_bars = []
+        try:
+            d = hist_row.name.date() if hasattr(hist_row.name, "date") else hist_row.name
+            hist_15m = _get_history_intraday(ticker)
+            day_bars = [
+                {"High": float(bar["High"]), "Low": float(bar["Low"])}
+                for ts, bar in hist_15m.iterrows() if ts.date() == d
+            ]
+        except Exception:
+            log.exception(f"_resolve_tp_sl({ticker}): gagal fetch intraday buat resolve ambiguous, fallback konservatif")
+        kind = resolve_ambiguous_touch(day_bars, target, stop_loss)
+        exit_price = target if kind == "tp" else stop_loss
+    if kind == "tp":
+        return "tp_hit", exit_price
+    if kind == "sl":
+        return "sl_hit", exit_price
+    return None, exit_price
+
+
+def _close_signal_alert(row: dict, status: str, close_price: float, outcome_pct: float) -> None:
+    """Tutup 1 posisi signal_alerts (update DB + unsend alert asli + kirim
+    notif outcome dgn chart) — shared dipake _check_signal_outcomes (cek
+    harian pagi) DAN _advise_hold_or_exit (bisa nemu TP/SL UDAH kesentuh pas
+    cek hold/exit siang, lihat _resolve_tp_sl) biar 2 jalur nutup posisi ini
+    gak duplikat logic."""
+    now = datetime.now(timezone.utc)
+    try:
+        supabase.table("signal_alerts").update({
+            "status": status,
+            "closed_at": now.isoformat(),
+            "close_price": close_price,
+            "outcome_pct": outcome_pct,
+        }).eq("id", row["id"]).execute()
+    except Exception:
+        log.exception(f"_close_signal_alert({row.get('ticker')}): gagal update status")
+        return
+
+    if row.get("telegram_message_id"):
+        delete_message(row["telegram_message_id"])  # unsend alert asli — posisi udah ditutup, biar chat gak numpuk
+
+    alerted_at = datetime.fromisoformat(row["alerted_at"])
+    days_open = (now - alerted_at).days
+    is_bpjs = row.get("source") == "bpjs"
+    _send_outcome_notification(row, status, close_price, outcome_pct, days_open, is_bpjs)
+
+
 def _check_signal_outcomes() -> None:
     """Cek tiap signal_alerts yang masih 'open' — udah kena target (tp_hit),
-    stop_loss (sl_hit), atau timeout. Beda per source (user eksplisit,
-    2026-09-09):
+    stop_loss (sl_hit), atau timeout. TP/SL ditentuin dari RANGE High/Low 1
+    hari (_resolve_tp_sl), BUKAN cuma harga Close/terakhir — kejadian nyata
+    (AGAR, 2026-09-24): gap-up pagi ngelewatin target lalu ARB, Close pas
+    dicek udah anjlok jauh di bawah entry; cek Close doang bakal nganggep
+    itu SL padahal target udah kesentuh duluan (order limit-sell REAL bakal
+    ke-fill begitu High nyentuh, gak nungguin akhir hari).
+
+    Timeout beda per source (user eksplisit, 2026-09-09):
     - Swing (source 'swing'/None legacy): GAK ADA timeout sama sekali — cuma
       TP/SL yang nutup posisi. "Barang jelek" (thesis rusak) itu keputusan
       MANUAL user dari advisory _send_running_positions_update
@@ -866,7 +929,7 @@ def _check_signal_outcomes() -> None:
     for row in res.data:
         try:
             hist = _get_history(row["ticker"])
-            price_now = float(hist["Close"].iloc[-1])
+            hist_row = hist.iloc[-1]
         except Exception:
             continue  # gagal fetch harga ticker ini, coba lagi besok
 
@@ -874,40 +937,21 @@ def _check_signal_outcomes() -> None:
         days_open = (now - alerted_at).days
 
         source = row.get("source")
-        is_bpjs = source == "bpjs"
-        if is_bpjs:
+        if source == "bpjs":
             timed_out = days_open >= BPJS_MAX_HOLD_DAYS
         elif source in (None, "swing"):
             timed_out = False  # no min/max — cuma TP/SL yang nutup, lihat docstring
         else:  # bsjp — safety net doang, normalnya udah beres via run_bsjp_hold_check
             timed_out = days_open > SIGNAL_TIMEOUT_DAYS
 
-        status = None
-        if price_now >= row["target"]:
-            status = "tp_hit"
-        elif price_now <= row["stop_loss"]:
-            status = "sl_hit"
-        elif timed_out:
-            status = "timeout"
-
+        status, close_price = _resolve_tp_sl(row["ticker"], hist_row, row["target"], row["stop_loss"])
+        if not status and timed_out:
+            status, close_price = "timeout", float(hist_row["Close"])
         if not status:
             continue
 
-        outcome_pct = round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2)
-        try:
-            supabase.table("signal_alerts").update({
-                "status": status,
-                "closed_at": now.isoformat(),
-                "close_price": price_now,
-                "outcome_pct": outcome_pct,
-            }).eq("id", row["id"]).execute()
-        except Exception:
-            pass
-
-        if row.get("telegram_message_id"):
-            delete_message(row["telegram_message_id"])  # unsend alert asli — posisi udah ditutup, biar chat gak numpuk
-
-        _send_outcome_notification(row, status, price_now, outcome_pct, days_open, is_bpjs)
+        outcome_pct = round((close_price - row["entry_price"]) / row["entry_price"] * 100, 2)
+        _close_signal_alert(row, status, close_price, outcome_pct)
 
 
 def _build_outcome_caption(row: dict, status: str, price_now: float, outcome_pct: float, days_open: int, is_bpjs: bool) -> str:
@@ -1566,7 +1610,8 @@ def _max_order_threshold(price: float) -> float:
 
 def _check_whale_alerts() -> None:
     """Kerangka Whale/Block Trade Alert — 2 pola deteksi dari running-trade
-    Invezgo, cuma buat ticker di watchlist (BUKAN semua 951 saham, hemat kuota):
+    Invezgo, cuma buat ticker di watchlist ATAU yang lagi ada posisi
+    signal_alerts 'open' (BUKAN semua 951 saham, hemat kuota):
     1. Transaksi TUNGGAL abnormal gede.
     2. Split order — 1 buyer pecah order jadi beberapa transaksi kecil dalam
        menit yang sama, makan barang dari BEBERAPA broker lawan beda (ide user:
@@ -1574,6 +1619,17 @@ def _check_whale_alerts() -> None:
        pola akumulasi institusi yang sengaja dipecah biar gak keliatan 1
        transaksi gede di tape). Dedup per (ticker, buyer, menit) biar gak
        ke-alert ulang tiap loop.
+
+    Union sama posisi 'open' (2026-09-24, user eksplisit: "aku mau saham
+    call BSJP ini juga jadi saham pantauan whale alert") — reuse tabel
+    `signal_alerts` yang UDAH ADA, bukan nambah kolom/tabel baru buat nandain
+    "ticker ini ditambahin buat X" (ponytail: state yang udah bisa DIDERIVE
+    dari data lain jangan diduplikasi jadi state baru). Otomatis self-clean:
+    begitu posisi ditutup (status berubah dari 'open'), ticker-nya ilang
+    sendiri dari pantauan whale next cycle, gak perlu logic hapus terpisah.
+    Kalau whale trade kena ke ticker yang lagi ada posisi, teks alert dikasih
+    catatan tambahan (lihat open_positions di bawah).
+
     Diem total kalau Invezgo belum aktif (is_configured()) ATAU di luar jam
     cek — run_scheduler manggil ini TIAP JAM 24/7, tapi transaksi whale cuma
     relevan pas jendela ini beneran buka (di luar itu gak ada transaksi baru
@@ -1589,9 +1645,17 @@ def _check_whale_alerts() -> None:
 
     try:
         watch_res = supabase.table("watchlist").select("ticker").execute()
-        tickers = [r["ticker"] for r in watch_res.data]
+        tickers = {r["ticker"] for r in watch_res.data}
     except Exception:
-        return
+        tickers = set()
+    open_positions: dict[str, dict] = {}
+    try:
+        open_res = supabase.table("signal_alerts").select("ticker,source").eq("status", "open").execute()
+        open_positions = {r["ticker"]: r for r in open_res.data}
+        tickers |= set(open_positions)
+    except Exception:
+        pass
+    tickers = list(tickers)
     if not tickers:
         return
 
@@ -1692,11 +1756,23 @@ def _check_whale_alerts() -> None:
                 continue
             side = t.get("type", "—")
             side_emoji = "📈" if side == "BUY" else "📉" if side == "SELL" else "↔️"
+            position_note = ""
+            if ticker in open_positions:
+                # posisi aktif kena whale trade — user eksplisit minta ini
+                # jadi peringatan actionable, bukan sekedar info tape biasa.
+                # SELL masif = indikasi distribusi (jual segera); BUY masif =
+                # momentum/pump, bisa jadi kesempatan ambil profit sebelum reda.
+                src_label = SOURCE_LABEL_ID.get(open_positions[ticker].get("source"), "")
+                if side == "SELL":
+                    position_note = f"\n\n🚨 Ini posisi AKTIF lu ({src_label}) — indikasi distribusi, pertimbangkan JUAL SEGERA."
+                elif side == "BUY":
+                    position_note = f"\n\n⚡ Ini posisi AKTIF lu ({src_label}) — momentum kuat, pertimbangkan ambil profit selagi rame."
             text = (
                 f"🐋 <b>WHALE ALERT — {_esc(ticker)}</b>\n\n"
                 f"{side_emoji} <b>{_esc(side)}</b> {int(t['volume']) // 100:,} lot @ Rp{t['price']:,.0f}\n"
                 f"💰 <b>Nilai</b> ~Rp{value:,.0f}\n"
                 f"⏱ <b>Jam</b> {t.get('time', '—')}"
+                f"{position_note}"
             )
             if send_alert(text):
                 _dedup_mark("whale", key)
@@ -2932,7 +3008,7 @@ def _check_bsjp_screener() -> None:
             f"✅ <b>{_esc(c['ticker'])}</b> — estimasi closing Rp{c['price']:,.0f} "
             f"(sesi 2: volume {t['volume_ratio']}x rata-rata, momentum sesi 2 {t['price_change_pct']:+g}%{day_pct_txt}){support_note}\n"
             f"   💰 Pasang LIMIT BELI Rp{c['buy_limit']:,.0f} (3 tick di atas estimasi closing — auction bakal fill di harga IEP asli, bukan di angka ini, ini cuma buffer biar gak ketinggalan/ARB)\n"
-            f"   🎯 Target Rp{c['target']:,.0f} (+{c['tp_pct']:g}%) · ⛔ SL Rp{c['stop_loss']:,.0f} (-{BSJP_SL_PCT:g}%)"
+            f"   📊 Target/SL nyusul abis harga beli FIX (~16:30) — dihitung dari harga ke-fill beneran, bukan estimasi ini"
         )
         if c.get("bandar"):
             lines.append(_format_bandar_line(c["bandar"]).rstrip("\n"))
@@ -2948,6 +3024,12 @@ def _check_bsjp_screener() -> None:
             try:
                 supabase.table("signal_alerts").insert({
                     "ticker": c["ticker"],
+                    # placeholder dari ESTIMASI (bukan closing beneran) — target/
+                    # stop_loss/entry di sini SEMUA ke-timpa _confirm_bsjp_fills()
+                    # abis harga beli fix diketahui (~16:30, lihat docstring
+                    # fungsi itu), disimpen sekarang cuma biar kolomnya gak
+                    # kosong selama status='pending_confirm'. JANGAN dipake buat
+                    # apapun sebelum status jadi 'open'.
                     "entry_price": c["price"],
                     "entry_low": c["price"],
                     "entry_high": c["price"],
@@ -2960,10 +3042,10 @@ def _check_bsjp_screener() -> None:
                     # sekali. "open" langsung bikin sistem SELALU anggep kebeli
                     # apapun yang terjadi ("bug" yang user laporin — PnL keitung
                     # dari posisi yang sebenernya gak pernah ke-eksekusi).
-                    # _confirm_bsjp_fills() (16:05, abis IEP close beneran
-                    # settle) yang mutusin final: "open" kalau IEP <= limit
-                    # (beneran ke-fill), "cancelled" kalau IEP loncat ngelewatin
-                    # limit (gak ke-fill, jangan dianggep posisi running).
+                    # _confirm_bsjp_fills() (16:30, abis IEP close beneran
+                    # settle) yang mutusin final: "open" (+ recompute target/SL
+                    # dari harga FIX) kalau IEP <= limit (beneran ke-fill),
+                    # "cancelled" kalau IEP loncat ngelewatin limit.
                     "status": "pending_confirm",
                     "source": "bsjp",
                     "faktor_pendukung": {
@@ -2973,6 +3055,7 @@ def _check_bsjp_screener() -> None:
                         "full_day_pct": c.get("full_day_pct"),
                         "bandar": c.get("bandar"),
                         "buy_limit": c.get("buy_limit"),
+                        "score": c.get("score"),  # dipake _confirm_bsjp_fills buat recompute tp_pct dari harga fix
                     },
                 }).execute()
                 log.info(f"_check_bsjp_screener: {c['ticker']} ke-track ke signal_alerts")
@@ -2981,20 +3064,32 @@ def _check_bsjp_screener() -> None:
 
 
 def _confirm_bsjp_fills() -> None:
-    """Follow-up abis IEP close BENERAN settle (16:05, 5 menit abis freeze
-    16:00 — lihat _fetch_iep) buat SEMUA kandidat BSJP yang masih
-    'pending_confirm' (di-insert _check_bsjp_screener jam 15:50 pake ESTIMASI
-    closing, bukan closing beneran). Kasus nyata yang mecahin ini (GDST,
-    2026-09-23): estimasi 15:50 Rp134, limit beli Rp137 (3 tick), tapi IEP
-    beneran malah Rp139 — auction dapet dorongan beli telat abis 15:50,
+    """Follow-up abis IEP close BENERAN settle (16:30, buffer 30 menit abis
+    freeze 16:00 — lihat _fetch_iep, user eksplisit minta buffer segini biar
+    aman) buat SEMUA kandidat BSJP yang masih 'pending_confirm' (di-insert
+    _check_bsjp_screener jam 15:50 pake ESTIMASI closing, bukan closing
+    beneran, target/SL juga masih placeholder). Kasus nyata yang mecahin ini
+    (GDST, 2026-09-23): estimasi 15:50 Rp134, limit beli Rp137 (3 tick), tapi
+    IEP beneran malah Rp139 — auction dapet dorongan beli telat abis 15:50,
     ngelewatin limit kita. Order kayak gini SECARA REAL gak ke-fill (auction
     cuma match order yang limitnya >= harga clearing) — dulu sistem tetep
     nganggep 'open' apapun yang kejadian, ngasih PnL PALSU dari posisi yang
     gak pernah ke-eksekusi ("apapun yang terjadi tetep kebeli").
 
+    2 outcome:
+    - IEP real > limit beli kita -> 'cancelled', gak ke-fill, bukan posisi
+      running.
+    - IEP real <= limit (ke-fill) -> 'open', tapi target/stop_loss BARU
+      DIHITUNG DI SINI dari harga fill BENERAN (bukan lagi dari estimasi
+      15:50) — user eksplisit (2026-09-24): "TP/SL nya muncul ketika harga
+      udah fix keluar, bukan pas sebelum harganya" lebih akurat daripada
+      ngitung dari estimasi terus dipatok. Kirim alert baru "BERHASIL DIBELI"
+      dengan angka final, bukan numpang di alert 15:50 yang cuma estimasi.
+
     Invezgo gak configured / _fetch_iep gagal (gak ada cara verifikasi) ->
-    fallback ke perilaku LAMA (anggap ke-fill di estimasi) DARIPADA nyangkut
-    di 'pending_confirm' selamanya, gak ke-cover advisory/recap apapun."""
+    fallback ke perilaku LAMA (anggap ke-fill di estimasi, target/SL placeholder
+    yang udah kesimpen dipertahanin) DARIPADA nyangkut di 'pending_confirm'
+    selamanya, gak ke-cover advisory/recap apapun."""
     try:
         rows = supabase.table("signal_alerts").select("*").eq("status", "pending_confirm").eq("source", "bsjp").execute().data
     except Exception:
@@ -3004,7 +3099,8 @@ def _confirm_bsjp_fills() -> None:
         return
     for row in rows:
         ticker = row["ticker"]
-        buy_limit = (row.get("faktor_pendukung") or {}).get("buy_limit")
+        faktor = row.get("faktor_pendukung") or {}
+        buy_limit = faktor.get("buy_limit")
         real_close = None
         if invezgo_client.is_configured() and buy_limit:
             try:
@@ -3032,19 +3128,40 @@ def _confirm_bsjp_fills() -> None:
                 f"kemungkinan gak ke-fill — dianggap BATAL, bukan posisi running."
             )
             log.info(f"_confirm_bsjp_fills: {ticker} CANCELLED (IEP real {real_close} > limit {buy_limit})")
-        else:
-            try:
-                supabase.table("signal_alerts").update({"status": "open"}).eq("id", row["id"]).execute()
-            except Exception:
-                log.exception(f"_confirm_bsjp_fills({ticker}): gagal update jadi open")
-                continue
-            log.info(f"_confirm_bsjp_fills: {ticker} CONFIRMED open (IEP real={real_close}, limit={buy_limit})")
+            continue
+
+        # ke-fill (IEP <= limit) ATAU gak bisa diverifikasi (fallback anggap
+        # ke-fill) — fill_price pake IEP real kalau ada, kalau enggak pake
+        # estimasi lama. Target/SL BARU dihitung SEKARANG dari fill_price ini.
+        fill_price = real_close if real_close is not None else row["entry_price"]
+        tp_pct = bsjp_tp_pct(faktor.get("score") or 0)
+        target = round(fill_price * (1 + tp_pct / 100), 2)
+        stop_loss = round(fill_price * (1 - BSJP_SL_PCT / 100), 2)
+        try:
+            supabase.table("signal_alerts").update({
+                "status": "open",
+                "entry_price": fill_price,
+                "entry_low": fill_price,
+                "entry_high": fill_price,
+                "target": target,
+                "stop_loss": stop_loss,
+            }).eq("id", row["id"]).execute()
+        except Exception:
+            log.exception(f"_confirm_bsjp_fills({ticker}): gagal update jadi open")
+            continue
+        send_alert(
+            f"✅ <b>BSJP BERHASIL DIBELI — {_esc(ticker)}</b>\n\n"
+            f"Ke-fill di Rp{fill_price:,.0f}.\n"
+            f"🎯 Target Rp{target:,.0f} (+{tp_pct:g}%) · ⛔ SL Rp{stop_loss:,.0f} (-{BSJP_SL_PCT:g}%)\n\n"
+            f"Jual PAGI besok, jangan dipegang kelamaan."
+        )
+        log.info(f"_confirm_bsjp_fills: {ticker} CONFIRMED open @ Rp{fill_price} (target={target}, sl={stop_loss})")
 
 
 BSJP_CONFIRM_HOUR = 16
-BSJP_CONFIRM_MINUTE = 5  # 5 menit abis IEP close FREEZE (16:00, lihat _fetch_iep) — jangan
-                           # lebih cepet, IEP masih bisa direvisi sebelum freeze ("kepagian
-                           # fetch = data basi/beda", sama warning yang ada di _fetch_iep).
+BSJP_CONFIRM_MINUTE = 30  # user eksplisit minta jam segini (buffer 30 menit abis freeze
+                            # IEP 16:00, lihat _fetch_iep) — lebih dari cukup, freeze-nya
+                            # sendiri udah final dari jam 16:00.
 
 
 def _run_bsjp_confirm_step() -> None:
@@ -3062,10 +3179,22 @@ async def run_bsjp_confirm() -> None:
 
 def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> None:
     """Pertimbangan HOLD/EXIT buat 1 posisi 'open' (row signal_alerts) yang TP/SL-nya
-    belum kena tapi deadline exit strategi-nya (BSJP: pagi, BPJS: sore) udah deket.
-    Insight user: broker paling banyak akumulasi = paling banyak PEGANG barang —
-    volume hari ini jauh di atas rata-rata TAPI harga gak ikutan naik kuat = indikasi
-    DIA yang jual.
+    BELUM kena (dicek dari RANGE High/Low, lihat _resolve_tp_sl — kasus nyata AGAR
+    2026-09-24: gap-up pagi ngelewatin target lalu ARB, kalo cek Close doang bakal
+    nganggep loss padahal target udah kesentuh duluan, function ini nutup itu duluan
+    sebelum sempet nyasar ke pertimbangan hold/exit di bawah) tapi deadline exit
+    strategi-nya (BSJP: pagi, BPJS: sore) udah deket.
+
+    Sinyal UTAMA (2026-09-24, ganti dari broker net_value mingguan — user: "gak
+    paham sama sekali" liat reasoning "gak ada broker jelas paling akumulasi",
+    dan itu emang gate yang KETAT/sering false-negative buat 1 hari doang):
+    volume HARI INI vs rata-rata 20 hari (volume_ratio_today, SELALU ada dari
+    yfinance, gak butuh Invezgo) + arah harga sejak entry (pnl_pct) — volume
+    jauh di atas rata-rata TAPI harga gak ikutan naik/malah turun = indikasi
+    PENJUALAN MASIF (distribusi), volume gede DAN harga ikut naik = PEMBELIAN
+    MASIF/momentum lanjut. Broker top akumulasi (Invezgo) SEKARANG jadi
+    PENGUAT opsional doang buat konteks Groq, bukan syarat wajib — lihat
+    prompt ask_hold_or_exit (groq_client.py).
 
     `force_close_if_no_hold` — DIPAKAI BSJP DOANG (run_bsjp_hold_check), BUKAN
     BPJS. Aturan BSJP dari user (2026-09-09): WAJIB dijual besoknya, KECUALI
@@ -3078,12 +3207,20 @@ def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> Non
     ticker = row["ticker"]
     try:
         hist = _get_history(ticker)
-        price_now = float(hist["Close"].iloc[-1])
-        volume_today = float(hist["Volume"].iloc[-1])
+        hist_row = hist.iloc[-1]
+        price_now = float(hist_row["Close"])
+        volume_today = float(hist_row["Volume"])
         volume_avg20 = float(hist["Volume"].iloc[-21:-1].mean()) if len(hist) >= 21 else None
     except Exception:
         log.exception(f"_advise_hold_or_exit({ticker}): gagal fetch histori harga")
         return  # gak ada harga = gak bisa nutup posisi juga, coba lagi siklus berikutnya
+
+    status, close_price = _resolve_tp_sl(ticker, hist_row, row["target"], row["stop_loss"])
+    if status:
+        log.info(f"_advise_hold_or_exit({ticker}): {status} udah kesentuh hari ini (High/Low) — tutup normal, skip hold/exit judgment")
+        outcome_pct = round((close_price - row["entry_price"]) / row["entry_price"] * 100, 2)
+        _close_signal_alert(row, status, close_price, outcome_pct)
+        return
 
     def _force_cut(reason: str) -> None:
         if not force_close_if_no_hold:
@@ -3107,23 +3244,23 @@ def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> Non
             f"{sign}{outcome_pct}% (Rp{row['entry_price']:,.0f} → Rp{price_now:,.0f}). {_esc(reason)}"
         )
 
-    if not volume_avg20 or not invezgo_client.is_configured():
-        log.info(f"_advise_hold_or_exit({ticker}): diem, volume_avg20={volume_avg20}, invezgo_configured={invezgo_client.is_configured()}")
-        _force_cut("Belum ada data broker yang mendukung buat dipegang lebih lama.")
+    if not volume_avg20:
+        log.info(f"_advise_hold_or_exit({ticker}): diem, histori volume kurang dari 21 hari")
+        _force_cut("Histori volume belum cukup buat dianalisa — default jual sesuai aturan BSJP.")
         return
 
-    today = today_wib().isoformat()
-    week_ago = (today_wib() - timedelta(days=7)).isoformat()
-    try:
-        bs = invezgo_client.get_broker_summary(ticker, week_ago, today)
-        top_broker = max(bs, key=lambda b: float(b.get("net_value") or 0)) if bs else None
-    except Exception:
-        log.exception(f"_advise_hold_or_exit({ticker}): gagal fetch broker_summary")
-        top_broker = None
-    if not top_broker or float(top_broker.get("net_value") or 0) <= 0:
-        log.info(f"_advise_hold_or_exit({ticker}): diem, gak ada broker jelas paling akumulasi (top_broker={top_broker})")
-        _force_cut("Gak ada broker yang jelas paling akumulasi — gak ada alasan kuat buat nahan lebih lama.")
-        return  # (BPJS) gak ada broker yang jelas paling akumulasi, jangan nebak siapa yang "jual"
+    # broker top akumulasi — PENGUAT opsional doang buat Groq (kalau Invezgo
+    # configured & fetch sukses), BUKAN gate. Gagal/gak configured = None,
+    # tetep lanjut pake sinyal volume+harga yang emang selalu ada.
+    top_broker = None
+    if invezgo_client.is_configured():
+        today = today_wib().isoformat()
+        week_ago = (today_wib() - timedelta(days=7)).isoformat()
+        try:
+            bs = invezgo_client.get_broker_summary(ticker, week_ago, today)
+            top_broker = max(bs, key=lambda b: float(b.get("net_value") or 0)) if bs else None
+        except Exception:
+            log.exception(f"_advise_hold_or_exit({ticker}): gagal fetch broker_summary (dianggep gak ada, bukan blocker)")
 
     context = {
         "ticker": ticker,
@@ -3132,12 +3269,12 @@ def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> Non
         "stop_loss": row["stop_loss"],
         "price_now": price_now,
         "pnl_pct": round((price_now - row["entry_price"]) / row["entry_price"] * 100, 2),
-        "top_broker_code": top_broker.get("code"),
-        "top_broker_name": top_broker.get("name"),
-        "top_broker_net_lot": round(float(top_broker.get("net_volume") or 0) / 100),
         "volume_today": volume_today,
         "volume_avg20": round(volume_avg20),
         "volume_ratio_today": round(volume_today / volume_avg20, 2),
+        "top_broker_code": top_broker.get("code") if top_broker else None,
+        "top_broker_name": top_broker.get("name") if top_broker else None,
+        "top_broker_net_lot": round(float(top_broker.get("net_volume") or 0) / 100) if top_broker else None,
     }
     try:
         advice = ask_hold_or_exit(context)

@@ -1,7 +1,7 @@
 """Test unit buat levels.py — support/resistance & rr_label, fungsi murni
 (gak nyentuh yfinance/Supabase)."""
 import pandas as pd
-from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, idx_tick_size, price_plus_ticks
+from levels import rr_label, support_resistance, nearest_support_resistance, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, idx_tick_size, price_plus_ticks, classify_tp_sl_touch, resolve_ambiguous_touch
 
 
 def test_rr_label_bands():
@@ -26,6 +26,76 @@ def test_idx_tick_size_bands():
 def test_price_plus_ticks_uses_band_at_base_price():
     assert price_plus_ticks(93, 3) == 96  # tick Rp1 di bawah Rp200
     assert price_plus_ticks(1780, 3) == 1795  # tick Rp5 di rentang Rp500-2000
+
+
+def test_classify_tp_sl_touch_gap_up_then_arb_is_ambiguous_at_daily_level():
+    """Kasus nyata AGAR (2026-09-24): gap-up pagi jauh ngelewatin target,
+    abis itu ARB sampe di bawah stop_loss juga — dari daily bar doang
+    (High/Low/Close), DUA-DUANYA kesentuh hari yang sama, gak bisa
+    dipastikan mana duluan tanpa data intraday (lihat resolve_ambiguous_touch
+    test di bawah, itu yang beneran mutusin 'tp' buat kasus ini)."""
+    kind, exit_price = classify_tp_sl_touch(daily_high=3153, daily_low=2380, daily_close=2460, target=2874, stop_loss=2734)
+    assert kind == "ambiguous"
+    assert exit_price is None
+
+
+def test_resolve_ambiguous_touch_agar_gap_up_then_arb_resolves_to_tp():
+    """Bar 15-menit AGAR-style: gap-up nyentuh target di bar PALING AWAL
+    (open pagi udah di atas target), baru abis itu ARB ngebanting ke bawah
+    stop_loss di bar-bar belakangan — order TP REAL ke-fill duluan pas
+    market buka, jangan dianggep loss cuma gara-gara harga akhir anjlok."""
+    bars = [
+        {"High": 3153, "Low": 2900},  # bar pertama: langsung gap-up ngelewatin target
+        {"High": 2900, "Low": 2734},
+        {"High": 2734, "Low": 2380},  # ARB, tembus stop_loss belakangan
+    ]
+    assert resolve_ambiguous_touch(bars, target=2874, stop_loss=2734) == "tp"
+
+
+def test_classify_tp_sl_touch_overshoot_still_above_target_uses_actual_close():
+    """Kasus ULTJ/GDST — Close MASIH di atas target pas dicek (gak sempet
+    jatuh lagi), exit_price pake harga asli (overshoot), bukan diklem ke target."""
+    kind, exit_price = classify_tp_sl_touch(daily_high=139, daily_low=134, daily_close=139, target=138, stop_loss=131)
+    assert kind == "tp"
+    assert exit_price == 139
+
+
+def test_classify_tp_sl_touch_sl_symmetric():
+    kind, exit_price = classify_tp_sl_touch(daily_high=105, daily_low=90, daily_close=95, target=120, stop_loss=98)
+    assert kind == "sl"
+    assert exit_price == 95  # Close masih di bawah stop_loss, pake harga asli
+
+
+def test_classify_tp_sl_touch_sl_bounced_back_above_stop_loss():
+    kind, exit_price = classify_tp_sl_touch(daily_high=105, daily_low=90, daily_close=102, target=120, stop_loss=98)
+    assert kind == "sl"
+    assert exit_price == 98  # bounce balik di atas SL, tetep dianggep ke-fill di stop_loss
+
+
+def test_classify_tp_sl_touch_neither():
+    kind, exit_price = classify_tp_sl_touch(daily_high=105, daily_low=98, daily_close=100, target=120, stop_loss=90)
+    assert kind is None
+    assert exit_price == 100
+
+
+def test_classify_tp_sl_touch_ambiguous_when_both_hit_same_day():
+    kind, exit_price = classify_tp_sl_touch(daily_high=130, daily_low=80, daily_close=100, target=120, stop_loss=90)
+    assert kind == "ambiguous"
+    assert exit_price is None
+
+
+def test_resolve_ambiguous_touch_picks_whichever_bar_hit_first():
+    bars = [{"High": 105, "Low": 99}, {"High": 122, "Low": 100}, {"High": 110, "Low": 85}]
+    assert resolve_ambiguous_touch(bars, target=120, stop_loss=90) == "tp"
+
+
+def test_resolve_ambiguous_touch_sl_hit_first():
+    bars = [{"High": 105, "Low": 88}, {"High": 122, "Low": 100}]
+    assert resolve_ambiguous_touch(bars, target=120, stop_loss=90) == "sl"
+
+
+def test_resolve_ambiguous_touch_conservative_fallback_when_empty():
+    assert resolve_ambiguous_touch([], target=120, stop_loss=90) == "sl"
 
 
 def _make_hist(closes: list[float]) -> pd.DataFrame:

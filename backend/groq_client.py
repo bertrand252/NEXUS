@@ -625,32 +625,41 @@ def ask_night_recap_review(context: dict) -> str:
 
 def ask_hold_or_exit(context: dict) -> dict:
     """Pertimbangan HOLD atau EXIT buat posisi yang UDAH ke-entry (BSJP/BPJS/
-    Swing), TP belum kena tapi deadline exit strategi itu udah deket (BSJP:
-    harus dijual PAGI besoknya, BPJS: harus dijual SORE ini/sebelum tutup).
-    User eksplisit kasih logika intinya: broker paling banyak AKUMULASI itu
-    paling banyak PEGANG barang — kalau volume HARI INI jauh di atas
-    rata-rata TAPI harga gak ikutan naik kuat, kemungkinan broker itu yang
-    lagi JUALAN (dia yang paling banyak punya barang buat dijual).
+    Swing), TP/SL belum kena (dicek dari range High/Low di scheduler.py,
+    fungsi ini cuma dipanggil kalau emang masih genuinely undecided) tapi
+    deadline exit strategi itu udah deket (BSJP: harus dijual PAGI besoknya,
+    BPJS: harus dijual SORE ini/sebelum tutup).
+
+    Sinyal UTAMA (2026-09-24, ganti dari broker-net-value-doang — user gak
+    paham/gak percaya reasoning versi lama "gak ada broker jelas paling
+    akumulasi", dan itu sering gak ketemu buat data 1 hari doang): volume
+    HARI INI vs rata-rata 20 hari + arah harga sejak entry. Broker top
+    akumulasi (top_broker_*, BISA None kalau Invezgo gak configured/gak ada
+    yang jelas) sekarang PENGUAT konteks doang, bukan syarat wajib.
     Return: {"rekomendasi": "hold"|"exit", "alasan": "penjelasan detail"}."""
     system_prompt = (
         "Kamu analis saham IDX yang bantuin user mutusin HOLD atau EXIT posisi yang "
-        "udah dibeli (BSJP/BPJS/Swing), TP belum kena tapi deadline exit strategi ini "
-        "udah deket (BSJP: harus jual besok pagi, BPJS: harus jual sore ini sebelum "
-        "market tutup). Logika utama: broker yang paling banyak AKUMULASI (net-buy "
-        "terbesar, field top_broker_net_lot) itu yang paling banyak PEGANG barang "
-        "saham ini sekarang. Kalau volume transaksi HARI INI (volume_today) jauh di "
-        "atas rata-rata 20 hari (volume_avg20, lihat volume_ratio_today — misal "
-        "2-3x lipat) TAPI harga (price_now vs entry_price) gak ikutan naik kuat/malah "
-        "turun, itu indikasi KUAT broker itu lagi JUALAN barangnya — DISARANIN EXIT "
+        "udah dibeli (BSJP/BPJS/Swing), TP/SL belum kena tapi deadline exit strategi "
+        "ini udah deket (BSJP: harus jual besok pagi, BPJS: harus jual sore ini sebelum "
+        "market tutup). Logika UTAMA (field ini SELALU ada di context): bandingin "
+        "volume_ratio_today (volume_today vs volume_avg20) SAMA pnl_pct (arah harga "
+        "sejak entry_price). "
+        "(1) volume_ratio_today TINGGI (>=2x) TAPI pnl_pct gak ikutan naik kuat/malah "
+        "turun = indikasi KUAT lagi ada PENJUALAN MASIF (distribusi) — DISARANIN EXIT "
         "(cut loss kalau pnl_pct negatif, stop profit kalau masih untung dikit). "
-        "Kalau volume hari ini masih kecil/normal (deket rata-rata, volume_ratio_today "
-        "di bawah ~1.5x), itu kemungkinan cuma KOREKSI SEHAT (retail profit taking "
-        "kecil-kecilan), BUKAN distribusi bandar beneran — DISARANIN HOLD. Jangan "
-        "mengarang angka yang gak ada di context. Alasan HARUS spesifik pake angka "
-        "asli dari context (nama/kode broker, lot, rasio volume) — contoh gaya: "
-        "'Broker HP paling banyak akumulasi (100rb lot). Volume hari ini 30rb lot vs "
-        "rata-rata 10rb lot (3x lipat) — kemungkinan HP yang jual karena dia paling "
-        "banyak pegang barang, pertimbangkan keluar.' Bahasa Indonesia santai. "
+        "(2) volume_ratio_today TINGGI (>=2x) DAN pnl_pct ikut naik = indikasi PEMBELIAN "
+        "MASIF/momentum institusi masih lanjut — DISARANIN HOLD. "
+        "(3) volume_ratio_today NORMAL/rendah (<1.5x, gak ada aksi masif dua arah) = "
+        "cuma fluktuasi wajar, BUKAN alasan kuat buat nahan lebih lama dari rencana "
+        "awal — DISARANIN EXIT (default strategi ini emang jual sesuai rencana kecuali "
+        "ADA bukti kuat buat nahan, bukan sebaliknya). "
+        "Kalau top_broker_code ADA (bisa None, jangan dipaksain kalau kosong) — pake "
+        "SEBAGAI PENGUAT tambahan doang buat alasan, BUKAN syarat wajib buat mutuskan. "
+        "Jangan mengarang angka yang gak ada di context. Alasan HARUS pake angka ASLI "
+        "dari context (volume_ratio_today, pnl_pct, nama broker KALAU top_broker_code "
+        "gak None) — contoh gaya: 'Volume hari ini 3.2x rata-rata tapi harga cuma "
+        "+0.5% dari entry — indikasi penjualan masif, bukan minat beli asli, "
+        "pertimbangkan keluar.' Bahasa Indonesia santai, ringkas 2-3 kalimat. "
         'Balikin JSON persis: {"rekomendasi": "hold" atau "exit", "alasan": '
         '"penjelasan detail 2-3 kalimat"}'
     )

@@ -7,6 +7,50 @@ padahal ngarang. Upgrade nanti kalau kerasa kurang akurat.
 """
 
 
+def classify_tp_sl_touch(daily_high: float, daily_low: float, daily_close: float,
+                          target: float, stop_loss: float) -> tuple[str | None, float | None]:
+    """Tentuin tp/sl kesentuh dari RANGE harga (High/Low) 1 hari, BUKAN cuma
+    harga TERAKHIR dicek — kejadian nyata (AGAR, 2026-09-24): saham gap-up
+    pagi +13% (jauh ngelewatin target) abis itu KEBANTING ARB, harga pas
+    dicek siang udah -11%. Cek Close/harga-terakhir DOANG bakal nganggep ini
+    SL padahal order limit-sell TP REAL bakal ke-fill duluan begitu High
+    nyentuh target, jauh sebelum ARB kejadian.
+
+    Balikin ("tp"|"sl"|"ambiguous"|None, exit_price). "ambiguous" kalau
+    target DAN stop_loss DUA-DUANYA kesentuh hari yang sama (butuh data
+    intraday buat nentuin mana yang kejadian DULUAN — urusan caller, fungsi
+    ini gak akses data intraday, biar tetep murni & gampang dites).
+
+    exit_price: buat "tp" pake max(close, target) — kalau close MASIH di
+    atas target (overshoot beneran, kejadian nyata ULTJ/GDST), pake harga
+    asli itu; kalau close udah jatuh lagi di bawah target (kasus AGAR), pake
+    target (asumsi order limit ke-fill di situ). Simetris buat "sl" pake
+    min(close, stop_loss)."""
+    hit_tp = daily_high >= target
+    hit_sl = daily_low <= stop_loss
+    if hit_tp and hit_sl:
+        return "ambiguous", None
+    if hit_tp:
+        return "tp", max(daily_close, target)
+    if hit_sl:
+        return "sl", min(daily_close, stop_loss)
+    return None, daily_close
+
+
+def resolve_ambiguous_touch(bars: list[dict], target: float, stop_loss: float) -> str:
+    """`bars`: list bar kronologis (dict/Series ber-key "High"/"Low") 1 hari
+    yang target DAN stop_loss dua-duanya kesentuh (lihat classify_tp_sl_touch)
+    — cari mana yang kesentuh DULUAN. Fallback 'sl' (konservatif — JANGAN
+    asumsi profit kalau gak yakin urutannya) kalau ada bar yang dua-duanya
+    kesentuh BARENG, atau list kosong (data intraday gak ketemu)."""
+    for bar in bars:
+        if bar["Low"] <= stop_loss:
+            return "sl"
+        if bar["High"] >= target:
+            return "tp"
+    return "sl"
+
+
 def rr_label(rr_ratio: float) -> str:
     """Standar umum trading (riset: forex.com, heygotrade, dll) — buat Swing
     spesifik direkomendasiin 1:3 ke atas (beda dari scalping 1:1-1:1.5 atau
