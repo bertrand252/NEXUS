@@ -98,6 +98,29 @@ def test_resolve_ambiguous_touch_conservative_fallback_when_empty():
     assert resolve_ambiguous_touch([], target=120, stop_loss=90) == "sl"
 
 
+def test_resolve_ambiguous_touch_agar_real_case_one_bar_has_both_extremes():
+    """Kasus nyata AGAR (2026-09-24, dites lawan histori 15-menit beneran):
+    bar 15-menit PERTAMA hari itu SENDIRI udah High>=target DAN Low<=stop_loss
+    bareng (gap-up ekstrem lalu ARB dalam 1 candle 15-menit) — cek Low duluan
+    doang (versi SEBELUM fix Open) bakal SALAH nganggep SL. Open bar itu
+    (3010) udah di atas target (2874) — target kesentuh SAAT MARKET BUKA,
+    sebelum sempet ARB. Harus 'tp'."""
+    bars = [{"Open": 3010, "High": 3180, "Low": 2380}]
+    assert resolve_ambiguous_touch(bars, target=2874, stop_loss=2734.2) == "tp"
+
+
+def test_resolve_ambiguous_touch_open_gap_down_wins_even_if_high_also_hit():
+    bars = [{"Open": 80, "High": 125, "Low": 78}]
+    assert resolve_ambiguous_touch(bars, target=120, stop_loss=90) == "sl"
+
+
+def test_resolve_ambiguous_touch_open_between_thresholds_falls_back_to_low_first():
+    """Open MASIH di antara target/stop_loss (gak ada gap jelas) — gak bisa
+    dipastikan dari Open doang, tetep fallback konservatif (Low dicek duluan)."""
+    bars = [{"Open": 100, "High": 125, "Low": 85}]
+    assert resolve_ambiguous_touch(bars, target=120, stop_loss=90) == "sl"
+
+
 def _make_hist(closes: list[float]) -> pd.DataFrame:
     """DataFrame OHLC sintetis — High/Low dikasih spread kecil dari Close
     biar realistis, index tanggal harian berurutan."""

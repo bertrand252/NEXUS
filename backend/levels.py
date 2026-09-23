@@ -38,12 +38,28 @@ def classify_tp_sl_touch(daily_high: float, daily_low: float, daily_close: float
 
 
 def resolve_ambiguous_touch(bars: list[dict], target: float, stop_loss: float) -> str:
-    """`bars`: list bar kronologis (dict/Series ber-key "High"/"Low") 1 hari
-    yang target DAN stop_loss dua-duanya kesentuh (lihat classify_tp_sl_touch)
-    — cari mana yang kesentuh DULUAN. Fallback 'sl' (konservatif — JANGAN
-    asumsi profit kalau gak yakin urutannya) kalau ada bar yang dua-duanya
-    kesentuh BARENG, atau list kosong (data intraday gak ketemu)."""
+    """`bars`: list bar kronologis (dict/Series ber-key "High"/"Low", "Open"
+    opsional) 1 hari yang target DAN stop_loss dua-duanya kesentuh (lihat
+    classify_tp_sl_touch) — cari mana yang kesentuh DULUAN.
+
+    Kasus nyata AGAR (2026-09-24, dites manual lawan histori 15-menit
+    beneran): bar 15-menit PERTAMA hari itu SENDIRI udah High>=target DAN
+    Low<=stop_loss BARENG (gap-up ekstrem lalu ARB, kejadian dalam 1 candle
+    15-menit) — checking Low duluan (kayak sebelum fix ini) salah nganggep SL
+    padahal Open bar itu SENDIRI (3010) udah di atas target (2874), artinya
+    target udah kesentuh SAAT MARKET BUKA, sebelum sempet ARB. Makanya tiap
+    bar dicek Open-nya DULU (kalau ada): Open udah ngelewatin salah satu sisi
+    = itu yang menang buat bar ini, gak peduli urutan High/Low internal bar
+    itu sendiri. Kalau Open masih di antara keduanya (belum jelas dari gap),
+    baru fallback ke urutan bar (Low<=SL dicek duluan, konservatif — JANGAN
+    asumsi profit kalau gak yakin). Fallback akhir 'sl' kalau list kosong."""
     for bar in bars:
+        open_ = bar.get("Open")
+        if open_ is not None:
+            if open_ >= target:
+                return "tp"
+            if open_ <= stop_loss:
+                return "sl"
         if bar["Low"] <= stop_loss:
             return "sl"
         if bar["High"] >= target:

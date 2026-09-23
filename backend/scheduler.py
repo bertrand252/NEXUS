@@ -857,7 +857,7 @@ def _resolve_tp_sl(ticker: str, hist_row, target: float, stop_loss: float) -> tu
             d = hist_row.name.date() if hasattr(hist_row.name, "date") else hist_row.name
             hist_15m = _get_history_intraday(ticker)
             day_bars = [
-                {"High": float(bar["High"]), "Low": float(bar["Low"])}
+                {"Open": float(bar["Open"]), "High": float(bar["High"]), "Low": float(bar["Low"])}
                 for ts, bar in hist_15m.iterrows() if ts.date() == d
             ]
         except Exception:
