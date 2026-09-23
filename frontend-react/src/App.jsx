@@ -5,7 +5,6 @@ import MarketEvents from './pages/MarketEvents';
 import Analytics from './pages/Analytics';
 import Journal from './pages/Journal';
 import HistoryNexus from './pages/HistoryNexus';
-import BrokerWatchlist from './pages/BrokerWatchlist';
 import Scanner from './pages/Scanner';
 import StockDetail from './pages/StockDetail';
 import Dashboard from './pages/Dashboard';
@@ -34,7 +33,6 @@ export default function App() {
           <Route path="/portfolio-simulation" element={<PortfolioSimulation />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/history-nexus" element={<HistoryNexus />} />
-          <Route path="/broker-watchlist" element={<BrokerWatchlist />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
