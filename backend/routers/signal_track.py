@@ -13,6 +13,7 @@ def get_signal_track_stats():
         res = supabase.table("signal_alerts").select("status,outcome_pct").execute()
     except Exception:
         return {"total": 0, "open": 0, "tp_hit": 0, "sl_hit": 0, "timeout": 0, "win_rate_pct": None,
+                "total_profit_pct": 0, "total_loss_pct": 0, "biggest_win_pct": None, "biggest_loss_pct": None,
                 "warning": "Tabel signal_alerts belum ada / gak bisa diakses — jalanin SQL setup dulu di Supabase."}
 
     rows = res.data
@@ -43,10 +44,25 @@ def get_signal_track_stats():
     closed = wins + losses
     win_rate_pct = round(wins / closed * 100, 1) if closed else None
 
+    # Money management — dari outcome_pct SEMUA trade yang udah kejalanin
+    # (bukan sum jadi 1 angka "total return" beneran, itu butuh bobot posisi/
+    # modal riil yang gak dicatat di sini — ini SUM % mentah per trade, asumsi
+    # size tiap trade sama, buat gambaran kasar seberapa gede
+    # untung/rugi kumulatif relatif, sama biggest win/loss buat tau risk
+    # terburuk dalam 1 trade).
+    outcomes = [r["outcome_pct"] for r in rows if r.get("outcome_pct") is not None]
+    wins_pct = [o for o in outcomes if o > 0]
+    losses_pct = [o for o in outcomes if o <= 0]
+
     return {
         "total": total, "waiting_entry": waiting_entry, "open": open_count, "missed": missed,
         "tp_hit": tp_hit, "sl_hit": sl_hit, "timeout": timeout, "invalidated": invalidated,
-        "win_rate_pct": win_rate_pct, "warning": None,
+        "win_rate_pct": win_rate_pct,
+        "total_profit_pct": round(sum(wins_pct), 2) if wins_pct else 0,
+        "total_loss_pct": round(sum(losses_pct), 2) if losses_pct else 0,
+        "biggest_win_pct": round(max(outcomes), 2) if outcomes else None,
+        "biggest_loss_pct": round(min(outcomes), 2) if outcomes else None,
+        "warning": None,
     }
 
 

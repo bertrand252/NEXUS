@@ -135,10 +135,28 @@ export default function HistoryNexus() {
             <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Total Call</p>
             <p className="text-2xl font-extrabold font-mono text-white">{stats ? stats.total : '—'}</p>
           </div>
+          <div className="glow-border rounded-2xl bg-card border border-border p-4">
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Total Profit</p>
+            <p className="text-2xl font-extrabold font-mono text-emerald-400">{stats ? `+${stats.total_profit_pct}%` : '—'}</p>
+          </div>
+          <div className="glow-border rounded-2xl bg-card border border-border p-4">
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Total Loss</p>
+            <p className="text-2xl font-extrabold font-mono text-red-400">{stats ? `${stats.total_loss_pct}%` : '—'}</p>
+          </div>
+          <div className="glow-border rounded-2xl bg-card border border-border p-4">
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Win Terbesar</p>
+            <p className="text-2xl font-extrabold font-mono text-emerald-400">{stats?.biggest_win_pct != null ? `+${stats.biggest_win_pct}%` : '—'}</p>
+          </div>
+          <div className="glow-border rounded-2xl bg-card border border-border p-4">
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Loss Terbesar</p>
+            <p className="text-2xl font-extrabold font-mono text-red-400">{stats?.biggest_loss_pct != null ? `${stats.biggest_loss_pct}%` : '—'}</p>
+          </div>
         </div>
         <p className="text-[11px] text-slate-500 -mt-3">
           Status dicek 1x/hari abis market tutup (harga closing kemarin), bukan real-time — win rate cuma ngitung
-          call yang beneran kejalanin (TP/SL/timeout), bukan yang masih nunggu entry/kelewat.
+          call yang beneran kejalanin (TP/SL/timeout), bukan yang masih nunggu entry/kelewat. Total Profit/Loss itu
+          SUM % tiap trade (asumsi size sama tiap call) buat gambaran kasar money management, bukan return portfolio
+          riil (itu butuh bobot modal per posisi yang gak dicatat di sini).
         </p>
 
         <div>
