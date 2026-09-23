@@ -115,6 +115,26 @@ def _dedup_seen_keys(category: str) -> set[str]:
         return set()
 
 
+def _tickers_with_active_call() -> set[str]:
+    """Ticker yang UDAH ada call aktif (status waiting_entry/open, SUMBER
+    APAPUN — Swing/BPJS/BSJP), dipake buat NGE-BLOK pool kandidat kirim call
+    BARU ke ticker yang sama. BUG NYATA (user lapor): PETRO ke-call 3x
+    beruntun karena _dedup_seen_keys cuma nge-block re-alert HARI YANG SAMA —
+    besoknya dedup reset, kalau ticker itu masih lolos filter breakout/
+    momentum (posisi lama belum kena TP/SL/timeout), sistem nganggep itu
+    kandidat BARU lagi & kirim call KEDUA/KETIGA buat saham yang SAMA, bikin
+    user bingung (dikira harus average down padahal itu cuma bug dedup).
+    Prinsip: 1 ticker cuma boleh punya 1 call aktif dalam satu waktu — kalau
+    user mau nambah post-entry (average down/up), itu keputusan MANUAL
+    terpisah nanti, bukan NEXUS ngirim call baru diam-diam seolah itu sinyal
+    baru."""
+    try:
+        res = supabase.table("signal_alerts").select("ticker").in_("status", ["waiting_entry", "open"]).execute()
+        return {r["ticker"] for r in res.data}
+    except Exception:
+        return set()
+
+
 def _dedup_mark(category: str, key: str) -> None:
     try:
         supabase.table("alert_dedup").insert({
@@ -475,7 +495,10 @@ def _gather_candidates(macro_events: list[dict], settings: dict, pool_limit: int
         t for t, r in scan_by_ticker.items()
         if (r.get("technical_score") or 0) >= BREAKOUT_TECHNICAL_THRESHOLD
     }
-    pool = (breakout_tickers | set(mentor_by_ticker) | support_defended_tickers) - _dedup_seen_keys("alerted")
+    pool = (
+        (breakout_tickers | set(mentor_by_ticker) | support_defended_tickers)
+        - _dedup_seen_keys("alerted") - _tickers_with_active_call()
+    )
 
     candidates = []
     for ticker in pool:
@@ -2768,9 +2791,12 @@ def _check_bsjp_screener() -> None:
         return
     log.info(f"_check_bsjp_screener: {len(pool_res.data)} kandidat awal, cek live Stage-1+Stage-2")
 
+    active_tickers = _tickers_with_active_call()
     scored = []
     for row in pool_res.data:
         ticker = row["ticker"]
+        if ticker in active_tickers:
+            continue  # udah ada call aktif buat ticker ini, jangan numpuk call baru
         try:
             hist_15m = _get_history_intraday(ticker)
             days = daily_session_stats(hist_15m)
@@ -3514,7 +3540,10 @@ def _gather_bpjs_candidates(pool_limit: int = BPJS_POOL_LIMIT) -> list[dict]:
     news_by_ticker = _recent_news_by_ticker()
     channel_calls_by_ticker = _recent_trade_calls_by_ticker()
 
-    pool = _bpjs_pool_tickers(pool_limit)
+    # _tickers_with_active_call() DI SINI, BUKAN di _bpjs_pool_tickers() — fungsi
+    # itu direuse _capture_iep() yang butuh TAU semua kandidat sebelum market
+    # buka (capture harga doang, bukan kirim call), jangan ikut kefilter.
+    pool = _bpjs_pool_tickers(pool_limit) - _tickers_with_active_call()
     session = "s2" if _now_wib().time() >= time(13, 0) else "s1"
 
     candidates = []
@@ -3942,7 +3971,7 @@ def _check_sekuritas_pick() -> None:
         return
 
     calls_by_ticker = {c["ticker"]: c for c in calls}
-    valid_tickers = set(calls_by_ticker)
+    valid_tickers = set(calls_by_ticker) - _tickers_with_active_call()
     sent_any = False
     for pick in picks:
         validated = _validate_sekuritas_pick(pick, valid_tickers)
