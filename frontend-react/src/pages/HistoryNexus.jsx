@@ -49,11 +49,27 @@ function TickerLogo({ ticker }) {
   );
 }
 
+const RUNNING_STATUSES = new Set(['waiting_entry', 'open']);
+const HIDE_COMPLETED_KEY = 'nexus_history_hide_completed';
+
 export default function HistoryNexus() {
   const [rows, setRows] = useState(null);
   const [stats, setStats] = useState(null);
   const [error, setError] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all');
+  // default ON — user komplain kebanjiran card call yang udah selesai
+  // (TP/SL/timeout), susah nemu yang masih jalan di antara tumpukan lama
+  const [hideCompleted, setHideCompleted] = useState(() => {
+    try { return localStorage.getItem(HIDE_COMPLETED_KEY) !== 'false'; } catch { return true; }
+  });
+
+  function toggleHideCompleted() {
+    setHideCompleted((v) => {
+      const next = !v;
+      try { localStorage.setItem(HIDE_COMPLETED_KEY, String(next)); } catch { /* private window dst, gak fatal */ }
+      return next;
+    });
+  }
 
   const reqId = useRef(0);
 
@@ -82,7 +98,11 @@ export default function HistoryNexus() {
     return () => clearInterval(id);
   }, []);
 
-  const filtered = rows ? rows.filter((r) => sourceFilter === 'all' || r.source === sourceFilter) : null;
+  const filtered = rows
+    ? rows
+        .filter((r) => sourceFilter === 'all' || r.source === sourceFilter)
+        .filter((r) => !hideCompleted || RUNNING_STATUSES.has(r.status))
+    : null;
 
   return (
     <>
@@ -122,17 +142,30 @@ export default function HistoryNexus() {
         </p>
 
         <div>
-          <div className="flex items-center gap-1 mb-4">
-            {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS'], ['bsjp', 'BSJP']].map(([key, label]) => (
-              <button key={key} onClick={() => setSourceFilter(key)}
-                className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition ${sourceFilter === key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
-                {label}
-              </button>
-            ))}
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+            <div className="flex items-center gap-1">
+              {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS'], ['bsjp', 'BSJP']].map(([key, label]) => (
+                <button key={key} onClick={() => setSourceFilter(key)}
+                  className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition ${sourceFilter === key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button onClick={toggleHideCompleted}
+              className="flex items-center gap-2 text-[11px] font-semibold text-slate-400 hover:text-white transition">
+              Sembunyikan yang Selesai (TP/SL/Timeout)
+              <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${hideCompleted ? 'bg-accent' : 'bg-white/10'}`}>
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${hideCompleted ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              </span>
+            </button>
           </div>
 
           {!filtered && !error && <p className="text-center text-slate-500 py-8">Memuat...</p>}
-          {filtered && filtered.length === 0 && <p className="text-center text-slate-500 py-8">Belum ada call tercatat.</p>}
+          {filtered && filtered.length === 0 && (
+            <p className="text-center text-slate-500 py-8">
+              {hideCompleted ? 'Gak ada call yang lagi jalan/nunggu entry saat ini.' : 'Belum ada call tercatat.'}
+            </p>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered?.map((r, i) => {
