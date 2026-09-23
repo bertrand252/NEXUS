@@ -176,6 +176,35 @@ def bsjp_tp_pct(score: float) -> float:
     return round(BSJP_TP_MIN_PCT + frac * (BSJP_TP_MAX_PCT - BSJP_TP_MIN_PCT), 2)
 
 
+BSJP_ARA_CHECK_MIN_DAY_PCT = 15.0  # cuma dicek kalau full_day_pct udah gede (deket ambang
+                                     # ARA harian BEI ~15-25%/hari) — breakout wajar 5-10%
+                                     # jangan ke-skip cuma gara-gara kebetulan flat sebentar
+
+
+def bsjp_looks_ara_locked(hist_15m, full_day_pct: float | None) -> bool:
+    """Heuristik ARA (auto-reject atas/upper limit lock) — BUKAN deteksi resmi
+    (gak ada API buat "lagi lock atau enggak"), proxy dari price action: saham
+    yang BENERAN ke-lock di ceiling, bar 15-menitan-nya kehilangan RANGE sama
+    sekali (High==Low, matched di 1 harga doang) di bar-bar terakhir — beda
+    dari saham yang jujur breakout kuat (masih ada fluktuasi kecil walau naik
+    terus).
+
+    user eksplisit (2026-09-23, kasus BAJA): saham lock ARA gak ada gunanya
+    buat BSJP walau lolos semua kriteria lain — gak ada barang yang bisa
+    dibeli (buy queue penuh, seller kosong).
+
+    ponytail: heuristik price-action doang, bukan order-book depth beneran
+    (get_order_queue Invezgo) — upgrade kalau ini kebukti sering meleset
+    (false negative: ARA sempet kebuka dikit dalam sesi; false positive:
+    saham emang tipis/jarang trading di luar kondisi ARA)."""
+    if not full_day_pct or full_day_pct < BSJP_ARA_CHECK_MIN_DAY_PCT:
+        return False
+    tail = hist_15m.tail(3)
+    if len(tail) < 2:
+        return False
+    return bool((tail["High"] == tail["Low"]).all())
+
+
 def bpjs_momentum_score(takeoff: dict | None, value_traded_idr: float) -> float:
     """BPJS (Day Trade) — reuse `intraday.py::session_takeoff` tapi buat SESI
     APAPUN yang lagi jalan (bukan cuma sesi 2 kayak BSJP), karena BPJS

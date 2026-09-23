@@ -9,6 +9,7 @@ const STATUS_META = {
   sl_hit: { label: 'SL Kena', cls: 'bg-strong/10 text-strong border-strong/30' },
   timeout: { label: 'Timeout', cls: 'bg-moderate/10 text-moderate border-moderate/30' },
   missed: { label: 'Kelewat', cls: 'bg-white/5 text-slate-500 border-border' },
+  invalidated: { label: 'Dicabut', cls: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
 };
 
 function fmtDate(iso) {
@@ -17,6 +18,35 @@ function fmtDate(iso) {
 }
 function fmtRp(v) {
   return v == null ? '—' : `Rp${Number(v).toLocaleString('id-ID')}`;
+}
+
+// cache domain logo per ticker di luar komponen — polling 60 detik gak perlu
+// nembak /logo ulang tiap kali, domain website perusahaan gak berubah-ubah
+const logoDomainCache = new Map();
+
+function TickerLogo({ ticker }) {
+  const [domain, setDomain] = useState(() => logoDomainCache.get(ticker) ?? undefined);
+  const [broken, setBroken] = useState(false);
+
+  useEffect(() => {
+    if (logoDomainCache.has(ticker)) return;
+    fetch(`${API_BASE}/scanner/${ticker}/logo`)
+      .then((r) => (r.ok ? r.json() : { domain: null }))
+      .then(({ domain: d }) => { logoDomainCache.set(ticker, d); setDomain(d); })
+      .catch(() => { logoDomainCache.set(ticker, null); setDomain(null); });
+  }, [ticker]);
+
+  if (domain && !broken) {
+    return (
+      <img src={`https://logo.clearbit.com/${domain}?size=64`} alt={ticker} onError={() => setBroken(true)}
+        className="w-10 h-10 rounded-full bg-white object-contain p-1.5 shrink-0" />
+    );
+  }
+  return (
+    <div className="w-10 h-10 rounded-full bg-accent/15 text-accent flex items-center justify-center text-[11px] font-extrabold font-mono shrink-0">
+      {ticker.slice(0, 4)}
+    </div>
+  );
 }
 
 export default function HistoryNexus() {
@@ -91,8 +121,8 @@ export default function HistoryNexus() {
           call yang beneran kejalanin (TP/SL/timeout), bukan yang masih nunggu entry/kelewat.
         </p>
 
-        <div className="glow-border rounded-2xl bg-card border border-border overflow-hidden">
-          <div className="flex items-center gap-1 p-4 border-b border-border">
+        <div>
+          <div className="flex items-center gap-1 mb-4">
             {[['all', 'Semua'], ['swing', 'Swing'], ['bpjs', 'BPJS'], ['bsjp', 'BSJP']].map(([key, label]) => (
               <button key={key} onClick={() => setSourceFilter(key)}
                 className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition ${sourceFilter === key ? 'bg-accent/10 text-accent border-accent/30' : 'bg-white/5 text-slate-500 border-border hover:text-white'}`}>
@@ -100,48 +130,48 @@ export default function HistoryNexus() {
               </button>
             ))}
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-border bg-white/[0.02]">
-                  <th className="px-5 py-3 font-medium">Tanggal</th>
-                  <th className="px-5 py-3 font-medium">Ticker</th>
-                  <th className="px-5 py-3 font-medium">Jenis</th>
-                  <th className="px-5 py-3 font-medium text-right">Harga Beli</th>
-                  <th className="px-5 py-3 font-medium text-right">Target</th>
-                  <th className="px-5 py-3 font-medium text-right">Stop Loss</th>
-                  <th className="px-5 py-3 font-medium">Status</th>
-                  <th className="px-5 py-3 font-medium text-right">Harga Close</th>
-                  <th className="px-5 py-3 font-medium text-right">Realized PnL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!filtered && !error && (
-                  <tr><td colSpan={9} className="px-5 py-8 text-center text-slate-500">Memuat...</td></tr>
-                )}
-                {filtered && filtered.length === 0 && (
-                  <tr><td colSpan={9} className="px-5 py-8 text-center text-slate-500">Belum ada call tercatat.</td></tr>
-                )}
-                {filtered?.map((r, i) => {
-                  const meta = STATUS_META[r.status] || { label: r.status, cls: 'bg-white/5 text-slate-500 border-border' };
-                  return (
-                    <tr key={i} className="hover:bg-white/[0.03] transition border-t border-border/50">
-                      <td className="px-5 py-3 text-slate-400 font-mono whitespace-nowrap">{fmtDate(r.alerted_at)}</td>
-                      <td className="px-5 py-3 text-white font-mono font-semibold">{r.ticker}</td>
-                      <td className="px-5 py-3 text-slate-300">{SOURCE_LABEL[r.source] || r.source}</td>
-                      <td className="px-5 py-3 text-right font-mono text-slate-300">{fmtRp(r.entry_price)}</td>
-                      <td className="px-5 py-3 text-right font-mono text-emerald-400">{fmtRp(r.target)}</td>
-                      <td className="px-5 py-3 text-right font-mono text-red-400">{fmtRp(r.stop_loss)}</td>
-                      <td className="px-5 py-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${meta.cls}`}>{meta.label}</span></td>
-                      <td className="px-5 py-3 text-right font-mono text-slate-300">{fmtRp(r.close_price)}</td>
-                      <td className={`px-5 py-3 text-right font-mono font-semibold ${r.outcome_pct == null ? 'text-slate-500' : r.outcome_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {r.outcome_pct == null ? '—' : `${r.outcome_pct >= 0 ? '+' : ''}${r.outcome_pct}%`}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+
+          {!filtered && !error && <p className="text-center text-slate-500 py-8">Memuat...</p>}
+          {filtered && filtered.length === 0 && <p className="text-center text-slate-500 py-8">Belum ada call tercatat.</p>}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {filtered?.map((r, i) => {
+              const meta = STATUS_META[r.status] || { label: r.status, cls: 'bg-white/5 text-slate-500 border-border' };
+              return (
+                <div key={i} className="glow-border rounded-2xl bg-card border border-border p-4 flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <TickerLogo ticker={r.ticker} />
+                    <div className="min-w-0">
+                      <p className="text-white font-mono font-bold truncate">{r.ticker}</p>
+                      <p className="text-[11px] text-slate-500">{SOURCE_LABEL[r.source] || r.source}</p>
+                    </div>
+                    <span className={`ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${meta.cls}`}>{meta.label}</span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">Entry</p>
+                      <p className="text-xs font-mono text-slate-300">{fmtRp(r.entry_price)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">Target</p>
+                      <p className="text-xs font-mono text-emerald-400">{fmtRp(r.target)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">SL</p>
+                      <p className="text-xs font-mono text-red-400">{fmtRp(r.stop_loss)}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-border/50 text-xs">
+                    <span className="text-slate-500 font-mono">{fmtDate(r.alerted_at)}</span>
+                    <span className={`font-mono font-semibold ${r.outcome_pct == null ? 'text-slate-500' : r.outcome_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {r.outcome_pct == null ? '—' : `${r.outcome_pct >= 0 ? '+' : ''}${r.outcome_pct}%`}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

@@ -6,7 +6,7 @@ import pandas as pd
 from scoring import (
     volume_score, price_score, technical_score, bsjp_criteria,
     compression_setup, bsjp_intraday_score, bpjs_momentum_score, signal_label,
-    ma_alignment, adx, bollinger_signal, bsjp_tp_pct,
+    ma_alignment, adx, bollinger_signal, bsjp_tp_pct, bsjp_looks_ara_locked,
     BSJP_TP_MIN_PCT, BSJP_TP_MAX_PCT, BSJP_TP_SCORE_LOW, BSJP_TP_SCORE_HIGH,
 )
 
@@ -116,6 +116,31 @@ def test_bsjp_tp_pct_scales_with_momentum():
 def test_bpjs_momentum_score_below_liquidity_floor():
     takeoff = {"volume_ratio": 4.0, "price_change_pct": 2.0}
     assert bpjs_momentum_score(takeoff, 1_000_000_000) == 0.0  # di bawah Rp3M
+
+
+def _make_15m_hist(highs: list[float], lows: list[float]) -> pd.DataFrame:
+    idx = pd.date_range("2026-09-23 14:00", periods=len(highs), freq="15min")
+    return pd.DataFrame({"Open": highs, "Close": highs, "High": highs, "Low": lows}, index=idx)
+
+
+def test_bsjp_looks_ara_locked_flags_flat_tail_bars_on_big_day():
+    hist = _make_15m_hist(highs=[100, 100, 436, 436, 436], lows=[95, 98, 436, 436, 436])
+    assert bsjp_looks_ara_locked(hist, full_day_pct=24.57) is True  # kasus BAJA
+
+
+def test_bsjp_looks_ara_locked_false_when_day_pct_below_threshold():
+    hist = _make_15m_hist(highs=[100, 100, 108, 108, 108], lows=[95, 98, 108, 108, 108])
+    assert bsjp_looks_ara_locked(hist, full_day_pct=8.0) is False  # breakout wajar, bukan ARA
+
+
+def test_bsjp_looks_ara_locked_false_when_still_has_range():
+    hist = _make_15m_hist(highs=[100, 105, 110, 116, 120], lows=[95, 100, 105, 110, 115])
+    assert bsjp_looks_ara_locked(hist, full_day_pct=20.0) is False  # naik terus tapi masih ada fluktuasi
+
+
+def test_bsjp_looks_ara_locked_false_without_day_pct():
+    hist = _make_15m_hist(highs=[100, 100], lows=[100, 100])
+    assert bsjp_looks_ara_locked(hist, full_day_pct=None) is False
 
 
 def test_signal_label_bands():

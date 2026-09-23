@@ -15,6 +15,7 @@ from scheduler import (
     run_night_recap,
     run_pre_market_briefing,
     run_bsjp_screener,
+    run_bsjp_confirm,
     run_bsjp_hold_check,
     run_bpjs_hold_check,
     run_weekly_postmortem,
@@ -36,10 +37,15 @@ from scheduler import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """15 task background (lihat scheduler.py buat detail tiap fungsi):
+    """16 task background (lihat scheduler.py buat detail tiap fungsi):
     run_scheduler (Swing, jam market tutup), run_morning_routine, run_pre_market_briefing
     (08:45, "sarapan pagi" ke Telegram), run_bsjp_screener (15:50 — digeser dari 15:30,
     2026-09-16, biar estimasi closing yang dipake lebih deket ke closing beneran),
+    run_bsjp_confirm (16:05, 5 menit abis IEP close freeze — konfirmasi kandidat BSJP
+    beneran ke-fill atau enggak lawan IEP closing ASLI, bukan estimasi 15:50; kasus
+    GDST 2026-09-23: estimasi Rp134 tapi IEP beneran loncat ke Rp139, di atas limit
+    beli kita, order gak ke-fill — sebelum ini sistem tetep nganggep 'open' apapun
+    yang kejadian),
     run_bpjs_hold_check (15:30, pertimbangan hold/exit BPJS yang masih open — DIPISAH
     dari run_bsjp_screener biar jadwalnya independen, kebetulan aja dulu sama-sama
     15:30), run_bsjp_hold_check (12:00, pertimbangan hold/exit BSJP yang di-entry
@@ -73,6 +79,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_morning_routine()),
         asyncio.create_task(run_pre_market_briefing()),
         asyncio.create_task(run_bsjp_screener()),
+        asyncio.create_task(run_bsjp_confirm()),
         asyncio.create_task(run_bpjs_hold_check()),
         asyncio.create_task(run_bsjp_hold_check()),
         asyncio.create_task(run_night_recap()),

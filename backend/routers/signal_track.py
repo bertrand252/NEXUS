@@ -25,18 +25,27 @@ def get_signal_track_stats():
     timeout_win = sum(1 for r in rows if r["status"] == "timeout" and (r.get("outcome_pct") or 0) > 0)
     timeout_loss = sum(1 for r in rows if r["status"] == "timeout" and (r.get("outcome_pct") or 0) <= 0)
     timeout = timeout_win + timeout_loss
+    # invalidated (scheduler.py::_check_invalidated, sinyal drop dari Strong
+    # sebelum kena TP/SL) — kalau posisinya udah sempet 'open' (outcome_pct
+    # kehitung, ada PnL real walau belum TP/SL), itungannya sama kayak posisi
+    # ditutup beneran (menang/kalah). Kalau masih 'waiting_entry' pas dicabut
+    # (belum sempet entry sama sekali), sama kayak 'missed' — gak dihitung.
+    invalidated_win = sum(1 for r in rows if r["status"] == "invalidated" and (r.get("outcome_pct") or 0) > 0)
+    invalidated_loss = sum(1 for r in rows if r["status"] == "invalidated" and r.get("outcome_pct") is not None and r["outcome_pct"] <= 0)
+    invalidated = sum(1 for r in rows if r["status"] == "invalidated")
 
-    # win rate cuma dari posisi yang BENERAN kejalanin (tp/sl/timeout) —
-    # waiting_entry & missed sengaja gak keitung menang/kalah, itu bukan
-    # soal panggilannya bener/salah, cuma belum/gak sempet ke-entry
-    wins = tp_hit + timeout_win
-    losses = sl_hit + timeout_loss
+    # win rate cuma dari posisi yang BENERAN kejalanin (tp/sl/timeout/
+    # invalidated-abis-open) — waiting_entry & missed sengaja gak keitung
+    # menang/kalah, itu bukan soal panggilannya bener/salah, cuma belum/gak
+    # sempet ke-entry
+    wins = tp_hit + timeout_win + invalidated_win
+    losses = sl_hit + timeout_loss + invalidated_loss
     closed = wins + losses
     win_rate_pct = round(wins / closed * 100, 1) if closed else None
 
     return {
         "total": total, "waiting_entry": waiting_entry, "open": open_count, "missed": missed,
-        "tp_hit": tp_hit, "sl_hit": sl_hit, "timeout": timeout,
+        "tp_hit": tp_hit, "sl_hit": sl_hit, "timeout": timeout, "invalidated": invalidated,
         "win_rate_pct": win_rate_pct, "warning": None,
     }
 

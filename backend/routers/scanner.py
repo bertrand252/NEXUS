@@ -633,6 +633,21 @@ def _fetch_broker_features_today(ticker: str, hist) -> dict | None:
         return None
 
 
+@router.get("/{ticker}/logo")
+def get_stock_logo(ticker: str):
+    """Domain website perusahaan doang (buat logo via Clearbit di frontend,
+    fitur card History NEXUS) — endpoint KHUSUS ringan (1x yfinance .info),
+    jangan pake /scanner/{ticker} yang berat (history+scoring+AI prediction
+    penuh) cuma buat ambil 1 field ini."""
+    ticker = ticker.upper()
+    try:
+        website = yf.Ticker(f"{ticker}.JK").info.get("website")
+    except Exception:
+        website = None
+    domain = website.replace("https://", "").replace("http://", "").split("/")[0] if website else None
+    return {"domain": domain}
+
+
 @router.get("/{ticker}")
 def get_stock_detail(ticker: str):
     """Detail 1 saham: skor + level support/resistance (selalu dari window 2 bulan,

@@ -17,7 +17,7 @@ from routers.mentor_calls import refresh_mentor_calls
 from routers.daily_briefing import _generate_briefing
 from levels import support_resistance, nearest_support_resistance, detect_trend_channel, find_smart_tp, rr_label, determine_trend, well_defended_support, detect_chart_pattern, apply_buy_on_weakness_support, price_plus_ticks
 from chart_render import render_chart, render_outcome_chart
-from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT, bsjp_criteria
+from scoring import bsjp_intraday_score, bpjs_momentum_score, volume_dry_up, is_market_uptrend, ma_alignment, adx, bollinger_signal, bsjp_tp_pct, BSJP_SL_PCT, bsjp_criteria, bsjp_looks_ara_locked
 from intraday import daily_session_stats, session_takeoff
 from groq_client import analyze_alert, pick_alert_candidate, pick_bpjs_candidate, assess_running_positions, generate_postmortem, evaluate_portfolio_rotation, ask_hold_or_exit, pick_sekuritas_calls
 from forex_factory import get_forex_events
@@ -190,45 +190,66 @@ def _check_invalidated() -> None:
     """Ticker yang lagi ada posisi Swing AKTIF (waiting_entry/open di
     signal_alerts — BUKAN cuma yang di-alert HARI INI, posisi bisa kepegang
     sampe SIGNAL_TIMEOUT_DAYS hari), cek ulang statusnya — kalau udah gak
-    Strong lagi, kirim 1 notif teks (bukan foto), sekali aja per ticker per
-    hari. Dulu pake _dedup_seen_keys("alerted") buat nentuin "pending" —
-    BUG: dedup itu di-scope per HARI (dedup_date=hari ini), jadi abis hari
+    Strong lagi, TUTUP beneran (status 'invalidated', konsisten sama status
+    tp_hit/sl_hit/timeout/missed lain) + kirim 1 notif teks (bukan foto).
+    Dulu CUMA ngirim notif "udah gak Strong lagi" tapi status di DB dibiarin
+    waiting_entry/open selamanya — bug nyata (user lapor): History NEXUS &
+    "rekomendasi" daily briefing (_active_nexus_calls, narik status
+    waiting_entry/open) tetep nampilin call yang NEXUS sendiri udah bilang
+    gak valid lagi, padahal telegram message-nya udah diunsend. Prinsip:
+    jangan maksa pertahanin call yang kualitasnya udah turun — cabut beneran,
+    ngaku salah, bukan dibiarin nggantung selamanya.
+    Dulu pake _dedup_seen_keys("alerted") buat nentuin "pending" — BUG:
+    dedup itu di-scope per HARI (dedup_date=hari ini), jadi abis hari
     alert-nya lewat, ticker itu gak pernah dicek ulang lagi seumur posisinya
     (posisi Swing bisa idle sampe 14 hari tanpa peringatan sinyal udah
     melemah). Fix: query langsung ke signal_alerts, sumber kebenaran posisi
     aktif yang sebenernya."""
     try:
         pos_res = (
-            supabase.table("signal_alerts").select("ticker")
+            supabase.table("signal_alerts").select("id,ticker,status,entry_price,telegram_message_id")
             .eq("source", "swing").in_("status", ["waiting_entry", "open"])
             .execute()
         )
-        pending = {r["ticker"] for r in pos_res.data} - _dedup_seen_keys("invalidated")
+        positions = {r["ticker"]: r for r in pos_res.data}
+        pending = set(positions) - _dedup_seen_keys("invalidated")
     except Exception:
         return
     if not pending:
         return
     try:
-        res = supabase.table("scanner_cache").select("ticker,total_score,signal").in_("ticker", list(pending)).execute()
+        res = supabase.table("scanner_cache").select("ticker,total_score,signal,price").in_("ticker", list(pending)).execute()
     except Exception:
         return
+    now = datetime.now(timezone.utc)
     for row in res.data:
-        if row["signal"] != "Strong":
-            try:
-                sig_res = (
-                    supabase.table("signal_alerts").select("telegram_message_id")
-                    .eq("ticker", row["ticker"]).in_("status", ["waiting_entry", "open"])
-                    .order("alerted_at", desc=True).limit(1).execute()
-                )
-                if sig_res.data and sig_res.data[0].get("telegram_message_id"):
-                    delete_message(sig_res.data[0]["telegram_message_id"])  # unsend — udah gak valid lagi
-            except Exception:
-                pass
-            send_alert(
-                f"⚪ <b>Update — {_esc(row['ticker'])}</b>\n\n"
-                f"Udah gak Strong lagi (sekarang {_esc(row['signal'])}, score {row['total_score']}/100)."
-            )
-            _dedup_mark("invalidated", row["ticker"])
+        if row["signal"] == "Strong":
+            continue
+        pos = positions[row["ticker"]]
+        price_now = row.get("price")
+        update = {"status": "invalidated", "closed_at": now.isoformat()}
+        outcome_pct = None
+        if pos["status"] == "open" and price_now:
+            outcome_pct = round((price_now - pos["entry_price"]) / pos["entry_price"] * 100, 2)
+            update["close_price"] = price_now
+            update["outcome_pct"] = outcome_pct
+        try:
+            supabase.table("signal_alerts").update(update).eq("id", pos["id"]).execute()
+        except Exception:
+            pass
+        if pos.get("telegram_message_id"):
+            delete_message(pos["telegram_message_id"])  # unsend — udah gak valid lagi
+        if outcome_pct is not None:
+            sign = "+" if outcome_pct >= 0 else ""
+            body = f"PnL sejauh ini {sign}{outcome_pct}% (entry Rp{pos['entry_price']:,.0f} → Rp{price_now:,.0f})."
+        else:
+            body = "Belum sempat kena zona entry — dicabut sebelum kejadian."
+        send_alert(
+            f"❌ <b>Call Dicabut — {_esc(row['ticker'])}</b>\n\n"
+            f"Sinyal udah gak Strong lagi (sekarang {_esc(row['signal'])}, score {row['total_score']}/100) — "
+            f"call ini kita anggap salah, gak dipaksain.\n{body}"
+        )
+        _dedup_mark("invalidated", row["ticker"])
 
 
 SOURCE_LABEL = {
@@ -2790,6 +2811,13 @@ def _check_bsjp_screener() -> None:
             # menyesatkan soal seberapa kuat momentumnya beneran.
             prev_close = (days[-2].get("s2_close") or days[-2].get("s1_close")) if len(days) >= 2 else None
             full_day_pct = round((price_now - prev_close) / prev_close * 100, 2) if prev_close else None
+            # user (2026-09-23, kasus BAJA): saham lock ARA gak ada gunanya buat
+            # BSJP walau lolos semua kriteria lain di atas — gak ada barang buat
+            # dibeli (buy queue penuh, seller kosong). Skip di sini (BUKAN di
+            # bsjp_criteria Stage-1), butuh hist_15m yang cuma ada di loop ini.
+            if bsjp_looks_ara_locked(hist_15m, full_day_pct):
+                log.info(f"_check_bsjp_screener: skip {ticker} — kemungkinan lock ARA (full_day_pct={full_day_pct}%)")
+                continue
             scored.append({"ticker": ticker, "price": price_now, "takeoff": takeoff, "score": score, "full_day_pct": full_day_pct})
 
     if not scored:
@@ -2899,7 +2927,18 @@ def _check_bsjp_screener() -> None:
                     "entry_high": c["price"],
                     "target": c["target"],
                     "stop_loss": c["stop_loss"],
-                    "status": "open",
+                    # BUKAN "open" langsung (2026-09-23, kasus GDST) — c["price"]
+                    # ini estimasi jam 15:50, IEP beneran BISA loncat jauh di
+                    # atasnya (auction dapet dorongan telat) sampe ngelewatin
+                    # limit beli kita, yang secara real gak bakal ke-fill sama
+                    # sekali. "open" langsung bikin sistem SELALU anggep kebeli
+                    # apapun yang terjadi ("bug" yang user laporin — PnL keitung
+                    # dari posisi yang sebenernya gak pernah ke-eksekusi).
+                    # _confirm_bsjp_fills() (16:05, abis IEP close beneran
+                    # settle) yang mutusin final: "open" kalau IEP <= limit
+                    # (beneran ke-fill), "cancelled" kalau IEP loncat ngelewatin
+                    # limit (gak ke-fill, jangan dianggep posisi running).
+                    "status": "pending_confirm",
                     "source": "bsjp",
                     "faktor_pendukung": {
                         "volume_ratio_s2": c["takeoff"]["volume_ratio"],
@@ -2913,6 +2952,86 @@ def _check_bsjp_screener() -> None:
                 log.info(f"_check_bsjp_screener: {c['ticker']} ke-track ke signal_alerts")
             except Exception:
                 log.exception(f"_check_bsjp_screener: gagal insert signal_alerts buat {c['ticker']}")
+
+
+def _confirm_bsjp_fills() -> None:
+    """Follow-up abis IEP close BENERAN settle (16:05, 5 menit abis freeze
+    16:00 — lihat _fetch_iep) buat SEMUA kandidat BSJP yang masih
+    'pending_confirm' (di-insert _check_bsjp_screener jam 15:50 pake ESTIMASI
+    closing, bukan closing beneran). Kasus nyata yang mecahin ini (GDST,
+    2026-09-23): estimasi 15:50 Rp134, limit beli Rp137 (3 tick), tapi IEP
+    beneran malah Rp139 — auction dapet dorongan beli telat abis 15:50,
+    ngelewatin limit kita. Order kayak gini SECARA REAL gak ke-fill (auction
+    cuma match order yang limitnya >= harga clearing) — dulu sistem tetep
+    nganggep 'open' apapun yang kejadian, ngasih PnL PALSU dari posisi yang
+    gak pernah ke-eksekusi ("apapun yang terjadi tetep kebeli").
+
+    Invezgo gak configured / _fetch_iep gagal (gak ada cara verifikasi) ->
+    fallback ke perilaku LAMA (anggap ke-fill di estimasi) DARIPADA nyangkut
+    di 'pending_confirm' selamanya, gak ke-cover advisory/recap apapun."""
+    try:
+        rows = supabase.table("signal_alerts").select("*").eq("status", "pending_confirm").eq("source", "bsjp").execute().data
+    except Exception:
+        log.exception("_confirm_bsjp_fills: gagal query signal_alerts")
+        return
+    if not rows:
+        return
+    for row in rows:
+        ticker = row["ticker"]
+        buy_limit = (row.get("faktor_pendukung") or {}).get("buy_limit")
+        real_close = None
+        if invezgo_client.is_configured() and buy_limit:
+            try:
+                real_close = _fetch_iep(ticker, "close")
+            except Exception:
+                log.exception(f"_confirm_bsjp_fills({ticker}): gagal fetch IEP close")
+
+        if real_close is not None and real_close > buy_limit:
+            try:
+                supabase.table("signal_alerts").update({
+                    "status": "cancelled",
+                    "closed_at": datetime.now(timezone.utc).isoformat(),
+                    "close_price": real_close,
+                    "outcome_pct": 0.0,  # bukan PnL asli — gak pernah ke-fill, gak ada posisi beneran
+                }).eq("id", row["id"]).execute()
+            except Exception:
+                log.exception(f"_confirm_bsjp_fills({ticker}): gagal update jadi cancelled")
+                continue
+            if row.get("telegram_message_id"):
+                delete_message(row["telegram_message_id"])
+            send_alert(
+                f"🚫 <b>BSJP BATAL — {_esc(ticker)}</b>\n\n"
+                f"IEP closing beneran Rp{real_close:,.0f}, loncat di atas limit beli kita "
+                f"Rp{buy_limit:,.0f} (estimasi tadi Rp{row['entry_price']:,.0f}). Order "
+                f"kemungkinan gak ke-fill — dianggap BATAL, bukan posisi running."
+            )
+            log.info(f"_confirm_bsjp_fills: {ticker} CANCELLED (IEP real {real_close} > limit {buy_limit})")
+        else:
+            try:
+                supabase.table("signal_alerts").update({"status": "open"}).eq("id", row["id"]).execute()
+            except Exception:
+                log.exception(f"_confirm_bsjp_fills({ticker}): gagal update jadi open")
+                continue
+            log.info(f"_confirm_bsjp_fills: {ticker} CONFIRMED open (IEP real={real_close}, limit={buy_limit})")
+
+
+BSJP_CONFIRM_HOUR = 16
+BSJP_CONFIRM_MINUTE = 5  # 5 menit abis IEP close FREEZE (16:00, lihat _fetch_iep) — jangan
+                           # lebih cepet, IEP masih bisa direvisi sebelum freeze ("kepagian
+                           # fetch = data basi/beda", sama warning yang ada di _fetch_iep).
+
+
+def _run_bsjp_confirm_step() -> None:
+    if not is_trading_day(today_wib()):
+        return
+    try:
+        _confirm_bsjp_fills()
+    except Exception:
+        log.exception("_confirm_bsjp_fills gagal")
+
+
+async def run_bsjp_confirm() -> None:
+    await _run_scheduled(BSJP_CONFIRM_HOUR, BSJP_CONFIRM_MINUTE, "bsjp_confirm", _run_bsjp_confirm_step)
 
 
 def _advise_hold_or_exit(row: dict, force_close_if_no_hold: bool = False) -> None:
