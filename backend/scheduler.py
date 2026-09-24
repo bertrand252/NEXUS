@@ -510,12 +510,19 @@ def _source_note(sources: list[str] | None, timeframes: list[str] | None = None,
     return f" [{labels}{tf_note}{rr_note}]"
 
 
-def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str], bandar: dict | None = None) -> str:
+def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict, faktor_pendukung: list[str],
+                    bandar: dict | None = None, entry_price: float | None = None) -> str:
     """Format HTML (parse_mode diaktifin di telegram_bot.py) — desain terinspirasi
     channel signal yang biasa dipake user (bold header + emoji per section), TAPI
     bukan niru persis, cuma referensi visual biar gak "jadul". Semua teks dinamis
     (Groq/faktor pendukung) di-escape (_esc) — biar gak accidentally ngerusak
-    parsing HTML Telegram kalau isinya kebetulan ada karakter < > &."""
+    parsing HTML Telegram kalau isinya kebetulan ada karakter < > &.
+
+    entry_price: harga EXACT (Close hari alert) — user eksplisit (2026-09-24)
+    gak mau BUY ditampilin sebagai range entry_low-entry_high, maunya 1 angka
+    pasti. entry_low/entry_high TETEP ada di `levels` & signal_alerts (dipake
+    _check_entry_zone_touches buat toleransi ±1-2% nunggu harga kesentuh —
+    itu plumbing internal, beda dari angka yang DITAMPILIN ke user)."""
     faktor_line = (
         f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor_pendukung))}\n\n"
         if faktor_pendukung else ""
@@ -536,7 +543,7 @@ def _build_caption(ticker: str, total_score: int, levels: dict, reasoning: dict,
         f"🔥 <b>SWING SIGNAL — {_esc(ticker)}</b>\n"
         f"Score {total_score}/100 · 🎯 Gaya: Swing\n"
         f"{trend_line}"
-        f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
+        f"✅ <b>BUY</b> Rp{(entry_price if entry_price is not None else levels['entry_low']):,.0f}\n"
         f"🎯 <b>TARGET 1 (TP1)</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%){_esc(tp1_note)}\n"
         f"{tp2_line}"
         f"⛔ <b>STOP LOSS (CL)</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%){_esc(sl_note)}\n"
@@ -1292,6 +1299,7 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
     'swing'). Dipake DUA alur: check_and_alert() (flow normal, slot masih
     kosong) DAN _handle_rotation_callback() (abis user klik Terima rotasi) —
     biar logic kirim alert gak duplikat di 2 tempat."""
+    entry_price = float(hist["Close"].iloc[-1])
     channel = detect_trend_channel(hist)
     chart_png = render_chart(ticker, hist, levels["support"], levels["resistance"], channel)
     score_breakdown = {
@@ -1314,7 +1322,7 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
         "broker_defended_support": candidate.get("broker_defended_support"),
     }
     reasoning = analyze_alert(ticker, score_breakdown, levels, context)
-    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []), candidate.get("bandar"))
+    caption = _build_caption(ticker, score_row["total_score"], levels, reasoning, pick.get("faktor_pendukung", []), candidate.get("bandar"), entry_price)
     message_id = send_alert_photo(chart_png, caption)
     if not message_id:
         return None  # Telegram belum di-connect di Settings, atau gagal kirim
@@ -1323,7 +1331,7 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
     try:
         supabase.table("signal_alerts").insert({
             "ticker": ticker,
-            "entry_price": float(hist["Close"].iloc[-1]),
+            "entry_price": entry_price,
             "entry_low": levels["entry_low"],
             "entry_high": levels["entry_high"],
             "target": levels["resistance"],
@@ -3902,12 +3910,15 @@ def _cap_bpjs_candidates(candidates: list[dict], cap: int = BPJS_CANDIDATE_CAP) 
     return (priority + rest)[:cap]
 
 
-def _build_bpjs_caption(ticker: str, candidate: dict, pick: dict, levels: dict) -> str:
+def _build_bpjs_caption(ticker: str, candidate: dict, pick: dict, levels: dict, entry_price: float) -> str:
     """Vibe lebih ringkas dari Swing (_build_caption) — BPJS gak punya sourcing
     TP1/TP2 multi-timeframe (horizonnya cuma 1-2 hari, `find_smart_tp` didesain
     buat horizon Swing mingguan-bulanan, dipaksain ke sini jadi confluence yang
     gak relevan). Entry/TP/SL dari support_resistance() 20-hari biasa, cukup
-    buat ke-track menang/kalah di signal_alerts."""
+    buat ke-track menang/kalah di signal_alerts.
+
+    entry_price = harga EXACT (bukan range entry_low-entry_high) — sama
+    alasan kayak _build_caption Swing (user eksplisit 2026-09-24)."""
     faktor = pick.get("faktor_pendukung") or []
     faktor_line = f"📌 <b>Faktor pendukung:</b> {_esc('; '.join(faktor))}\n\n" if faktor else ""
     session_label = "Sesi 2 (siang-sore)" if candidate["session"] == "s2" else "Sesi 1 (pagi)"
@@ -3917,7 +3928,7 @@ def _build_bpjs_caption(ticker: str, candidate: dict, pick: dict, levels: dict) 
     return (
         f"⚡ <b>BPJS — Day Trade — {_esc(ticker)}</b>\n\n"
         f"Momentum terdeteksi di {session_label}, skor relatif {candidate['momentum_score']}x rata-rata sesi.{mentor_line}{iep_line}\n\n"
-        f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f}-Rp{levels['entry_high']:,.0f}\n"
+        f"✅ <b>BUY</b> Rp{entry_price:,.0f}\n"
         f"🎯 <b>TARGET</b> Rp{levels['resistance']:,.0f} (+{levels['reward_pct']}%)\n"
         f"⛔ <b>STOP LOSS</b> Rp{levels['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
         f"⚖️ Risk:Reward — {levels['rr_label']}\n\n"
@@ -3989,7 +4000,7 @@ def _check_bpjs() -> None:
         # Groq milih ticker SEBELUM levels dihitung (gak pernah liat RR), jadi guard Python di
         # sini WAJIB, bukan optional — sama pola kayak MAX_RISK/MAX_REWARD di atas.
 
-    caption = _build_bpjs_caption(ticker, candidate, pick, levels)
+    caption = _build_bpjs_caption(ticker, candidate, pick, levels, price_now)
     message_id = send_alert(caption)
     if not message_id:
         return
@@ -4142,7 +4153,7 @@ def _build_sekuritas_caption(ticker: str, gaya: str, pick: dict, levels: dict) -
     return (
         f"{meta['emoji']} <b>{meta['label']} — {_esc(ticker)}</b>\n"
         f"{trend_line}{pattern_line}\n"
-        f"✅ <b>BUY</b> Rp{levels['entry_low']:,.0f} – Rp{levels['entry_high']:,.0f}\n"
+        f"✅ <b>BUY</b> Rp{pick['entry']:,.0f}\n"
         f"🎯 <b>TARGET</b> Rp{pick['target']:,.0f} (+{levels['reward_pct']}%)\n"
         f"⛔ <b>STOP LOSS (CL)</b> Rp{pick['stop_loss']:,.0f} (-{levels['risk_pct']}%)\n"
         f"⚖️ <b>Risk:Reward</b> 1:{levels['rr_ratio']} — {levels['rr_label']}\n\n"
