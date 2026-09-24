@@ -277,7 +277,7 @@ AVG_DOWN_FIB_LOOKBACK_DAYS = 90  # base sebelum breakout yang dianggep swing low
                                    # proksi kasar zona retracement, upgrade kalau kurang akurat)
 
 
-def _average_down_recalc(entry_price: float, target: float, stop_loss: float,
+def _average_down_recalc(entry_price: float, target: float | None, stop_loss: float,
                           price_now: float, ratio: float, fib_zone: dict) -> dict:
     """Avg/SL/TP baru KALAU average down dieksekusi rasio `ratio` (tambahan
     lot = ratio x lot awal — gak perlu tau lot ABSOLUT, cuma proporsi lot
@@ -286,15 +286,24 @@ def _average_down_recalc(entry_price: float, target: float, stop_loss: float,
     Stop baru = min(SL original, fib_786) — mentor: titik batal buat SELURUH
     posisi WAJIB di bawah 0,786 (atau swing low, versi lebih aman — belum
     dipake di sini, ponytail: 0,786 doang cukup buat MVP), walau itu berarti
-    NURUNIN stop dibanding SL original yang lebih ketat."""
+    NURUNIN stop dibanding SL original yang lebih ketat.
+
+    target=None buat posisi yang emang GAK PUNYA target (portfolio_holdings
+    manual — user gak wajib isi TP, cuma entry_date+stop_loss) — reward_pct/
+    rr_ratio ikut None, gak dikarang dari resistance yang gak diminta user
+    (prinsip anti-fabrikasi), caller WAJIB skip guard RR buat kasus ini."""
     new_entry = round((entry_price + ratio * price_now) / (1 + ratio), 2)
     new_stop_loss = min(stop_loss, fib_zone["fib_786"])
     risk_pct = round((new_entry - new_stop_loss) / new_entry * 100, 2)
-    reward_pct = round((target - new_entry) / new_entry * 100, 2)
-    rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
+    reward_pct = round((target - new_entry) / new_entry * 100, 2) if target is not None else None
+    if reward_pct is None:
+        rr_ratio = None
+    else:
+        rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0.0
     return {
         "new_entry": new_entry, "new_stop_loss": new_stop_loss, "target": target,
-        "risk_pct": risk_pct, "reward_pct": reward_pct, "rr_ratio": rr_ratio, "rr_label": rr_label(rr_ratio),
+        "risk_pct": risk_pct, "reward_pct": reward_pct, "rr_ratio": rr_ratio,
+        "rr_label": rr_label(rr_ratio) if rr_ratio is not None else None,
     }
 
 
@@ -488,6 +497,187 @@ def _handle_average_down_callback(callback: dict) -> None:
             f"✅ <b>Average Down Dicatat — {_esc(ticker)}</b>\n\n"
             f"Avg baru Rp{calc['new_entry']:,.0f} · SL baru Rp{calc['new_stop_loss']:,.0f} "
             f"(risk {calc['risk_pct']}%) · TP tetep Rp{calc['target']:,.0f} (RR {calc['rr_ratio']}, {calc['rr_label']})\n\n"
+            f"Inget: tetep beli beneran di sekuritas lu sendiri sesuai rasio {ratio:g}x, NEXUS cuma nyatet.",
+        )
+
+
+def _check_average_down_holdings() -> None:
+    """Sama konsep kayak _check_average_down_candidates, TAPI sumbernya
+    portfolio_holdings (portofolio MANUAL user, bukan call NEXUS) — saham
+    yang user beli sendiri di luar sistem call. Cuma diproses kalau user
+    ISI `entry_date` DAN `stop_loss` di holding itu (lewat "Simpan sebagai
+    Portofolio Aktif") — dua-duanya WAJIB, gak di-auto-derive (prinsip
+    anti-fabrikasi, lihat Holding model di routers/portfolio.py). Gak ada
+    `target` (holdings manual gak punya TP tersimpan) — reward_pct/rr_ratio
+    ikut kosong, guard cuma dari risk_pct doang, bukan RR."""
+    if not invezgo_client.is_configured():
+        return
+    try:
+        res = supabase.table("portfolio_holdings").select("holdings").eq("id", 1).limit(1).execute()
+        holdings = res.data[0]["holdings"] if res.data else []
+    except Exception:
+        return
+    candidates = [h for h in holdings if h.get("entry_date") and h.get("stop_loss") and not h.get("avg_down_declined")]
+    if not candidates:
+        return
+
+    today_s = today_wib().isoformat()
+    bandar_from = (today_wib() - timedelta(days=30)).isoformat()
+
+    for h in candidates:
+        kode = h["kode"]
+        if _dedup_seen("avg_down_proposed_holding", kode):
+            continue
+        try:
+            hist = _get_history(kode, period="1y")
+            price_now = float(hist["Close"].iloc[-1])
+        except Exception:
+            continue
+        if price_now >= h["avg_price"] or price_now <= h["stop_loss"]:
+            continue
+
+        try:
+            entry_date = datetime.fromisoformat(h["entry_date"])
+        except Exception:
+            continue
+        fib_zone = mentor_fib_zone(_hist_before_date(hist, entry_date), h["avg_price"], AVG_DOWN_FIB_LOOKBACK_DAYS)
+        if not fib_zone or not (fib_zone["fib_786"] <= price_now <= fib_zone["fib_50"]):
+            continue
+
+        try:
+            bandar = _detect_bandar(kode, bandar_from, today_s)
+        except Exception:
+            bandar = None
+        if not bandar or bandar["trend"] == "distribusi_meningkat":
+            continue
+
+        options = {}
+        for ratio in (0.5, 1.0):
+            calc = _average_down_recalc(h["avg_price"], None, h["stop_loss"], price_now, ratio, fib_zone)
+            if calc["risk_pct"] <= MAX_RISK_PCT:
+                options[ratio] = calc
+        if not options:
+            continue
+
+        _dedup_mark("avg_down_proposed_holding", kode)
+        _send_average_down_holding_proposal(h, price_now, fib_zone, bandar, options)
+
+
+def _send_average_down_holding_proposal(h: dict, price_now: float, fib_zone: dict, bandar: dict, options: dict) -> None:
+    kode = h["kode"]
+    near_618 = abs(price_now - fib_zone["fib_618"]) <= abs(price_now - fib_zone["fib_786"])
+    fib_label = "0,618" if near_618 else "0,786"
+    lines = [
+        f"📉 <b>Peluang Average Down (Portofolio) — {_esc(kode)}</b>\n",
+        f"Harga sekarang Rp{price_now:,.0f}, retrace ke area Fibonacci ~{fib_label} "
+        f"(swing Rp{fib_zone['swing_low']:,.0f}–Rp{fib_zone['swing_high']:,.0f}).",
+        _format_bandar_line(bandar).rstrip("\n"),
+        f"\nAvg beli awal Rp{h['avg_price']:,.0f} ({h['lot']:g} lot). Kalau nambah:",
+    ]
+    for ratio in sorted(options):
+        calc = options[ratio]
+        lines.append(
+            f"\n<b>{ratio:g}x lot awal</b> → avg baru Rp{calc['new_entry']:,.0f} "
+            f"({round(h['lot'] * (1 + ratio), 4):g} lot) · SL Rp{calc['new_stop_loss']:,.0f} (risk {calc['risk_pct']}%)"
+        )
+    lines.append(
+        "\n📌 Ini portofolio MANUAL lu, bukan call NEXUS — gak ada target tersimpan, TP terserah rencana lu sendiri."
+        "\n⚠️ Ini SARAN teknikal+broker doang, bukan jaminan. Keputusan tetep di lu — beli beneran di sekuritas lu sendiri."
+    )
+    buttons = [
+        [{"text": f"➕ {ratio:g}x lot awal", "callback_data": f"avgdnh_yes:{kode}:{ratio}"} for ratio in sorted(options)],
+        [{"text": "❌ Enggak", "callback_data": f"avgdnh_no:{kode}"}],
+    ]
+    send_alert_with_buttons("\n".join(lines), buttons)
+
+
+def _handle_average_down_holding_callback(callback: dict) -> None:
+    """Sama pola kayak _handle_average_down_callback, TAPI ubah portfolio_holdings
+    (list JSON di 1 row, id=1) — dicari by `kode`, bukan numeric id, dan lot
+    ke-update BENERAN (kita PUNYA lot real buat holdings, beda dari signal_alerts
+    yang gak nyimpen lot sama sekali)."""
+    data = callback.get("data", "")
+    callback_id = callback.get("id")
+    message_id = (callback.get("message") or {}).get("message_id")
+
+    if not data.startswith(("avgdnh_yes:", "avgdnh_no:")):
+        return  # bukan tombol average-down holdings
+
+    parts = data.split(":")
+    action, kode = parts[0], parts[1]
+
+    try:
+        res = supabase.table("portfolio_holdings").select("holdings").eq("id", 1).limit(1).execute()
+        holdings = res.data[0]["holdings"] if res.data else []
+    except Exception:
+        holdings = None
+    idx = next((i for i, hh in enumerate(holdings) if hh.get("kode") == kode), None) if holdings else None
+    if holdings is None or idx is None:
+        if callback_id:
+            answer_callback_query(callback_id, "Saham ini udah gak ada di portofolio aktif lagi.")
+        return
+    h = holdings[idx]
+
+    if action == "avgdnh_no":
+        holdings[idx] = {**h, "avg_down_declined": True}
+        try:
+            supabase.table("portfolio_holdings").update({"holdings": holdings}).eq("id", 1).execute()
+        except Exception:
+            pass
+        if callback_id:
+            answer_callback_query(callback_id, "Oke, gak average down.")
+        if message_id:
+            edit_message_text(message_id, f"❌ <b>Average down dilewatin — {_esc(kode)}</b>")
+        return
+
+    ratio = float(parts[2])
+    try:
+        hist = _get_history(kode, period="1y")
+        price_now = float(hist["Close"].iloc[-1])
+    except Exception:
+        if callback_id:
+            answer_callback_query(callback_id, "Gagal ambil harga terbaru, coba lagi nanti.")
+        return
+
+    try:
+        entry_date = datetime.fromisoformat(h["entry_date"])
+    except Exception:
+        if callback_id:
+            answer_callback_query(callback_id, "Tanggal beli gak valid, gak bisa dieksekusi.")
+        return
+    fib_zone = mentor_fib_zone(_hist_before_date(hist, entry_date), h["avg_price"], AVG_DOWN_FIB_LOOKBACK_DAYS)
+    if not fib_zone or not (fib_zone["fib_786"] <= price_now <= fib_zone["fib_50"]):
+        if callback_id:
+            answer_callback_query(callback_id, "Harga udah gak di zona average-down lagi (kadung mantul/jebol) — gak dieksekusi.")
+        if message_id:
+            edit_message_text(message_id, f"⚠️ <b>Average down batal — {_esc(kode)}</b>\nHarga udah gerak keluar zona sejak ditawarin.")
+        return
+
+    calc = _average_down_recalc(h["avg_price"], None, h["stop_loss"], price_now, ratio, fib_zone)
+    if calc["risk_pct"] > MAX_RISK_PCT:
+        if callback_id:
+            answer_callback_query(callback_id, "Risk baru gak lolos guard — gak dieksekusi.")
+        if message_id:
+            edit_message_text(message_id, f"⚠️ <b>Average down batal — {_esc(kode)}</b>\nRisk baru gak lolos guard.")
+        return
+
+    new_lot = round(h["lot"] * (1 + ratio), 4)
+    holdings[idx] = {**h, "avg_price": calc["new_entry"], "lot": new_lot, "stop_loss": calc["new_stop_loss"]}
+    try:
+        supabase.table("portfolio_holdings").update({"holdings": holdings}).eq("id", 1).execute()
+    except Exception:
+        if callback_id:
+            answer_callback_query(callback_id, "Gagal simpen ke database, coba lagi.")
+        return
+
+    if callback_id:
+        answer_callback_query(callback_id, f"Average down dicatat — avg baru Rp{calc['new_entry']:,.0f}.")
+    if message_id:
+        edit_message_text(
+            message_id,
+            f"✅ <b>Average Down Dicatat — {_esc(kode)}</b>\n\n"
+            f"Avg baru Rp{calc['new_entry']:,.0f} ({new_lot:g} lot) · SL baru Rp{calc['new_stop_loss']:,.0f} "
+            f"(risk {calc['risk_pct']}%)\n\n"
             f"Inget: tetep beli beneran di sekuritas lu sendiri sesuai rasio {ratio:g}x, NEXUS cuma nyatet.",
         )
 
@@ -1591,6 +1781,10 @@ def check_and_alert() -> None:
         _check_average_down_candidates()
     except Exception:
         log.exception("_check_average_down_candidates gagal")
+    try:
+        _check_average_down_holdings()
+    except Exception:
+        log.exception("_check_average_down_holdings gagal")
 
     macro_events = [e for e in get_forex_events() if e["impact"] in ("High", "Medium")]
     candidates = _gather_candidates(macro_events, settings)
@@ -4450,6 +4644,10 @@ async def run_telegram_channel_listener() -> None:
                     _handle_average_down_callback(callback)
                 except Exception:
                     log.exception("_handle_average_down_callback gagal")
+                try:
+                    _handle_average_down_holding_callback(callback)
+                except Exception:
+                    log.exception("_handle_average_down_holding_callback gagal")
                 continue
 
             if not TELEGRAM_CHANNEL_IDS:

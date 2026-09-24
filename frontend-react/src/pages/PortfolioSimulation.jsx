@@ -50,6 +50,8 @@ export default function PortfolioSimulation() {
   const [kode, setKode] = useState('');
   const [lot, setLot] = useState('');
   const [avg, setAvg] = useState('');
+  const [entryDate, setEntryDate] = useState('');
+  const [slInput, setSlInput] = useState('');
   const [totalCapital, setTotalCapital] = useState(() => {
     try { return localStorage.getItem('nexus_portfolio_capital') || ''; } catch { return ''; }
   });
@@ -130,9 +132,17 @@ export default function PortfolioSimulation() {
   function addHolding() {
     const lotNum = parseFloat(lot);
     const avgNum = parseFloat(avg);
+    const slNum = parseFloat(slInput);
     if (!kode.trim() || !lotNum || !avgNum) { alert('Isi kode, lot, dan avg price dulu'); return; }
-    setHoldings((hs) => [...hs, { kode: kode.trim().toUpperCase(), lot: lotNum, avg_price: avgNum }]);
-    setKode(''); setLot(''); setAvg('');
+    setHoldings((hs) => [...hs, {
+      kode: kode.trim().toUpperCase(), lot: lotNum, avg_price: avgNum,
+      // entry_date+stop_loss OPSIONAL, dua-duanya WAJIB diisi bareng biar
+      // saham ini ikut dicek average-down (scheduler.py) — gak di-auto-isi
+      // kalau cuma salah satu, biar gak dikira udah aktif padahal enggak
+      entry_date: entryDate && slNum ? entryDate : null,
+      stop_loss: entryDate && slNum ? slNum : null,
+    }]);
+    setKode(''); setLot(''); setAvg(''); setEntryDate(''); setSlInput('');
     setIsActivePortfolio(false);
   }
   function removeHolding(i) {
@@ -187,6 +197,13 @@ export default function PortfolioSimulation() {
                   <input type="number" placeholder="Jumlah lot" value={lot} onChange={(e) => setLot(e.target.value)} className="bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/60" />
                   <input type="number" placeholder="Avg price" value={avg} onChange={(e) => setAvg(e.target.value)} className="bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/60" />
                 </div>
+                <div>
+                  <label className="text-[10px] text-slate-500">Tanggal Beli + Stop Loss — opsional, isi DUA-DUANYA kalau mau saham ini ikut dicek peluang average-down otomatis</label>
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/60" />
+                    <input type="number" placeholder="Stop loss (Rp)" value={slInput} onChange={(e) => setSlInput(e.target.value)} className="bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-accent/60" />
+                  </div>
+                </div>
                 <button onClick={addHolding} className="w-full flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 rounded-lg bg-white/5 text-slate-300 border border-border hover:border-accent/50 hover:text-white transition">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
                   Tambah Saham
@@ -201,6 +218,7 @@ export default function PortfolioSimulation() {
                       <th className="px-1 py-2 font-medium">Lot</th>
                       <th className="px-1 py-2 font-medium">Avg</th>
                       <th className="px-1 py-2 font-medium text-right">Exp %</th>
+                      <th className="px-1 py-2 font-medium text-center" title="Peluang average-down otomatis aktif kalau tanggal beli + SL diisi">Avg↓</th>
                       <th className="px-1 py-2 font-medium w-6"></th>
                     </tr>
                   </thead>
@@ -211,6 +229,9 @@ export default function PortfolioSimulation() {
                         <td className="px-1 py-2 text-slate-300">{h.lot}</td>
                         <td className="px-1 py-2 text-slate-300">{h.avg_price.toLocaleString('id-ID')}</td>
                         <td className="px-1 py-2 text-right text-white font-semibold">{(h.lot * h.avg_price / totalValue * 100).toFixed(1)}%</td>
+                        <td className="px-1 py-2 text-center" title={h.entry_date && h.stop_loss ? `Aktif — beli ${h.entry_date}, SL Rp${h.stop_loss.toLocaleString('id-ID')}` : 'Nonaktif — isi tanggal beli + SL biar ikut dicek'}>
+                          {h.entry_date && h.stop_loss ? '🟢' : '—'}
+                        </td>
                         <td className="px-1 py-2 text-right">
                           <button onClick={() => removeHolding(i)} title={`Hapus ${h.kode}`} className="text-slate-500 hover:text-strong transition">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>

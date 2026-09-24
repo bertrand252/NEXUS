@@ -39,6 +39,13 @@ class Holding(BaseModel):
     kode: str
     lot: float
     avg_price: float
+    entry_date: str | None = None  # ISO date (YYYY-MM-DD), opsional — WAJIB diisi BARENG
+                                     # stop_loss biar saham ini ikut dicek average-down
+                                     # (scheduler.py::_check_average_down_holdings, dasar
+                                     # zona Fibonacci mentor_fib_zone butuh tanggal beli)
+    stop_loss: float | None = None  # opsional, sama syarat di atas — GAK di-auto-derive
+                                     # dari support terdekat, itu ngarang rencana yang
+                                     # bukan rencana user (prinsip anti-fabrikasi)
 
 
 class SimulateInput(BaseModel):

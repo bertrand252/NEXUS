@@ -481,3 +481,16 @@ def test_average_down_recalc_keeps_original_stop_if_already_below_fib786():
     assert calc["new_stop_loss"] == 650
     # avg = (1000 + 0.5*850) / 1.5
     assert calc["new_entry"] == round((1000 + 0.5 * 850) / 1.5, 2)
+
+
+def test_average_down_recalc_no_target_skips_reward_and_rr():
+    # portfolio_holdings manual gak punya target tersimpan — reward_pct/rr_ratio
+    # HARUS None (bukan dikarang dari angka apapun), risk_pct tetep kehitung normal
+    fib_zone = {"fib_786": 700}
+    calc = _average_down_recalc(entry_price=1000, target=None, stop_loss=750, price_now=850, ratio=1.0, fib_zone=fib_zone)
+    assert calc["target"] is None
+    assert calc["reward_pct"] is None
+    assert calc["rr_ratio"] is None
+    assert calc["rr_label"] is None
+    assert calc["new_entry"] == 925.0
+    assert calc["risk_pct"] > 0
