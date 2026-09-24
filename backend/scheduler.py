@@ -1540,10 +1540,15 @@ def _send_swing_alert(ticker: str, hist, levels: dict, score_row: dict, pick: di
 def _count_open_swing_positions() -> int:
     """Posisi Swing yang lagi 'makan slot' (waiting_entry ATAU open) — source
     NULL dianggep Swing juga (row lama dari sebelum kolom `source` ada, BSJP/
-    BPJS eksplisit set source='bpjs' dkk jadi gak kehitung di sini)."""
+    BPJS eksplisit set source='bpjs' dkk jadi gak kehitung di sini).
+
+    Dihitung PER TICKER (bukan per baris) — kejadian nyata: bug duplicate-
+    call lama (sebelum _tickers_with_active_call ada) nyisain 3 baris PTRO
+    aktif bareng, count per-baris bakal nganggep itu 3 slot kepake padahal
+    cuma 1 saham, bikin slot Swing keitung penuh lebih cepet dari kenyataan."""
     try:
-        res = supabase.table("signal_alerts").select("source").in_("status", ["waiting_entry", "open"]).execute()
-        return sum(1 for r in res.data if r.get("source") in (None, "swing"))
+        res = supabase.table("signal_alerts").select("ticker,source").in_("status", ["waiting_entry", "open"]).execute()
+        return len({r["ticker"] for r in res.data if r.get("source") in (None, "swing")})
     except Exception:
         return 0  # tabel/kolom belum ada — anggep 0 slot kepake, biar alert tetep jalan normal
 
@@ -4563,18 +4568,27 @@ def _send_morning_briefing() -> None:
     lines = [f"🔔 <b>MARKET OPEN</b> | {_tanggal_display(today_wib())}\n"]
     lines.append(f"{SENTIMENT_EMOJI.get(sentiment, '⚪')} {_esc(briefing.get('ringkasan', '-'))}")
 
+    # Satu format KONSISTEN buat SEMUA item (positive/negative/netral) — bug
+    # nyata (user lapor, screenshot asli): dulu positive/negative dirender 2
+    # baris beda gaya (ticker BOLD sendiri + paragraf terpisah) sedangkan
+    # netral dirender 1 baris compact di section "Lainnya" TERPISAH, padahal
+    # sama-sama {saham, berita}. User bingung kenapa formatnya beda-beda buat
+    # data yang sama jenisnya. Fix: 1 bullet per item, emoji sentiment di
+    # depan gantiin section terpisah (sentiment masih keliatan, per-baris
+    # malah lebih jelas dari per-section).
     berita = briefing.get("berita") or {}
-    highlights = (berita.get("positive") or []) + (berita.get("negative") or [])
-    if highlights:
+    highlight_lines = [
+        f"{emoji} <b>{_esc(it.get('saham', '-'))}</b>: {_esc(it.get('berita', '-'))}"
+        for emoji, items in (
+            ("🟢", berita.get("positive") or []),
+            ("🔴", berita.get("negative") or []),
+            ("⚪", berita.get("netral") or []),
+        )
+        for it in items
+    ]
+    if highlight_lines:
         lines.append("\n📌 <b>STOCK HIGHLIGHTS</b>")
-        for it in highlights:
-            lines.append(f"\n<b>{_esc(it.get('saham', '-'))}</b>")
-            lines.append(_esc(it.get("berita", "-")))
-    netral = berita.get("netral") or []
-    if netral:
-        lines.append("\n⚪ <b>Lainnya</b>")
-        for it in netral:
-            lines.append(f"• <b>{_esc(it.get('saham', '-'))}</b>: {_esc(it.get('berita', '-'))}")
+        lines.extend(highlight_lines)
 
     tanggal_penting = briefing.get("tanggal_penting") or []
     if tanggal_penting:

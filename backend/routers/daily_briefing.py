@@ -105,7 +105,14 @@ def _active_nexus_calls() -> list[dict]:
     ringkasan/berita (user: jangan campur ke daily briefing AI, taruh di
     "rekomendasi" doang, format nama emiten/harga entry-TP/call oleh).
     Backend yang susun LANGSUNG dari signal_alerts (BUKAN Groq nebak dari
-    teks berita) — harga entry/TP-nya REAL data trading, bukan karangan."""
+    teks berita) — harga entry/TP-nya REAL data trading, bukan karangan.
+
+    Dedup by ticker (1 baris per saham, yang PALING BARU — query udah
+    order alerted_at desc) — bug nyata (user lapor, PTRO nongol 3x di
+    briefing): row lama sisa dari bug duplicate-call SEBELUM
+    scheduler.py::_tickers_with_active_call ada masih numpuk di DB kalau
+    belum sempet ke-clean-up. 1 saham = 1 call, sama prinsipnya kayak fix
+    itu."""
     try:
         res = (
             supabase.table("signal_alerts")
@@ -116,16 +123,20 @@ def _active_nexus_calls() -> list[dict]:
         )
     except Exception:
         return []
-    return [
-        {
+    seen_tickers = set()
+    calls = []
+    for r in res.data:
+        if r["ticker"] in seen_tickers:
+            continue
+        seen_tickers.add(r["ticker"])
+        calls.append({
             "ticker": r["ticker"],
             "entry_price": r["entry_price"],
             "target": r["target"],
             "stop_loss": r["stop_loss"],
             "call_oleh": CALL_SOURCE_LABEL.get(r["source"], r["source"]),
-        }
-        for r in res.data
-    ]
+        })
+    return calls
 
 
 MAX_ENTRIES = 15  # cap biar gak kena limit TPM Groq (8000 token/menit) kalau intel numpuk banyak
